@@ -139,6 +139,17 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Plains", 40);
         }
+        if ("sire".equals(deck)) {      // generic {7} paid with restricted {C}{C} sources (rig sire), vs a passive opponent
+            green.clear();
+            green.put("Eldrazi Temple", 10);
+            green.put("Ugin's Labyrinth", 6);
+            green.put("Forest", 10);
+            green.put("Emrakul, the Aeons Torn", 4);
+            green.put("Sire of Seven Deaths", 10);
+            green.put("Thought-Knot Seer", 20);
+            red.clear();
+            red.put("Plains", 40);
+        }
         if ("bolt".equals(rig)) {      // test rig: burn deck vs creature deck
             green.clear();
             green.put("Mountain", 16);

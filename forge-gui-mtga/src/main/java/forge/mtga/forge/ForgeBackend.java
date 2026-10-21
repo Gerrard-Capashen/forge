@@ -524,6 +524,31 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("sire".equals(rig)) {      // sire deck: Eldrazi Temple x2, Forest, Ugin's Labyrinth (Emrakul exiled with it) in play,
+                                       // Sire of Seven Deaths in hand: {7} from 2+2+2+1 with auto payment
+            Card lab = null;
+            for (String name : List.of("Eldrazi Temple", "Eldrazi Temple", "Forest", "Ugin's Labyrinth", "Emrakul, the Aeons Torn", "Sire of Seven Deaths")) {
+                Card pick = null;
+                for (Card c : p.getCardsIn(ZoneType.Library)) {
+                    if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
+                }
+                if (pick == null) continue;
+                if (name.startsWith("Sire")) game.getAction().moveToHand(pick, null);
+                else if (name.startsWith("Emrakul")) {
+                    Card exiled = game.getAction().exile(pick, null, null);
+                    exiled.setExiledWith(lab);
+                    exiled.setExiledBy(p);
+                    lab.addExiledCard(exiled);
+                }
+                else {
+                    // no ETB triggers: the imprint is set up by hand above
+                    Card in = game.getAction().moveTo(ZoneType.Battlefield, pick, null, null);
+                    if (name.equals("Ugin's Labyrinth")) lab = in;
+                }
+                System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
+            }
+            return;
+        }
         if ("pte".equals(rig)) {      // playtest deck: explore + blight. In play: Forest x2, Overgrown Tomb, Watery Grave, Llanowar Elves; hand: Jadelight Ranger, Requiting Hex
             for (String name : List.of("Forest", "Forest", "Overgrown Tomb", "Watery Grave", "Llanowar Elves", "Jadelight Ranger", "Requiting Hex")) {
                 Card pick = null;
@@ -1412,6 +1437,7 @@ public final class ForgeBackend implements GameBackend {
             taps.add(com.wizards.mtga.gre.AutoTapAction.newBuilder().setManaId(pool.remove(0).id()).build());
             generic--;
         }
+        int missing = 0;
         for (forge.card.mana.ManaCostShard shard : colored) {
             Card best = null;
             SpellAbility bestMa = null;
@@ -1427,7 +1453,7 @@ public final class ForgeBackend implements GameBackend {
                     if (pick >= 0) { best = c; bestMa = ma; bestColors = n; bestColor = pick; break; }
                 }
             }
-            if (best == null) continue;      // Forge says it is affordable (pool mana, odd sources): keep a partial preview
+            if (best == null) { missing++; continue; }      // Forge says it is affordable (pool mana, odd sources): keep a partial preview
             free.remove(best);
             taps.add(tapAction(best, bestMa, COLOR_ENUMS[bestColor]));
             chosenSources.add(bestMa);
@@ -1451,12 +1477,29 @@ public final class ForgeBackend implements GameBackend {
             if (pickAmount > colorless) generic = Math.max(0, generic - (pickAmount - colorless));      // the rest pays generic
             colorless -= pickAmount;
         }
-        for (int i = 0; i < generic; i++) {
-            if (free.isEmpty()) break;
-            Card c = free.remove(0);
-            taps.add(tapAction(c, sources.get(c).get(0), com.wizards.mtga.gre.ManaColor.ManaColor_Generic));
-            chosenSources.add(sources.get(c).get(0));
+        while (generic > 0) {      // generic: each source's biggest ability (Eldrazi Temple {C}{C} pays two of a {7})
+            Card pick = null;
+            SpellAbility pickMa = null;
+            int pickAmount = 0;
+            for (Card c : free) {
+                for (SpellAbility ma : sources.get(c)) {
+                    int amount = Math.max(1, ma.amountOfManaGenerated(false));
+                    // the biggest that still fits, else the smallest overpay; ties keep the least flexible source
+                    boolean better = pick == null || (amount <= generic
+                            ? pickAmount > generic || amount > pickAmount
+                            : pickAmount > generic && amount < pickAmount);
+                    if (better) { pick = c; pickMa = ma; pickAmount = amount; }
+                }
+            }
+            if (pick == null) break;
+            free.remove(pick);
+            taps.add(tapAction(pick, pickMa, com.wizards.mtga.gre.ManaColor.ManaColor_Generic));
+            chosenSources.add(pickMa);
+            generic -= pickAmount;
         }
+        // a preview that does not cover the cost is only shown: pre-tapping it left Forge's payer with nothing
+        // untapped (Sire of Seven Deaths tapped 4 for {7} and was not cast), so Forge picks the sources itself
+        if (missing > 0 || colorless > 0 || generic > 0) chosenSources.clear();
         if (taps.isEmpty()) return null;
         return com.wizards.mtga.gre.AutoTapSolution.newBuilder().addAllAutoTapActions(taps).build();
     }
