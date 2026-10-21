@@ -345,7 +345,14 @@ public final class SelfPlay {
             lastGsId = gs.getGameStateId();
             for (GameObjectInfo o : gs.getGameObjectsList()) objs.put(o.getInstanceId(), o);
             for (ZoneInfo z : gs.getZonesList()) zones.put(z.getZoneId(), z);
-            for (PlayerInfo p : gs.getPlayersList()) players.put(p.getSystemSeatNumber(), p);
+            for (PlayerInfo p : gs.getPlayersList()) {
+                players.put(p.getSystemSeatNumber(), p);
+                // the client keys the mana pool by manaId (GreInterface.ParseFullGameStateMessage: duplicate key = dead GRE thread)
+                Set<Integer> manaIds = new HashSet<>();
+                for (com.wizards.mtga.gre.ManaInfo m : p.getManaPoolList()) {
+                    if (!manaIds.add(m.getManaId())) problem("duplicate manaId " + m.getManaId() + " in seat " + p.getSystemSeatNumber() + "'s mana pool");
+                }
+            }
             for (int id : gs.getDiffDeletedInstanceIdsList()) objs.remove(id);
             for (AnnotationInfo a : gs.getPersistentAnnotationsList()) persistent.put(a.getId(), a);
             for (int id : gs.getDiffDeletedPersistentAnnotationIdsList()) {

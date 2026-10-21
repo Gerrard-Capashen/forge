@@ -348,11 +348,29 @@ public final class StateSync {
         TurnInfo turn;
     }
 
-    private final Map<forge.game.mana.Mana, Integer> manaIds = new java.util.IdentityHashMap<>();
+    private final Map<forge.game.mana.Mana, List<Integer>> manaIds = new java.util.IdentityHashMap<>();
     private int nextManaId = 1;
 
-    /** Stable id of a floating mana object (PlayerInfo.manaPool, AutoTapAction.manaId). */
-    public int manaId(forge.game.mana.Mana m) { return manaIds.computeIfAbsent(m, k -> nextManaId++); }
+    /** One unit of floating mana and its stable id (PlayerInfo.manaPool, AutoTapAction.manaId). */
+    public record PoolMana(forge.game.mana.Mana mana, int id) { }
+
+    /**
+     * The player's floating mana in pool order, one entry per unit. Forge can hold the same Mana object several times
+     * (Eldrazi Temple's restricted {C}{C}), and the client keys its pool by manaId (a repeated id crashes its state
+     * merge with a duplicate-key exception), so the n-th occurrence of an object gets its own id.
+     */
+    public List<PoolMana> pool(Player p) {
+        List<PoolMana> out = new ArrayList<>();
+        Map<forge.game.mana.Mana, Integer> seen = new java.util.IdentityHashMap<>();
+        for (forge.game.mana.Mana m : p.getManaPool()) {
+            int n = seen.merge(m, 1, Integer::sum) - 1;
+            List<Integer> ids = manaIds.computeIfAbsent(m, k -> new ArrayList<>());
+            if (n == ids.size() && n > 0) System.out.println("[mtga] pool holds one mana object " + (n + 1) + "x: " + m);
+            while (ids.size() <= n) ids.add(nextManaId++);
+            out.add(new PoolMana(m, ids.get(n)));
+        }
+        return out;
+    }
 
     public static com.wizards.mtga.gre.ManaColor manaColor(byte color) {
         if ((color & forge.card.MagicColor.WHITE) != 0) return com.wizards.mtga.gre.ManaColor.ManaColor_White;
@@ -400,9 +418,9 @@ public final class StateSync {
                     .setControllerType(ControllerType.ControllerType_Player)
                     .setMulliganCount(mulligans[seat])
                     .setTurnNumber(p.getTurn());
-            for (forge.game.mana.Mana mana : p.getManaPool()) {
-                Card src = mana.getSourceCard();
-                pi.addManaPool(com.wizards.mtga.gre.ManaInfo.newBuilder().setManaId(manaId(mana)).setColor(manaColor(mana.getColor())).setCount(1)
+            for (PoolMana pm : pool(p)) {
+                Card src = pm.mana().getSourceCard();
+                pi.addManaPool(com.wizards.mtga.gre.ManaInfo.newBuilder().setManaId(pm.id()).setColor(manaColor(pm.mana().getColor())).setCount(1)
                         .setSrcInstanceId(src == null ? 0 : idInOrZero(src)));
             }
             s.players.put(seat, pi.build());

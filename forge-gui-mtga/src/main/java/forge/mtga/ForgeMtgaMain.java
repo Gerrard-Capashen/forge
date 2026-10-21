@@ -113,6 +113,17 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Plains", 40);
         }
+        if ("eldrazi".equals(deck)) {      // colorless {C} costs and restricted mana (Eldrazi Temple), vs a passive opponent
+            green.clear();
+            green.put("Eldrazi Temple", 10);
+            green.put("Wastes", 10);
+            green.put("Swamp", 6);
+            green.put("Kozilek's Command", 12);
+            green.put("Thought-Knot Seer", 12);
+            green.put("Dismember", 10);
+            red.clear();
+            red.put("Plains", 40);
+        }
         if ("bolt".equals(rig)) {      // test rig: burn deck vs creature deck
             green.clear();
             green.put("Mountain", 16);

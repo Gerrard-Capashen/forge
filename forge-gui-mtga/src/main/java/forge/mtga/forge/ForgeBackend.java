@@ -509,6 +509,19 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("et".equals(rig)) {      // eldrazi deck: Eldrazi Temple, Wastes, Swamp in play; Kozilek's Command, Thought-Knot Seer, Dismember in hand
+            for (String name : List.of("Eldrazi Temple", "Wastes", "Swamp", "Kozilek's Command", "Thought-Knot Seer", "Dismember")) {
+                Card pick = null;
+                for (Card c : p.getCardsIn(ZoneType.Library)) {
+                    if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
+                }
+                if (pick == null) continue;
+                if (List.of("Eldrazi Temple", "Wastes", "Swamp").contains(name)) game.getAction().moveToPlay(pick, null, forge.game.ability.AbilityKey.newMap());
+                else game.getAction().moveToHand(pick, null);
+                System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
+            }
+            return;
+        }
         if ("pte".equals(rig)) {      // playtest deck: explore + blight. In play: Forest x2, Overgrown Tomb, Watery Grave, Llanowar Elves; hand: Jadelight Ranger, Requiting Hex
             for (String name : List.of("Forest", "Forest", "Overgrown Tomb", "Watery Grave", "Llanowar Elves", "Jadelight Ranger", "Requiting Hex")) {
                 Card pick = null;
@@ -1081,6 +1094,7 @@ public final class ForgeBackend implements GameBackend {
             }
         }
         if (candidates.isEmpty() && stackCandidates.isEmpty()) return min == 0;
+        if (max <= 0) return min <= 0;      // "up to X targets" with X = 0 (Kozilek's Command): nothing to choose
 
         Map<Integer, Object> byId = new LinkedHashMap<>();
         for (GameEntity e : candidates) {
@@ -1252,7 +1266,8 @@ public final class ForgeBackend implements GameBackend {
                     : (mask & forge.card.MagicColor.BLUE) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Blue
                     : (mask & forge.card.MagicColor.BLACK) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Black
                     : (mask & forge.card.MagicColor.RED) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Red
-                    : (mask & forge.card.MagicColor.GREEN) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Green : null;
+                    : (mask & forge.card.MagicColor.GREEN) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Green
+                    : shard == forge.card.mana.ManaCostShard.COLORLESS ? com.wizards.mtga.gre.ManaColor.ManaColor_Colorless : null;
             if (c != null) counts.merge(c, 1, Integer::sum);
         }
         for (Map.Entry<com.wizards.mtga.gre.ManaColor, Integer> e : counts.entrySet()) {
@@ -1285,7 +1300,9 @@ public final class ForgeBackend implements GameBackend {
             if (c.isTapped() || (tapsHost && c == sa.getHostCard())) continue;
             for (SpellAbility ma : c.getManaAbilities()) {
                 ma.setActivatingPlayer(me);
-                if (ma.canPlay() && producesMana(ma) && (ma.getPayCosts() == null || ma.getPayCosts().getTotalMana().getCMC() == 0)) {
+                // restricted mana (Eldrazi Temple's {C}{C}: colorless Eldrazi only) is only a source for what it may pay
+                boolean allowed = ma.getManaPart() == null || ma.getManaPart().meetsManaRestrictions(sa);
+                if (allowed && ma.canPlay() && producesMana(ma) && (ma.getPayCosts() == null || ma.getPayCosts().getTotalMana().getCMC() == 0)) {
                     sources.computeIfAbsent(c, k -> new ArrayList<>()).add(ma);
                 }
             }
@@ -1293,22 +1310,33 @@ public final class ForgeBackend implements GameBackend {
         List<Card> free = new ArrayList<>(sources.keySet());
         List<com.wizards.mtga.gre.AutoTapAction> taps = new ArrayList<>();
         List<forge.card.mana.ManaCostShard> colored = new ArrayList<>();
-        for (forge.card.mana.ManaCostShard shard : cost) if (shard.getColorMask() != 0) colored.add(shard);
-        List<forge.game.mana.Mana> pool = new ArrayList<>();
-        for (forge.game.mana.Mana m : me.getManaPool()) pool.add(m);
+        int colorless = 0;      // {C}: only colorless mana pays it
+        for (forge.card.mana.ManaCostShard shard : cost) {
+            if (shard.getColorMask() != 0) colored.add(shard);
+            else if (shard == forge.card.mana.ManaCostShard.COLORLESS) colorless++;
+        }
+        List<StateSync.PoolMana> pool = new ArrayList<>();
+        for (StateSync.PoolMana pm : sync.pool(me)) if (pm.mana().meetsManaRestrictions(sa)) pool.add(pm);
         int generic = cost.getGenericCost();
         for (java.util.Iterator<forge.card.mana.ManaCostShard> it = colored.iterator(); it.hasNext(); ) {      // floating mana pays first
             forge.card.mana.ManaCostShard shard = it.next();
-            for (forge.game.mana.Mana m : pool) {
-                if ((shard.getColorMask() & m.getColor()) == 0) continue;
-                taps.add(com.wizards.mtga.gre.AutoTapAction.newBuilder().setManaId(sync.manaId(m)).build());
-                pool.remove(m);
+            for (StateSync.PoolMana pm : pool) {
+                if ((shard.getColorMask() & pm.mana().getColor()) == 0) continue;
+                taps.add(com.wizards.mtga.gre.AutoTapAction.newBuilder().setManaId(pm.id()).build());
+                pool.remove(pm);
                 it.remove();
                 break;
             }
         }
+        for (java.util.Iterator<StateSync.PoolMana> it = pool.iterator(); colorless > 0 && it.hasNext(); ) {
+            StateSync.PoolMana pm = it.next();
+            if (!pm.mana().isColorless()) continue;
+            taps.add(com.wizards.mtga.gre.AutoTapAction.newBuilder().setManaId(pm.id()).build());
+            it.remove();
+            colorless--;
+        }
         while (generic > 0 && !pool.isEmpty()) {
-            taps.add(com.wizards.mtga.gre.AutoTapAction.newBuilder().setManaId(sync.manaId(pool.remove(0))).build());
+            taps.add(com.wizards.mtga.gre.AutoTapAction.newBuilder().setManaId(pool.remove(0).id()).build());
             generic--;
         }
         for (forge.card.mana.ManaCostShard shard : colored) {
@@ -1333,6 +1361,23 @@ public final class ForgeBackend implements GameBackend {
             colors.put(bestMa, COLOR_CODES[bestColor]);
         }
         free.sort(java.util.Comparator.comparingInt(c -> colorCount(sources.get(c))));      // spend the least flexible sources first
+        while (colorless > 0) {      // {C} shards: the source making the most colorless mana (Eldrazi Temple {C}{C} pays two)
+            Card pick = null;
+            SpellAbility pickMa = null;
+            int pickAmount = 0;
+            for (Card c : free) {
+                for (SpellAbility ma : sources.get(c)) {
+                    int amount = ma.getManaPart() != null && ma.getManaPart().canProduce("C", ma) ? Math.max(1, ma.amountOfManaGenerated(false)) : 0;
+                    if (amount > pickAmount) { pick = c; pickMa = ma; pickAmount = amount; }
+                }
+            }
+            if (pick == null) break;      // partial preview, as for colored shards
+            free.remove(pick);
+            taps.add(tapAction(pick, pickMa, com.wizards.mtga.gre.ManaColor.ManaColor_Colorless));
+            chosenSources.add(pickMa);
+            if (pickAmount > colorless) generic = Math.max(0, generic - (pickAmount - colorless));      // the rest pays generic
+            colorless -= pickAmount;
+        }
         for (int i = 0; i < generic; i++) {
             if (free.isEmpty()) break;
             Card c = free.remove(0);
