@@ -54,13 +54,16 @@ public final class CardDb {
     public CardDb(File dbFile) throws Exception {
         this.file = dbFile;
         try (Connection c = connect(); Statement st = c.createStatement()) {
+            // Titles: Formatted=1 is the display text and the only row for most cards; when it carries markup (the
+            // Alchemy "A-" sprite) there is also a plain Formatted=0 row. Split cards are titled "Commit /// Memory".
             try (ResultSet rs = st.executeQuery(
-                    "select c.GrpId, l.Loc, c.IsPrimaryCard, c.IsToken, c.IsDigitalOnly, c.IsRebalanced, c.TitleId, c.AbilityIds, "
+                    "select c.GrpId, coalesce(p.Loc, f.Loc), c.IsPrimaryCard, c.IsToken, c.IsDigitalOnly, c.IsRebalanced, c.TitleId, c.AbilityIds, "
                             + "c.AbilityIdToLinkedTokenGrpId, c.Power, c.Toughness, c.LinkedFaceGrpIds, c.ExpansionCode, c.DigitalReleaseSet, c.ArtId "
-                            + "from Cards c join Localizations_enUS l on l.LocId = c.TitleId")) {
+                            + "from Cards c left join Localizations_enUS p on p.LocId = c.TitleId and p.Formatted = 0 "
+                            + "left join Localizations_enUS f on f.LocId = c.TitleId and f.Formatted = 1 where coalesce(p.Loc, f.Loc) is not null")) {
                 while (rs.next()) {
                     int grp = rs.getInt(1);
-                    String name = rs.getString(2);
+                    String name = plainTitle(rs.getString(2));
                     nameByGrp.put(grp, name);
                     titleByGrp.put(grp, rs.getInt(7));
                     abilityIdsByGrp.put(grp, rs.getString(8));
@@ -90,6 +93,11 @@ public final class CardDb {
 
     private Connection connect() throws Exception {
         return DriverManager.getConnection("jdbc:sqlite:" + file.getAbsolutePath());
+    }
+
+    /** Card title as Forge names it: no rich-text tags, split cards "A // B" (the DB writes "A /// B"). */
+    static String plainTitle(String loc) {
+        return loc.replaceAll("<[^>]+>", "").replace(" /// ", " // ").trim();
     }
 
     private static int num(String s) {

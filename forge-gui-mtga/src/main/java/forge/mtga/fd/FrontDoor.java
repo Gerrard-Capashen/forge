@@ -19,9 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -207,7 +205,7 @@ public final class FrontDoor {
         });
         on("EventGetActiveEventsV2", (s, r) -> {
             JsonArray bots = new JsonArray();
-            bots.add(botEvent(BOT_EVENT, "Standard", 100));
+            bots.add(botEvent(BOT_EVENT, ForgeFormats.ANY, 100));
             bots.add(botEvent(BOT_EVENT + "_Rebalanced", "Alchemy", 99));
             return obj("DynamicFilterTags", new JsonArray(), "CacheVersion", 1, "Events", new JsonArray(),
                     "Challenges", null, "AiBotMatches", bots);
@@ -313,7 +311,7 @@ public final class FrontDoor {
         if (human.isEmpty()) return new Err(7000, "deck '" + deckName + "' has no cards Forge knows");
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
 
-        forge.mtga.AiDecks.Choice ai = forge.mtga.AiDecks.pick(System.getProperty("mtga.aideck"));
+        forge.mtga.AiDecks.Choice ai = aiDeck(deckFormat(stored.getAsJsonObject("Summary")));
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
         String aiName = "Forge AI";
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName));
@@ -333,6 +331,33 @@ public final class FrontDoor {
             s.push(push);
         }, 1500, java.util.concurrent.TimeUnit.MILLISECONDS);
         return GSON.toJson(matchId);
+    }
+
+    /** The deck's "Format" attribute (the deck builder's format dropdown), null if none. */
+    static String deckFormat(JsonObject summary) {
+        JsonElement attrs = summary == null ? null : summary.get("Attributes");
+        if (attrs == null || !attrs.isJsonArray()) return null;
+        for (JsonElement a : attrs.getAsJsonArray()) {
+            JsonObject o = a.getAsJsonObject();
+            if ("Format".equals(str(o, "name"))) return str(o, "value");
+        }
+        return null;
+    }
+
+    /**
+     * AI deck: -Dmtga.aideck if set; else, for a deck in a Forge-defined 60-card format (Modern, Pioneer...), a deck
+     * Forge generates for that format from cards the client has; else a random Forge "MTGA ..." precon.
+     */
+    private forge.mtga.AiDecks.Choice aiDeck(String format) {
+        String spec = System.getProperty("mtga.aideck");
+        if (spec == null || spec.isBlank()) {
+            forge.game.GameFormat gf = ForgeFormats.forgeFormat(format);
+            if (gf != null && !"Commander".equals(gf.getName())) {
+                System.out.println("[mtga] FD: AI deck for format " + format);
+                return forge.mtga.AiDecks.forFormat(gf, n -> db.grpId(n) != 0);
+            }
+        }
+        return forge.mtga.AiDecks.pick(spec);
     }
 
     // ---- set metadata -------------------------------------------------------------------------------------------
@@ -616,28 +641,18 @@ public final class FrontDoor {
 
     // ---- formats ------------------------------------------------------------------------------------------------
 
+    // Legality follows Forge's format definitions (ForgeFormats); the bot-match event uses the permissive "every card"
+    // format so any deck can be picked there.
     private synchronized GetFormatsResponse formats() {
-        if (formats != null) return formats;
-        Set<String> sets = new LinkedHashSet<>();
-        for (CardDb.Printing p : db.printings()) {
-            if (p.expansion() != null && !p.expansion().isBlank()) sets.add(p.expansion());
-            if (p.digitalSet() != null && !p.digitalSet().isBlank()) sets.add(p.digitalSet());
-        }
-        GetFormatsResponse.Builder b = GetFormatsResponse.newBuilder();
-        // Offline everything is legal everywhere; the names are the client's own so they get localized labels.
-        String[] constructed = {"Standard", "Alchemy", "Explorer", "Historic", "Timeless", "Pioneer"};
-        for (String name : constructed) {
-            b.addFormats(FormatConfigInfo.newBuilder().setName(name).addAllSets(sets).addAllLegalSets(sets)
-                    .setFormatTypeInternal(3)   // EFormatType.Constructed
-                    .setMainDeckQuota(Quota.newBuilder().setMin(60).setMax(250))
-                    .setSideBoardQuota(Quota.newBuilder().setMin(0).setMax(15))
-                    .setUseRebalancedCards(name.equals("Alchemy") || name.equals("Historic")));
-        }
-        b.addFormatGroups(FormatGroup.newBuilder().setGroupName("ConstructedSortOrder").addAllFormatNames(java.util.List.of(constructed)));
-        b.addFormatGroups(FormatGroup.newBuilder().setGroupName("EvergreenFormats").addAllFormatNames(java.util.List.of(constructed)));
-        formats = b.build();
-        System.out.println("[mtga] FD formats: " + constructed.length + " constructed formats over " + sets.size() + " sets");
+        if (formats == null) formats = forgeFormats().response();
         return formats;
+    }
+
+    private ForgeFormats forgeFormats;
+
+    synchronized ForgeFormats forgeFormats() {
+        if (forgeFormats == null) forgeFormats = new ForgeFormats(db);
+        return forgeFormats;
     }
 
     // ---- preferences --------------------------------------------------------------------------------------------
