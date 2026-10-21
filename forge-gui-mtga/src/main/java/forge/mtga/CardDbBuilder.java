@@ -54,8 +54,10 @@ import java.util.zip.GZIPInputStream;
  * <ol>
  * <li>Source: {@code --source <Downloads dir>} (e.g. a Steam install, read only) or, by default, the snapshot
  *     {@code data/carddb/pristine}, taken from the client copy the first time.</li>
- * <li>Copies the source DB and adds one Cards row per Forge card (single-faced, legal in the chosen formats, in format
- *     order), cloned from a template row: type line, cost, colors, P/T (planeswalkers: loyalty in Toughness), rarity,
+ * <li>Copies the source DB and adds one Cards row per Forge card face (legal in the chosen formats, in format order),
+ *     cloned from a template row. Multi-face cards are linked the client's way (LinkedFaceType = type of the linked face):
+ *     DFC/MDFC/flip front + back, adventure/omen/prepare parent + child spell, split/Room card + two halves (the card row
+ *     unites both halves). Per face: type line, cost, colors, P/T (planeswalkers: loyalty in Toughness), rarity,
  *     Forge set, oracle text as Abilities rows (existing client abilities reused when the text matches, so keywords keep
  *     their icons), titles/texts in every Localizations_* table. Ids from reserved ranges (see constants).</li>
  * <li>The DB is renamed Raw_CardDatabase_&lt;md5&gt;.mtga and listed (Length, sha256) in a copy of the source manifest,
@@ -67,7 +69,8 @@ import java.util.zip.GZIPInputStream;
  */
 public final class CardDbBuilder {
     public static final int GRP_BASE = 9_000_000;
-    static final int ABILITY_BASE = 9_000_000;
+    /** Separate from GRP_BASE: ability objects on the stack carry their ability id as GrpId in GRE messages. */
+    static final int ABILITY_BASE = 9_500_000;
     static final int ART_BASE = 9_000_000;
     static final int LOC_BASE = 900_000_000;
     /** Template rows cloned for new cards / abilities (Grizzly Bears, Lightning Bolt's spell ability). */
@@ -354,33 +357,118 @@ public final class CardDbBuilder {
             }));
         }
 
+        /** Multi-face layouts generated, with the LinkedFaceType each row stores (= the type of the face it links to). */
+        static final Map<CardSplitType, int[]> LINKS = Map.of(
+                CardSplitType.Transform, new int[] {2, 1},     // DFC: front -> DFC_Back, back -> DFC_Front
+                CardSplitType.Modal, new int[] {10, 9},        // MDFC
+                CardSplitType.Flip, new int[] {2, 1},          // the client has no flip layout: shown as a transforming DFC
+                CardSplitType.Adventure, new int[] {8, 7},     // parent -> AdventureChild, child -> AdventureParent
+                CardSplitType.Omen, new int[] {18, 17},
+                CardSplitType.Prepare, new int[] {19, 20},     // parent -> PreparedSpell, spell -> PreparedSpellParent
+                CardSplitType.Split, new int[] {6, 5});        // split card -> SplitHalf, halves -> SplitCard (Rooms: 16 / 15)
+
         private boolean supported(PaperCard pc) {
             CardRules r = pc.getRules();
             CardType t = r.getType();
-            return !existingNames.contains(pc.getName()) && r.getSplitType() == CardSplitType.None && !t.isBasicLand()
-                    && !t.isPlane() && !t.isPhenomenon() && !t.isScheme() && !t.isVanguard() && !t.isConspiracy() && !t.isDungeon()
-                    && !pc.getName().startsWith("A-");
+            return !existingNames.contains(pc.getName()) && (r.getSplitType() == CardSplitType.None || LINKS.containsKey(r.getSplitType()))
+                    && !t.isBasicLand() && !t.isPlane() && !t.isPhenomenon() && !t.isScheme() && !t.isVanguard() && !t.isConspiracy()
+                    && !t.isDungeon() && !pc.getName().startsWith("A-");
         }
 
         void add(PaperCard pc) throws Exception {
-            ICardFace face = pc.getRules().getMainPart();
+            CardRules r = pc.getRules();
+            ICardFace main = r.getMainPart();
+            if (r.getSplitType() == CardSplitType.None) {
+                insert(face(pc, main, main.getName(), nextGrp++, nextArt++, true));
+                return;
+            }
+            ICardFace other = r.getOtherPart();
+            int[] link = LINKS.get(r.getSplitType());
+            if (r.getSplitType() == CardSplitType.Split) {
+                boolean room = main.getType().hasSubtype("Room");
+                int parent = nextGrp++, left = nextGrp++, right = nextGrp++, art = nextArt++;
+                Map<String, Object> l = face(pc, main, main.getName(), left, art, false);
+                Map<String, Object> rt = face(pc, other, other.getName(), right, art, false);
+                for (Map<String, Object> half : List.of(l, rt)) {
+                    half.put("LinkedFaceType", room ? 15 : link[1]);
+                    half.put("LinkedFaceGrpIds", Integer.toString(parent));
+                }
+                Map<String, Object> p = face(pc, main, main.getName() + (room ? " // " : " /// ") + other.getName(), parent, art, true);
+                p.put("LinkedFaceType", room ? 16 : link[0]);
+                p.put("LinkedFaceGrpIds", left + "," + right);
+                // the split card itself shows both halves: union of types, both costs, all colors, both halves' abilities
+                List<String> core = new ArrayList<>(), sub = new ArrayList<>(), sup = new ArrayList<>();
+                for (CardType t : List.of(main.getType(), other.getType())) {
+                    t.getCoreTypes().forEach(c -> { if (!core.contains(c.name())) core.add(c.name()); });
+                    t.getSubtypes().forEach(c -> { if (!sub.contains(c)) sub.add(c); });
+                    t.getSupertypes().forEach(c -> { if (!sup.contains(c.name())) sup.add(c.name()); });
+                }
+                p.put("Types", enums(core, cardTypes));
+                p.put("Subtypes", enums(sub, subTypes));
+                p.put("Supertypes", enums(sup, superTypes));
+                p.put("TypeTextId", loc((String.join(" ", sup) + " " + String.join(" ", core)).trim()));
+                p.put("SubtypeTextId", sub.isEmpty() ? 0 : loc(String.join(" ", sub)));
+                p.put("OldSchoolManaText", (String) l.get("OldSchoolManaText") + rt.get("OldSchoolManaText"));
+                p.put("Colors", colors(r.getColor()));
+                p.put("FrameColors", colors(r.getColor()));
+                p.put("AbilityIds", join((String) l.get("AbilityIds"), (String) rt.get("AbilityIds")));
+                p.put("Order_CMCWithXLast", main.getManaCost().getCMC() + other.getManaCost().getCMC());
+                insert(p);
+                insert(l);
+                insert(rt);
+                return;
+            }
+            // two faces: the front/parent is the collectible card, the back/child only exists linked to it
+            boolean dfc = r.getSplitType() == CardSplitType.Transform || r.getSplitType() == CardSplitType.Modal
+                    || r.getSplitType() == CardSplitType.Flip;
+            int front = nextGrp++, back = nextGrp++, frontArt = nextArt++;
+            Map<String, Object> f = face(pc, main, main.getName(), front, frontArt, true);
+            Map<String, Object> b = face(pc, other, other.getName(), back, dfc ? nextArt++ : frontArt, false);
+            f.put("LinkedFaceType", link[0]);
+            f.put("LinkedFaceGrpIds", Integer.toString(back));
+            b.put("LinkedFaceType", link[1]);
+            b.put("LinkedFaceGrpIds", Integer.toString(front));
+            if (dfc) {
+                f.put("CollectorSuffix", "a");
+                b.put("CollectorSuffix", "b");
+                if (r.getSplitType() == CardSplitType.Transform) b.put("OldSchoolManaText", "");   // a transformed face has no cost
+            }
+            insert(f);
+            insert(b);
+        }
+
+        /** Both halves' ability refs, each once (fuse etc. sit on both halves). */
+        private static String join(String a, String b) {
+            java.util.LinkedHashSet<String> refs = new java.util.LinkedHashSet<>();
+            for (String s : (a + "," + b).split(",")) if (!s.isEmpty()) refs.add(s);
+            return String.join(",", refs);
+        }
+
+        private void insert(Map<String, Object> v) throws Exception {
+            for (String k : v.keySet()) {
+                if (Arrays.asList(cardCols).indexOf(k) < 0) throw new IllegalStateException("Cards has no column " + k);
+            }
+            fill(insCard, cardCols, cardTemplate, v);
+            insCard.executeUpdate();
+        }
+
+        /** Cards row values for one face; the title is the face name (a split card's own row: "A /// B"). */
+        private Map<String, Object> face(PaperCard pc, ICardFace face, String title, int grp, int art, boolean primary) throws Exception {
             CardType type = face.getType();
-            String name = pc.getName();
-            int grp = nextGrp++;
             String[] typeLine = type.toString().split("\\s+-\\s+", 2);
 
             List<String> abilityRefs = new ArrayList<>();
             String oracle = face.getOracleText() == null ? "" : face.getOracleText().replace("\\n", "\n");
             boolean spell = type.isInstant() || type.isSorcery();
             for (String line : oracle.split("\n")) {
-                if (!line.isBlank()) abilityRefs.addAll(abilities(line.trim(), name, spell));
+                if (!line.isBlank()) abilityRefs.addAll(abilities(line.trim(), face.getName(), spell));
             }
 
             Map<String, Object> v = new HashMap<>();
             v.put("GrpId", grp);
-            v.put("ArtId", nextArt++);
+            v.put("ArtId", art);
             v.put("ArtPath", "");
-            v.put("TitleId", newLoc(name));
+            v.put("TitleId", newLoc(title));
             v.put("AltTitleId", 0);
             v.put("InterchangeableTitleId", 0);
             v.put("FlavorTextId", 0);
@@ -393,7 +481,7 @@ public final class CardDbBuilder {
             v.put("ExpansionCode", pc.getEdition());
             v.put("DigitalReleaseSet", "");
             v.put("IsToken", 0);
-            v.put("IsPrimaryCard", 1);
+            v.put("IsPrimaryCard", primary ? 1 : 0);
             v.put("IsDigitalOnly", 0);
             v.put("IsRebalanced", 0);
             v.put("RebalancedCardGrpId", 0);
@@ -439,14 +527,10 @@ public final class CardDbBuilder {
             v.put("Order_CreaturesFirst", type.isCreature() ? 0 : 1);
             v.put("Order_ManaCostDifficulty", face.getColor().countColors());
             v.put("Order_CMCWithXLast", cmc);
-            v.put("Order_Title", name.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", ""));
+            v.put("Order_Title", title.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", ""));
             v.put("Order_MythicToCommon", 5 - rarity(pc.getRarity()));
             v.put("Order_BasicLandsFirst", 1);
-            for (Map.Entry<String, Object> e : v.entrySet()) {
-                if (Arrays.asList(cardCols).indexOf(e.getKey()) < 0) throw new IllegalStateException("Cards has no column " + e.getKey());
-            }
-            fill(insCard, cardCols, cardTemplate, v);
-            insCard.executeUpdate();
+            return v;
         }
 
         /** "id:textId" refs for one oracle line: existing client abilities when the text matches, else a new one. */

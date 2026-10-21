@@ -67,9 +67,15 @@ public final class SelfPlay {
             backend.onDisconnect(fc);
         }
         System.out.println("annotation totals: " + totals);
+        // card faces added by CardDbBuilder that appeared on visible objects (back faces show transforms/flips)
+        Map<Integer, String> added = new TreeMap<>();
+        for (int g : ADDED_SEEN) added.put(g, db.name(g));
+        System.out.println("added-card grpIds seen: " + added);
         System.out.println(failed == 0 ? "SELFPLAY OK" : "SELFPLAY FAILED games=" + failed);
         System.exit(failed == 0 ? 0 : 1);
     }
+
+    static final Set<Integer> ADDED_SEEN = Collections.synchronizedSet(new TreeSet<>());
 
     static final class FakeClient extends MatchSession {
         final Random rnd;
@@ -124,7 +130,8 @@ public final class SelfPlay {
                     requests++;
                     boolean mull = mulligans < 2 && rnd.nextInt(3) == 0;
                     if (mull) mulligans++;
-                    if (zone(32).getObjectInstanceIdsCount() != 7) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
+                    // rigs (-Dmtga.rig) replace the opening hand on purpose
+                    if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
                     if (g.getMulliganReq().getMulliganCount() != mulligans - (mull ? 1 : 0)) problem("MulliganReq.mulliganCount mismatch");
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_MulliganResp);
                     r.getMulliganRespBuilder().setDecision(mull ? MulliganOption.MulliganOption_Mulligan : MulliganOption.MulliganOption_AcceptHand);
@@ -361,6 +368,10 @@ public final class SelfPlay {
             for (GameObjectInfo o : objs.values()) {
                 if (!seen.containsKey(o.getInstanceId())) problem("object not listed by any zone (" + o.getType() + ")");
                 if (o.getVisibility() != Visibility.Visibility_Hidden && o.getGrpId() == 0) problem("visible object without grpId: " + backend.debugName(o.getInstanceId()));
+                if (o.getType() == GameObjectType.GameObjectType_Card && o.getGrpId() >= CardDbBuilder.GRP_BASE && ADDED_SEEN.add(o.getGrpId())) {
+                    System.out.println("[selfplay] first added face " + o.getGrpId() + " " + o.getType() + " zone " + o.getZoneId()
+                            + " " + backend.debugName(o.getInstanceId()));
+                }
             }
             for (AnnotationInfo p : persistent.values()) {
                 for (int id : p.getAffectedIdsList()) if (!objs.containsKey(id)) problem("persistent annotation on missing object " + p.getType(0));

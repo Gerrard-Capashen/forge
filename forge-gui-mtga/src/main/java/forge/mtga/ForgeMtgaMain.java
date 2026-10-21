@@ -101,6 +101,18 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Plains", 40);
         }
+        if ("newfaces".equals(deck)) {      // multi-face cards added by CardDbBuilder: transform, split (fuse), flip
+            green.clear();
+            green.put("Island", 16);
+            green.put("Forest", 6);
+            green.put("Mountain", 8);
+            green.put("Aberrant Researcher", 8);
+            green.put("Beck // Call", 6);
+            green.put("Akki Lavarunner", 8);
+            green.put("Lightning Bolt", 8);
+            red.clear();
+            red.put("Plains", 40);
+        }
         if ("bolt".equals(rig)) {      // test rig: burn deck vs creature deck
             green.clear();
             green.put("Mountain", 16);

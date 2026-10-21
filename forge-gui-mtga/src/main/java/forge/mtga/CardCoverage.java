@@ -61,13 +61,19 @@ public final class CardCoverage {
             if (s.forgeFormat() == null) continue;
             java.util.function.Predicate<PaperCard> rules = FModel.getFormats().getFormat(s.forgeFormat()).getFilterRules();
             int all = 0, onClient = 0;
+            Map<String, List<String>> missing = new TreeMap<>();   // layout -> names without a GrpId
             for (PaperCard pc : StaticData.instance().getCommonCards().getUniqueCards()) {
                 if (pc.getRules().getType().isBasicLand() || !rules.test(pc)) continue;
                 all++;
                 if (db.grpId(pc.getName()) != 0) onClient++;
+                else missing.computeIfAbsent(pc.getRules().getSplitType().name(), k -> new ArrayList<>()).add(pc.getName());
             }
             System.out.println("FORMAT " + s.name() + ": " + onClient + " of " + all + " Forge-legal cards have a GrpId ("
                     + (all == 0 ? 0 : onClient * 100 / all) + "%)");
+            for (Map.Entry<String, List<String>> e : missing.entrySet()) {
+                List<String> l = e.getValue();
+                System.out.println("  missing [" + e.getKey() + "] " + l.size() + ": " + l.subList(0, Math.min(12, l.size())));
+            }
         }
 
         for (int i = 2; i < args.length; i++) {

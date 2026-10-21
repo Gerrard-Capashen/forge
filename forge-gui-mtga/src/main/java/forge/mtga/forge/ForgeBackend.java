@@ -488,6 +488,24 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("nf".equals(rig)) {      // newfaces deck: Island x2, Forest, Mountain, Aberrant Researcher + Akki Lavarunner (no sickness) in
+                                     // play; Beck // Call in hand; Lightning Bolt on top (upkeep mill -> Researcher transforms)
+            for (String name : List.of("Island", "Island", "Forest", "Mountain", "Aberrant Researcher", "Akki Lavarunner", "Beck // Call", "Lightning Bolt")) {
+                Card pick = null;
+                for (Card c : p.getCardsIn(ZoneType.Library)) {
+                    if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
+                }
+                if (pick == null) continue;
+                if (name.startsWith("Beck")) game.getAction().moveToHand(pick, null);
+                else if (name.equals("Lightning Bolt")) game.getAction().moveToLibrary(pick, 0, null);
+                else {
+                    game.getAction().moveToPlay(pick, null, forge.game.ability.AbilityKey.newMap());
+                    pick.setSickness(false);
+                }
+                System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
+            }
+            return;
+        }
         if ("pte".equals(rig)) {      // playtest deck: explore + blight. In play: Forest x2, Overgrown Tomb, Watery Grave, Llanowar Elves; hand: Jadelight Ranger, Requiting Hex
             for (String name : List.of("Forest", "Forest", "Overgrown Tomb", "Watery Grave", "Llanowar Elves", "Jadelight Ranger", "Requiting Hex")) {
                 Card pick = null;
