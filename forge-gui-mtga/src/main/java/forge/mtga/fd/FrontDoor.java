@@ -366,17 +366,30 @@ public final class FrontDoor {
 
     private synchronized SetMetadataResponse sets() {
         if (setsResponse != null) return setsResponse;
-        // Release order is unknown offline: newer sets have higher GrpIds, so order sets by their highest GrpId and
-        // give them increasing (fake) release dates. The client needs a group "AllFilters" (deck builder set filter)
-        // and at least one published major set ("last published major set").
+        // Release dates: Forge's edition date when Forge knows the set code; an Arena-only set (Y26, ...) gets the day
+        // after the set released before it, in GrpId order (newer sets have higher GrpIds; cards added by
+        // CardDbBuilder have reserved GrpIds and do not count). The client needs a group "AllFilters" (deck builder set
+        // filter) and at least one published major set ("last published major set").
         Map<String, Integer> newest = new HashMap<>();
         for (CardDb.Printing p : db.printings()) {
-            if (p.expansion() != null && !p.expansion().isBlank()) newest.merge(p.expansion(), p.grpId(), Math::max);
+            if (p.expansion() != null && !p.expansion().isBlank()) {
+                newest.merge(p.expansion(), p.grpId() >= forge.mtga.CardDbBuilder.GRP_BASE ? 0 : p.grpId(), Math::max);
+            }
         }
-        java.util.List<String> codes = new java.util.ArrayList<>(newest.keySet());
-        codes.sort(java.util.Comparator.comparing(newest::get));
-        SetMetadataResponse.Builder b = SetMetadataResponse.newBuilder();
+        java.util.List<String> byGrp = new java.util.ArrayList<>(newest.keySet());
+        byGrp.sort(java.util.Comparator.comparing(newest::get));
         long day = 86_400L, base = 946_684_800L;   // 2000-01-01
+        Map<String, Long> released = new HashMap<>();
+        long previous = base;
+        for (String code : byGrp) {
+            forge.card.CardEdition ed = StaticData.instance().getCardEdition(code);
+            long t = ed != null && ed.getDate() != null ? ed.getDate().getTime() / 1000 : previous + day;
+            released.put(code, t);
+            previous = t;
+        }
+        java.util.List<String> codes = new java.util.ArrayList<>(byGrp);
+        codes.sort(java.util.Comparator.comparing(released::get));
+        SetMetadataResponse.Builder b = SetMetadataResponse.newBuilder();
         // per set: its collectible printings (profile "set collection" badge/page) and one collation named after the set
         // (the client only keeps collations whose code is a known CollationMapping; they give the release ordering)
         Map<String, java.util.List<Integer>> grpsBySet = new HashMap<>();
@@ -389,10 +402,14 @@ public final class FrontDoor {
             b.addSetDatas(SetMetadata.newBuilder().setSetCode(code).setAvailabilityInternal(2)   // SetAvailability.Available
                     .setIsPublished(true).setIsMajorCardset(true)
                     .addCollations(SetCollation.newBuilder().setCollationCode(code))
-                    .setReleaseDate(Timestamp.newBuilder().setSeconds(base + i * 7 * day)));
+                    .setReleaseDate(Timestamp.newBuilder().setSeconds(released.get(code))));
             java.util.List<Integer> grps = grpsBySet.get(code);
             if (grps != null) b.addSetCollectionGroup(KeyValuePair_String_List_Int32.newBuilder().setKey(code).addAllValue(grps));
         }
+        // The home page announces the newest published major set ("Available Now! Visit the store...") when its code is
+        // a real collation. An empty sentinel set dated after every real one is the "last published major set" instead.
+        b.addSetDatas(SetMetadata.newBuilder().setSetCode("FORGE").setAvailabilityInternal(2).setIsPublished(true).setIsMajorCardset(true)
+                .setReleaseDate(Timestamp.newBuilder().setSeconds(released.get(codes.get(codes.size() - 1)) + day)));
         java.util.List<String> newestFirst = new java.util.ArrayList<>(codes);
         java.util.Collections.reverse(newestFirst);
         b.addSetGroups(SetGroup.newBuilder().setGroupName("AllFilters").addAllSets(newestFirst));

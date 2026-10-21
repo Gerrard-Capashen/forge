@@ -472,6 +472,22 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("nc".equals(rig)) {      // newcards deck: Swamp, Forest, Grizzly Bears (no sickness) in play; Blade of the Bloodchief in hand
+            for (String name : List.of("Swamp", "Forest", "Grizzly Bears", "Blade of the Bloodchief")) {
+                Card pick = null;
+                for (Card c : p.getCardsIn(ZoneType.Library)) {
+                    if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
+                }
+                if (pick == null) continue;
+                if (name.startsWith("Blade")) game.getAction().moveToHand(pick, null);
+                else {
+                    game.getAction().moveToPlay(pick, null, forge.game.ability.AbilityKey.newMap());
+                    pick.setSickness(false);
+                }
+                System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
+            }
+            return;
+        }
         if ("pte".equals(rig)) {      // playtest deck: explore + blight. In play: Forest x2, Overgrown Tomb, Watery Grave, Llanowar Elves; hand: Jadelight Ranger, Requiting Hex
             for (String name : List.of("Forest", "Forest", "Overgrown Tomb", "Watery Grave", "Llanowar Elves", "Jadelight Ranger", "Requiting Hex")) {
                 Card pick = null;

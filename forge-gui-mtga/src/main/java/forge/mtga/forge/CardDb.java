@@ -96,7 +96,7 @@ public final class CardDb {
     }
 
     /** Card title as Forge names it: no rich-text tags, split cards "A // B" (the DB writes "A /// B"). */
-    static String plainTitle(String loc) {
+    public static String plainTitle(String loc) {
         return loc.replaceAll("<[^>]+>", "").replace(" /// ", " // ").trim();
     }
 

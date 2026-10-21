@@ -92,6 +92,15 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Plains", 40);
         }
+        if ("newcards".equals(deck)) {      // cards added to the client DB by CardDbBuilder, vs a passive opponent
+            green.clear();
+            green.put("Swamp", 12);
+            green.put("Forest", 12);
+            green.put("Grizzly Bears", 20);
+            green.put("Blade of the Bloodchief", 16);
+            red.clear();
+            red.put("Plains", 40);
+        }
         if ("bolt".equals(rig)) {      // test rig: burn deck vs creature deck
             green.clear();
             green.put("Mountain", 16);
