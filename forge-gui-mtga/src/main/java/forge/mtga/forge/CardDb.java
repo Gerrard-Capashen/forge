@@ -91,6 +91,40 @@ public final class CardDb {
         }
     }
 
+    /** The Forge printing behind an art id: card name, Forge set code and collector number, and whether it is the back face. */
+    public record ArtRef(String name, String set, String collectorNumber, boolean back) { }
+
+    /**
+     * Forge printing of every art id at or above {@code minArtId} (the ids CardDbBuilder generated, which have no art bundle).
+     * A primary row is the card itself (split/adventure halves share its art id); a non-primary row with its own art id
+     * (transform/flip back) is the back face of the primary row it links to.
+     */
+    public Map<Integer, ArtRef> generatedArt(int minArtId) throws Exception {
+        record Row(int art, boolean primary, String set, String cn, String linked, String title) { }
+        Map<Integer, Row> rows = new HashMap<>();
+        try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(
+                "select c.GrpId, c.ArtId, c.IsPrimaryCard, c.ExpansionCode, c.CollectorNumber, c.LinkedFaceGrpIds, coalesce(p.Loc, f.Loc) "
+                        + "from Cards c left join Localizations_enUS p on p.LocId = c.TitleId and p.Formatted = 0 "
+                        + "left join Localizations_enUS f on f.LocId = c.TitleId and f.Formatted = 1 where c.ArtId >= ?")) {
+            ps.setInt(1, minArtId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    rows.put(rs.getInt(1), new Row(rs.getInt(2), rs.getInt(3) == 1, rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)));
+                }
+            }
+        }
+        Map<Integer, ArtRef> out = new HashMap<>();
+        for (Row r : rows.values()) {
+            if (r.primary() && r.title() != null) out.putIfAbsent(r.art(), new ArtRef(plainTitle(r.title()), r.set(), r.cn(), false));
+        }
+        for (Row r : rows.values()) {
+            if (r.primary() || out.containsKey(r.art()) || r.linked() == null || r.linked().isBlank()) continue;
+            Row front = rows.get(num(r.linked().split(",")[0]));
+            if (front != null && front.primary() && front.title() != null) out.put(r.art(), new ArtRef(plainTitle(front.title()), front.set(), front.cn(), true));
+        }
+        return out;
+    }
+
     private Connection connect() throws Exception {
         return DriverManager.getConnection("jdbc:sqlite:" + file.getAbsolutePath());
     }

@@ -49,6 +49,11 @@ public final class ForgeMtgaMain {
         } else {
             System.out.println("[mtga] Front Door disabled (fdport=0)");
         }
+
+        // Scryfall art for the cards CardDbBuilder added; -Dmtga.artport=0 disables it (the client keeps its placeholder).
+        int artPort = Integer.getInteger("mtga.artport", 30011);
+        if (artPort > 0) new forge.mtga.art.ArtServer(db, artPort).start();
+        else System.out.println("[mtga] Art server disabled (artport=0)");
         Thread.currentThread().join();
     }
 
