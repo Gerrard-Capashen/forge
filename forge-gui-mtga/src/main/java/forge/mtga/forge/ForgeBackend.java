@@ -1164,6 +1164,16 @@ public final class ForgeBackend implements GameBackend {
             int id = sync.stackIid(si);
             if (id != 0) byId.put(id, si.getSpellAbility());
         }
+        // a trigger whose targets are forced (Soul-Guide Lantern entering with only the sacrificed Urza's Saga in a
+        // graveyard) is not a question: take them, as Arena does
+        if (sa.getRootAbility().isTrigger() && min >= 1 && byId.size() == min) {
+            System.out.println("[mtga] forced targets for " + sa + ": " + byId.keySet());
+            for (Object e : byId.values()) {
+                if (e instanceof GameEntity ge) sa.getTargets().add(ge);
+                else if (e instanceof SpellAbility tsa) sa.getTargets().add(tsa);
+            }
+            return true;
+        }
         System.out.println("[mtga] asking targets for " + sa + " among " + byId.keySet() + " min=" + min + " max=" + max);
         int abilityGrp = sa.isSpell() ? 0 : abilities.abilityId(sa.getRootAbility(), grp(host));
         List<Object> chosen = new ArrayList<>();
@@ -1970,6 +1980,8 @@ public final class ForgeBackend implements GameBackend {
         public <T extends GameEntity> T chooseSingleEntityForEffect(forge.util.collect.FCollectionView<T> optionList, forge.game.player.DelayedReveal delayedReveal,
                                                                     SpellAbility sa, String title, boolean isOptional, Player relatedPlayer, Map<String, Object> params) {
             if (!live() || optionList.isEmpty()) return super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);
+            // a forced choice of one (Equip resolving onto its only target) is not a question on Arena
+            if (!isOptional && delayedReveal == null && optionList.size() == 1) return optionList.get(0);
             List<Card> cards = new ArrayList<>();
             for (T t : optionList) {
                 if (!(t instanceof Card c)) return super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);

@@ -436,6 +436,7 @@ public final class StateSync {
         addZone(s, ZoneType.Exile, 0, game.getCardsIn(ZoneType.Exile));
         addZone(s, ZoneType.Command, 0, game.getCardsIn(ZoneType.Command));
         addExiledUnder(s);
+        addAttachments(s);
         for (Map.Entry<String, AnnotationInfo.Builder> e : extraPersistent.entrySet()) s.persistent.put(e.getKey(), e.getValue());
         s.zones.put(Z_LIMBO, ZoneInfo.newBuilder().setZoneId(Z_LIMBO).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Limbo)
                 .setVisibility(Visibility.Visibility_Public).build());
@@ -671,6 +672,35 @@ public final class StateSync {
         }
     }
 
+    /**
+     * Equipment / Auras / Fortifications: persistent Attachment annotation, affector = the attachment, affected = the
+     * permanent or player it is attached to (AttachmentStateAnnotationParser sets AttachedToId / AttachedWithIds, which
+     * is what draws the card attached). Without it an equipped creature looked unequipped.
+     */
+    private void addAttachments(Snapshot s) {
+        // the game's battlefield, not Card.isInZone: a creature that just died still holds its equipment (as a stale
+        // object that says Battlefield) until state-based actions unattach it
+        Set<Integer> inPlay = new HashSet<>();
+        for (Card c : game.getCardsIn(ZoneType.Battlefield)) inPlay.add(c.getId());
+        for (Card c : game.getCardsIn(ZoneType.Battlefield)) {
+            if (!c.isAttachedToEntity()) continue;
+            int iid = idIn(s, c);
+            if (!s.objs.containsKey(iid)) continue;
+            forge.game.GameEntity to = c.getEntityAttachedTo();
+            int target = 0;
+            if (to instanceof Card host) {
+                int hid = inPlay.contains(host.getId()) ? idIn(s, host) : 0;
+                GameObjectInfo ho = s.objs.get(hid);
+                if (ho != null && ho.getZoneId() == Z_BF) target = hid;
+            } else if (to instanceof Player p) {
+                target = seatOf(p);
+            }
+            if (target == 0) continue;
+            s.persistent.put("attach:" + iid, AnnotationInfo.newBuilder().setAffectorId(iid).addAffectedIds(target)
+                    .addType(AnnotationType.AnnotationType_Attachment));
+        }
+    }
+
     /** Emblems/effects are not client objects: their abilities are shown as coming from the card that made them. */
     static Card visibleSource(Card host) {
         if (host != null && host.isImmutable() && host.getEffectSource() != null) return host.getEffectSource();
@@ -884,6 +914,7 @@ public final class StateSync {
 
         // persistent annotations (counters): changed/added ones are re-sent with the same id, gone ones deleted
         Map<String, AnnotationInfo> nowPersistent = new LinkedHashMap<>();
+        List<AnnotationInfo> attached = new ArrayList<>();      // AttachmentCreated: the client animates the (re)attach
         for (Map.Entry<String, AnnotationInfo.Builder> e : s.persistent.entrySet()) {
             AnnotationInfo old = sentPersistent.get(e.getKey());
             AnnotationInfo cand = e.getValue().setId(old == null ? 0 : old.getId()).build();
@@ -892,6 +923,9 @@ public final class StateSync {
             nowPersistent.put(e.getKey(), a);
             m.addPersistentAnnotations(a);
             changed = true;
+            if (e.getKey().startsWith("attach:")) {
+                attached.add(ann(AnnotationType.AnnotationType_AttachmentCreated, a.getAffectorId(), a.getAffectedIds(0)).build());
+            }
         }
         for (Map.Entry<String, AnnotationInfo> e : sentPersistent.entrySet()) {
             if (!nowPersistent.containsKey(e.getKey())) { m.addDiffDeletedPersistentAnnotationIds(e.getValue().getId()); changed = true; }
@@ -907,6 +941,7 @@ public final class StateSync {
             }
         }
         for (AnnotationInfo a : annotations(s, deleted)) m.addAnnotations(a);
+        m.addAllAnnotations(attached);
         m.addAllActions(acts);       // a diff replaces the client's whole list
         sentActions = acts;
         clearHints();

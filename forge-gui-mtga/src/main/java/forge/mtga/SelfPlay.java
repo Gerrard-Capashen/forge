@@ -77,6 +77,7 @@ public final class SelfPlay {
         for (int g : ADDED_SEEN) added.put(g, db.name(g));
         System.out.println("added-card grpIds seen: " + added);
         System.out.println("states with cards displayed under a permanent: " + UNDER_SEEN.get());
+        System.out.println("states with an attached equipment / aura: " + ATTACH_SEEN.get());
         System.out.println("face-down objects seen (object x state): " + FACEDOWN_SEEN.get());
         System.out.println(failed == 0 ? "SELFPLAY OK" : "SELFPLAY FAILED games=" + failed);
         System.exit(failed == 0 ? 0 : 1);
@@ -84,6 +85,7 @@ public final class SelfPlay {
 
     static final Set<Integer> ADDED_SEEN = Collections.synchronizedSet(new TreeSet<>());
     static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
+    static final java.util.concurrent.atomic.AtomicInteger ATTACH_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger FACEDOWN_SEEN = new java.util.concurrent.atomic.AtomicInteger();
 
     static final class FakeClient extends MatchSession {
@@ -405,7 +407,20 @@ public final class SelfPlay {
                 }
             }
             for (AnnotationInfo p : persistent.values()) {
-                for (int id : p.getAffectedIdsList()) if (!objs.containsKey(id)) problem("persistent annotation on missing object " + p.getType(0));
+                boolean attachment = p.getType(0) == AnnotationType.AnnotationType_Attachment;
+                for (int id : p.getAffectedIdsList()) {
+                    if (!objs.containsKey(id) && !(attachment && id <= 2)) problem("persistent annotation on missing object " + p.getType(0));      // a curse is attached to a player
+                }
+                if (attachment) {      // equipment / aura -> the permanent it is attached to, both on the battlefield
+                    ATTACH_SEEN.incrementAndGet();
+                    for (int id : List.of(p.getAffectorId(), p.getAffectedIds(0))) {
+                        GameObjectInfo o = objs.get(id);
+                        if (o == null && id <= 2) continue;
+                        ZoneInfo z = o == null ? null : zones.get(o.getZoneId());
+                        if (z == null || z.getType() != ZoneType.ZoneType_Battlefield) problem("Attachment on an object not on the battlefield: "
+                                + id + " " + backend.debugName(id));
+                    }
+                }
                 if (p.getType(0) == AnnotationType.AnnotationType_DisplayCardUnderCard) {      // cards exiled under a permanent
                     UNDER_SEEN.incrementAndGet();
                     if (p.getDetailsList().stream().noneMatch(d -> d.getKey().equals("Disable"))) problem("DisplayCardUnderCard without Disable detail");
