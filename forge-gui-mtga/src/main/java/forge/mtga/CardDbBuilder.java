@@ -533,13 +533,17 @@ public final class CardDbBuilder {
             return v;
         }
 
-        /** "id:textId" refs for one oracle line: existing client abilities when the text matches, else a new one. */
+        /**
+         * "abilityId:textId" refs for one oracle line: existing client abilities when the text matches, else a new one.
+         * The ability's own text keeps CARDNAME; the textId in the ref is what the card displays, with the name filled in
+         * (as on Arena rows: Bolt's ability says "CARDNAME deals 3 damage...", the card's ref text names the card).
+         */
         private List<String> abilities(String line, String cardName, boolean spell) throws Exception {
             String text = arenaText(line, cardName);
             Integer known = abilityByText.get(text);
             if (known != null) {
                 reusedAbilities++;
-                return List.of(known + ":" + abilityText.get(known));
+                return List.of(known + ":" + cardText(text, cardName, abilityText.get(known)));
             }
             // keyword lines: "Flying, vigilance", "Equip {1}" ... each part a known ability
             String bare = text.replaceAll("\\s*\\([^)]*\\)", "").trim();
@@ -549,7 +553,7 @@ public final class CardDbBuilder {
                     String p = part.isEmpty() ? part : Character.toUpperCase(part.charAt(0)) + part.substring(1);
                     Integer id = abilityByText.get(p);
                     if (id == null) { refs = null; break; }
-                    refs.add(id + ":" + abilityText.get(id));
+                    refs.add(id + ":" + cardText(p, cardName, abilityText.get(id)));
                 }
                 if (refs != null && !refs.isEmpty()) { reusedAbilities += refs.size(); return refs; }
             }
@@ -583,7 +587,12 @@ public final class CardDbBuilder {
             fill(insAbility, abilityCols, abilityTemplate, v);
             insAbility.executeUpdate();
             newAbilities++;
-            return List.of(id + ":" + textId);
+            return List.of(id + ":" + cardText(text, cardName, textId));
+        }
+
+        /** The card's own text for an ability: CARDNAME replaced by the face name, else the ability's text. */
+        private int cardText(String text, String cardName, int abilityTextId) throws Exception {
+            return text.contains("CARDNAME") ? loc(text.replace("CARDNAME", cardName)) : abilityTextId;
         }
 
         private static void fill(PreparedStatement ps, String[] cols, Object[] template, Map<String, Object> v) throws Exception {

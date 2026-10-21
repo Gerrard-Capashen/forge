@@ -490,13 +490,16 @@ public final class ForgeBackend implements GameBackend {
         }
         if ("nf".equals(rig)) {      // newfaces deck: Island x2, Forest, Mountain, Aberrant Researcher + Akki Lavarunner (no sickness) in
                                      // play; Beck // Call in hand; Lightning Bolt on top (upkeep mill -> Researcher transforms)
-            for (String name : List.of("Island", "Island", "Forest", "Mountain", "Aberrant Researcher", "Akki Lavarunner", "Beck // Call", "Lightning Bolt")) {
+            // (a second Akki Lavarunner goes to the hand: the mulligan browser shows its rules text full size)
+            for (String name : List.of("Island", "Island", "Forest", "Mountain", "Aberrant Researcher", "Akki Lavarunner", "Beck // Call", "Lightning Bolt", "Akki Lavarunner")) {
                 Card pick = null;
                 for (Card c : p.getCardsIn(ZoneType.Library)) {
                     if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
                 }
                 if (pick == null) continue;
-                if (name.startsWith("Beck")) game.getAction().moveToHand(pick, null);
+                if (name.startsWith("Beck") || p.getCardsIn(ZoneType.Battlefield).anyMatch(c -> c.getName().equals(name) && name.startsWith("Akki"))) {
+                    game.getAction().moveToHand(pick, null);
+                }
                 else if (name.equals("Lightning Bolt")) game.getAction().moveToLibrary(pick, 0, null);
                 else {
                     game.getAction().moveToPlay(pick, null, forge.game.ability.AbilityKey.newMap());
