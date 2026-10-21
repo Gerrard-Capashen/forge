@@ -307,6 +307,12 @@ public final class StateSync {
     }
 
     public int grpIdOf(Card c) {
+        // face-down permanents (morph, manifest, disguise, cloak) have no name in Forge: the client's own
+        // "Face-Down Creature" (a 2/2 without abilities) stands for them
+        if (c.isFaceDown()) {
+            int fd = db.grpId("Face-Down Creature");
+            if (fd != 0) return fd;
+        }
         if (onAdventureFace(c)) {
             int face = db.linkedFace(db.grpId(c.getState(forge.card.CardStateName.Original).getName()));
             if (face != 0) return face;
@@ -553,6 +559,7 @@ public final class StateSync {
         }
         int grp = grpIdOf(c);
         o.setGrpId(grp).setOverlayGrpId(grp);
+        if (c.isFaceDown()) o.setIsFacedown(true);
         int title = db.titleId(grp);
         if (title != 0) o.setName(title);
         // the client builds a card's abilities (rules text, activation buttons, loyalty) only from uniqueAbilities

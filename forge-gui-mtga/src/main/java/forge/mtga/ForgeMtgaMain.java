@@ -118,6 +118,14 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Plains", 40);
         }
+        if ("facedown".equals(deck)) {      // manifest (Whisperwood Elemental) and morph: face-down permanents
+            green.clear();
+            green.put("Forest", 22);
+            green.put("Whisperwood Elemental", 18);
+            green.put("Den Protector", 20);
+            red.clear();
+            red.put("Plains", 40);
+        }
         if ("eldrazi".equals(deck)) {      // colorless {C} costs and restricted mana (Eldrazi Temple), vs a passive opponent
             green.clear();
             green.put("Eldrazi Temple", 8);

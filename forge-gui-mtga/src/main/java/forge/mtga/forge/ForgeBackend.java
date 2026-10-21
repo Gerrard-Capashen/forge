@@ -905,6 +905,7 @@ public final class ForgeBackend implements GameBackend {
             boolean canAfford = sa.isLandAbility() || affordable(sa, me);
             boolean elsewhere = !host.isInZone(ZoneType.Hand) && !host.isInZone(ZoneType.Battlefield);
             if (!canAfford && !elsewhere) continue;
+            if (!elsewhere && !sa.isLandAbility() && !hasLegalTargets(sa)) continue;      // Dismember with no creature around
             ActionType at = sa.isLandAbility() ? ActionType.ActionType_Play : sa.isAdventure() ? ActionType.ActionType_CastAdventure
                     : sa.isSpell() ? ActionType.ActionType_Cast : ActionType.ActionType_Activate;
             int iid = iid(host);
@@ -1235,18 +1236,32 @@ public final class ForgeBackend implements GameBackend {
 
     /** Interactive payment (client full control / manual mana): the client taps sources one by one. */
     boolean askManaPayment(forge.game.mana.ManaCostBeingPaid toPay, SpellAbility sa, Player me, forge.game.player.PlayerController ctl) {
-        while (!toPay.isPaid()) {
+        // floating mana pays first, as Forge's own payment input does (with every source already tapped for floating
+        // mana, Kozilek's Command X=2 with {G}{G}{C}{C} in the pool found no source to offer and the cast failed)
+        if (!toPay.isPaid()) me.getManaPool().payManaCostFromPool(toPay, sa, false, sa.getPayingMana());
+        // Phyrexian symbols no untapped source can make the color of: 2 life each (Forge's own input has the player
+        // click themselves for that); the life is paid only once the whole cost is
+        int phyLife = 0;
+        while (true) {
+            while (toPay.containsPhyrexianMana() && !phyrexianPayableWithMana(toPay, sa, me)
+                    && me.canPayLife(phyLife + 2, false, sa) && toPay.payPhyrexian()) {
+                phyLife += 2;
+                sa.setSpendPhyrexianMana(true);
+            }
+            if (toPay.isPaid()) break;
             byte canUse = 0;
             for (byte color : forge.card.mana.ManaAtom.MANATYPES) {
                 if (toPay.isAnyPartPayableWith(color, me.getManaPool())) canUse |= color;
             }
             if (toPay.isAnyPartPayableWith((byte) forge.card.mana.ManaAtom.GENERIC, me.getManaPool())) canUse |= forge.card.mana.ManaAtom.GENERIC;
 
-            Map<Integer, SpellAbility> sources = new HashMap<>();
+            // every usable mana ability of every source (Eldrazi Temple: {C} and the Eldrazi-only {C}{C}), keyed
+            // "instance:abilityGrp" -- the reply names both
+            Map<String, SpellAbility> sources = new LinkedHashMap<>();
             for (Card c : me.getCardsIn(ZoneType.Battlefield)) {
                 for (SpellAbility ma : c.getManaAbilities()) {
                     ma.setActivatingPlayer(me);
-                    if (ma.canPlay(true) && ma.isManaAbilityFor(sa, canUse)) sources.putIfAbsent(iid(c), ma);
+                    if (ma.canPlay(true) && ma.isManaAbilityFor(sa, canUse)) sources.putIfAbsent(iid(c) + ":" + abilities.abilityId(ma, grp(c)), ma);
                 }
             }
             if (sources.isEmpty()) return false;
@@ -1254,12 +1269,13 @@ public final class ForgeBackend implements GameBackend {
             GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_PayCostsReq);
             int host = iid(sa.getHostCard());
             req.getPayCostsReqBuilder().addAllManaCost(manaRequirements(toPay.toManaCost(), host));
-            for (Map.Entry<Integer, SpellAbility> e : sources.entrySet()) {
-                Card src = e.getValue().getHostCard();
-                Action.Builder ab = Action.newBuilder().setActionType(ActionType.ActionType_Activate_Mana).setGrpId(grp(src)).setInstanceId(e.getKey());
-                int abilityGrp = abilities.abilityId(e.getValue(), grp(src));
+            for (SpellAbility ma : sources.values()) {
+                Card src = ma.getHostCard();
+                int srcIid = iid(src);
+                Action.Builder ab = Action.newBuilder().setActionType(ActionType.ActionType_Activate_Mana).setGrpId(grp(src)).setInstanceId(srcIid);
+                int abilityGrp = abilities.abilityId(ma, grp(src));
                 if (abilityGrp != 0) ab.setAbilityGrpId(abilityGrp);
-                addManaOptions(ab, e.getValue(), e.getKey(), abilityGrp);
+                addManaOptions(ab, ma, srcIid, abilityGrp);
                 req.getPayCostsReqBuilder().getPaymentActionsBuilder().addActions(ab);
             }
             System.out.println("[mtga] manual payment for " + sa.getHostCard() + ": unpaid " + toPay + " sources " + sources.keySet());
@@ -1270,7 +1286,12 @@ public final class ForgeBackend implements GameBackend {
             if (r.getType() == ClientMessageType.ClientMessageType_CancelActionReq) return false;
             boolean progressed = false;
             for (Action a : r.getPerformActionResp().getActionsList()) {
-                SpellAbility chosen = sources.get(a.getInstanceId());
+                SpellAbility chosen = sources.get(a.getInstanceId() + ":" + a.getAbilityGrpId());
+                if (chosen == null) {      // reply without (or with another) ability id: that source's first ability
+                    for (Map.Entry<String, SpellAbility> e : sources.entrySet()) {
+                        if (e.getKey().startsWith(a.getInstanceId() + ":")) { chosen = e.getValue(); break; }
+                    }
+                }
                 if (chosen == null) continue;
                 applyManaChoice(chosen, a);
                 if (forge.game.player.PlaySpellAbility.playSpellAbility(ctl, me, chosen)) {
@@ -1280,8 +1301,26 @@ public final class ForgeBackend implements GameBackend {
             }
             if (!progressed) System.out.println("[mtga] payment reply did not tap anything we offered");
         }
+        if (phyLife > 0) me.payLife(phyLife, sa, false);
         sendDiff(true);
         return true;
+    }
+
+    /** Can an untapped mana source make the color of one of the unpaid Phyrexian symbols? */
+    private static boolean phyrexianPayableWithMana(forge.game.mana.ManaCostBeingPaid toPay, SpellAbility sa, Player me) {
+        for (forge.card.mana.ManaCostShard shard : toPay.getUnpaidShards()) {
+            if (!shard.isPhyrexian()) continue;
+            for (Card c : me.getCardsIn(ZoneType.Battlefield)) {
+                for (SpellAbility ma : c.getManaAbilities()) {
+                    ma.setActivatingPlayer(me);
+                    if (!ma.canPlay(true) || ma.getManaPart() == null) continue;
+                    for (int i = 0; i < COLOR_CODES.length; i++) {
+                        if ((shard.getColorMask() & COLOR_MASKS[i]) != 0 && ma.getManaPart().canProduce(COLOR_CODES[i], ma)) return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private static List<com.wizards.mtga.gre.ManaRequirement> manaRequirements(forge.card.mana.ManaCost mc, int objectId) {
@@ -1300,7 +1339,8 @@ public final class ForgeBackend implements GameBackend {
                     : (mask & forge.card.MagicColor.BLACK) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Black
                     : (mask & forge.card.MagicColor.RED) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Red
                     : (mask & forge.card.MagicColor.GREEN) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Green
-                    : shard == forge.card.mana.ManaCostShard.COLORLESS ? com.wizards.mtga.gre.ManaColor.ManaColor_Colorless : null;
+                    : shard == forge.card.mana.ManaCostShard.COLORLESS ? com.wizards.mtga.gre.ManaColor.ManaColor_Colorless
+                    : shard == forge.card.mana.ManaCostShard.X ? com.wizards.mtga.gre.ManaColor.ManaColor_X : null;
             if (c != null) counts.merge(c, 1, Integer::sum);
         }
         for (Map.Entry<com.wizards.mtga.gre.ManaColor, Integer> e : counts.entrySet()) {
@@ -1443,6 +1483,19 @@ public final class ForgeBackend implements GameBackend {
         if (abilityGrp != 0) a.setAbilityGrpId(abilityGrp);
         a.getManaPaymentOptionBuilder().addMana(com.wizards.mtga.gre.ManaInfo.newBuilder().setColor(color).setSrcInstanceId(iid(c)).setAbilityGrpId(abilityGrp));
         return a.build();
+    }
+
+    /** False if the ability (or a sub-ability) needs a target and none is legal: casting it could only fail. */
+    private static boolean hasLegalTargets(SpellAbility sa) {
+        try {
+            for (SpellAbility s = sa; s != null; s = s.getSubAbility()) {
+                forge.game.spellability.TargetRestrictions t = s.getTargetRestrictions();
+                if (t != null && t.getMinTargets(s.getHostCard(), s) > 0 && !t.hasCandidates(s)) return false;
+            }
+        } catch (RuntimeException e) {
+            return true;      // unusual targeting: let Forge decide when it is cast
+        }
+        return true;
     }
 
     private static boolean affordable(SpellAbility sa, Player me) {
