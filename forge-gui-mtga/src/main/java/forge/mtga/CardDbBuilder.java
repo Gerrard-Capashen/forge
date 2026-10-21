@@ -65,7 +65,10 @@ import java.util.zip.GZIPInputStream;
  *     files a manifest lists, and the bridge's LocalDoorbell offers the manifests found on disk.</li>
  * </ol>
  *
- * <p>Args: forgeGuiDir clientDir [--source dir] [--formats Standard,Pioneer,Modern] [--limit n] [--names "A;B"] [--dry-run]
+ * <p>{@code --carddata <dir>} holds {@code pristine/} and {@code state.json} (default {@code <client>/../data/carddb}; the
+ * patcher passes one per target so two client versions never share a pristine snapshot).
+ *
+ * <p>Args: forgeGuiDir clientDir [--source dir] [--carddata dir] [--formats Standard,Pioneer,Modern] [--limit n] [--names "A;B"] [--dry-run]
  */
 public final class CardDbBuilder {
     public static final int GRP_BASE = 9_000_000;
@@ -91,7 +94,7 @@ public final class CardDbBuilder {
             throw new IllegalArgumentException("refusing to write into " + clientDir + ": target must be the patched copy, not a Steam install");
         }
         File downloads = new File(clientDir, "MTGA_Data/Downloads");
-        File dataDir = new File(clientDir.getParentFile(), "data/carddb");
+        File dataDir = opt.containsKey("carddata") ? new File(opt.get("carddata")).getCanonicalFile() : new File(clientDir.getParentFile(), "data/carddb");
         Source src = source(opt.get("source"), downloads, new File(dataDir, "pristine"));
         System.out.println("[carddb] source manifest " + src.manifest() + "\n[carddb] source DB " + src.db());
 
