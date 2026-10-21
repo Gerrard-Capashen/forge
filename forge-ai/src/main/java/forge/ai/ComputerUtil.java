@@ -79,6 +79,11 @@ import java.util.stream.Collectors;
  * @version $Id$
  */
 public class ComputerUtil {
+    /** The controller's cost decision maker (AiCostDecision for the AI; a controller may route choices elsewhere). */
+    private static forge.game.cost.CostDecisionMakerBase costDecisionMaker(final Player ai, final SpellAbility sa, final boolean effect) {
+        return ai.getController().getCostDecisionMaker(ai, sa, effect, null);
+    }
+
 
     public static boolean handlePlayingSpellAbility(final Player ai, SpellAbility sa, Consumer<SpellAbility> chooseTargets) {
         final Card source = sa.getHostCard();
@@ -126,7 +131,7 @@ public class ComputerUtil {
         game.getStack().freezeStack(sa);
 
         final CostPayment pay = new CostPayment(cost, sa);
-        if (pay.payComputerCosts(new AiCostDecision(ai, sa, false))) {
+        if (pay.payComputerCosts(costDecisionMaker(ai, sa, false))) {
             game.getStack().addAndUnfreeze(sa);
             if (sa.getSplicedCards() != null && !sa.getSplicedCards().isEmpty()) {
                 game.getAction().reveal(sa.getSplicedCards(), ai, true, "Computer reveals spliced cards from ");
@@ -245,7 +250,7 @@ public class ComputerUtil {
             return false;
         }
 
-        if (pay.payComputerCosts(new AiCostDecision(ai, sa, false))) {
+        if (pay.payComputerCosts(costDecisionMaker(ai, sa, false))) {
             game.getStack().add(sa);
             return true;
         }
@@ -266,7 +271,7 @@ public class ComputerUtil {
 
         final Cost cost = sa.getPayCosts();
         final CostPayment pay = new CostPayment(cost, sa);
-        if (pay.payComputerCosts(new AiCostDecision(ai, sa, effect))) {
+        if (pay.payComputerCosts(costDecisionMaker(ai, sa, effect))) {
             AbilityUtils.resolve(sa);
             return true;
         }
