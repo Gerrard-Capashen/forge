@@ -71,11 +71,13 @@ public final class SelfPlay {
         Map<Integer, String> added = new TreeMap<>();
         for (int g : ADDED_SEEN) added.put(g, db.name(g));
         System.out.println("added-card grpIds seen: " + added);
+        System.out.println("states with cards displayed under a permanent: " + UNDER_SEEN.get());
         System.out.println(failed == 0 ? "SELFPLAY OK" : "SELFPLAY FAILED games=" + failed);
         System.exit(failed == 0 ? 0 : 1);
     }
 
     static final Set<Integer> ADDED_SEEN = Collections.synchronizedSet(new TreeSet<>());
+    static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
 
     static final class FakeClient extends MatchSession {
         final Random rnd;
@@ -182,6 +184,20 @@ public final class SelfPlay {
                                  CastingTimeOptionType_OptionalCostPaid, CastingTimeOptionType_None -> problem("CastingTimeOption type the client cannot show: " + o.getCastingTimeOptionType());
                             default -> { }
                         }
+                    }
+                    CastingTimeOptionReq modal = opts.stream().filter(o -> o.getCastingTimeOptionType() == CastingTimeOptionType.CastingTimeOptionType_Modal).findFirst().orElse(null);
+                    if (modal != null) {      // pick between min and max modes, like the client's ModalWorkflow (Done)
+                        ModalReq mr = modal.getModalReq();
+                        if (modal.getAffectorId() == 0 || mr.getMaxSel() < mr.getMinSel() || mr.getModalOptionsCount() < mr.getMinSel()) problem("bad modal request " + mr);
+                        List<Integer> ids = new ArrayList<>();
+                        for (ModalOption mo : mr.getModalOptionsList()) ids.add(mo.getGrpId());
+                        Collections.shuffle(ids, rnd);
+                        int n = mr.getMinSel() + rnd.nextInt(Math.max(1, Math.min(mr.getMaxSel(), ids.size()) - mr.getMinSel() + 1));
+                        ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_CastingTimeOptionsResp);
+                        r.getCastingTimeOptionsRespBuilder().getCastingTimeOptionRespBuilder().setCtoId(modal.getCtoId())
+                                .setCastingTimeOptionType(modal.getCastingTimeOptionType()).getChooseModalRespBuilder().addAllGrpIds(ids.subList(0, n));
+                        reply(r);
+                        break;
                     }
                     CastingTimeOptionReq pick = opts.get(rnd.nextInt(opts.size()));
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_CastingTimeOptionsResp);
@@ -382,6 +398,16 @@ public final class SelfPlay {
             }
             for (AnnotationInfo p : persistent.values()) {
                 for (int id : p.getAffectedIdsList()) if (!objs.containsKey(id)) problem("persistent annotation on missing object " + p.getType(0));
+                if (p.getType(0) == AnnotationType.AnnotationType_DisplayCardUnderCard) {      // cards exiled under a permanent
+                    UNDER_SEEN.incrementAndGet();
+                    if (p.getDetailsList().stream().noneMatch(d -> d.getKey().equals("Disable"))) problem("DisplayCardUnderCard without Disable detail");
+                    for (int id : p.getAffectedIdsList()) {
+                        GameObjectInfo o = objs.get(id);
+                        ZoneInfo z = o == null ? null : zones.get(o.getZoneId());
+                        if (z == null || z.getType() != ZoneType.ZoneType_Exile) problem("card displayed under a permanent is not in exile: "
+                                + id + " " + backend.debugName(id) + " zone " + (z == null ? "none" : z.getType()) + ", under " + backend.debugName(p.getAffectorId()));
+                    }
+                }
             }
             // the client replaces its GameInfo with any it receives: MatchState None hides Concede, a missing format resets it
             if (gs.hasGameInfo() && gs.getGameInfo().getMatchState() == com.wizards.mtga.gre.MatchState.MatchState_None) {

@@ -115,12 +115,14 @@ public final class ForgeMtgaMain {
         }
         if ("eldrazi".equals(deck)) {      // colorless {C} costs and restricted mana (Eldrazi Temple), vs a passive opponent
             green.clear();
-            green.put("Eldrazi Temple", 10);
-            green.put("Wastes", 10);
-            green.put("Swamp", 6);
-            green.put("Kozilek's Command", 12);
-            green.put("Thought-Knot Seer", 12);
-            green.put("Dismember", 10);
+            green.put("Eldrazi Temple", 8);
+            green.put("Ugin's Labyrinth", 6);
+            green.put("Wastes", 8);
+            green.put("Swamp", 4);
+            green.put("Kozilek's Command", 10);
+            green.put("Thought-Knot Seer", 10);
+            green.put("Ulamog's Crusher", 8);
+            green.put("Dismember", 6);
             red.clear();
             red.put("Plains", 40);
         }

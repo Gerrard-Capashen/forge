@@ -429,6 +429,7 @@ public final class StateSync {
         addStack(s);
         addZone(s, ZoneType.Exile, 0, game.getCardsIn(ZoneType.Exile));
         addZone(s, ZoneType.Command, 0, game.getCardsIn(ZoneType.Command));
+        addExiledUnder(s);
         for (Map.Entry<String, AnnotationInfo.Builder> e : extraPersistent.entrySet()) s.persistent.put(e.getKey(), e.getValue());
         s.zones.put(Z_LIMBO, ZoneInfo.newBuilder().setZoneId(Z_LIMBO).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Limbo)
                 .setVisibility(Visibility.Visibility_Public).build());
@@ -634,6 +635,33 @@ public final class StateSync {
             }
         }
         return o.build();
+    }
+
+    /**
+     * Cards exiled with a permanent (imprint: Ugin's Labyrinth; "until it leaves the battlefield": Banisher Priest) are
+     * drawn under it by the client: persistent DisplayCardUnderCard annotation, affector = the permanent, affected = the
+     * cards (they stay in the Exile zone). The "Disable" detail is required (the client throws without it).
+     */
+    private void addExiledUnder(Snapshot s) {
+        // the game's exile zone, not Card.isInZone: a card returned from exile (Ugin's Labyrinth) stays in the host's
+        // exiled list as a stale object that still reports Exile
+        Set<Integer> inExile = new HashSet<>();
+        for (Card e : game.getCardsIn(ZoneType.Exile)) inExile.add(e.getId());
+        for (Card c : game.getCardsIn(ZoneType.Battlefield)) {
+            // ids as of this snapshot (a card that just moved has a pending id): only objects the snapshot lists
+            int iid = idIn(s, c);
+            if (!s.objs.containsKey(iid)) continue;
+            java.util.Set<Integer> under = new java.util.TreeSet<>();
+            for (forge.game.card.CardCollectionView group : List.of(c.getExiledCards(), c.getUntilLeavesBattlefield())) {
+                for (Card e : group) {
+                    int eid = inExile.contains(e.getId()) ? idIn(s, e) : 0;
+                    if (s.objs.containsKey(eid)) under.add(eid);
+                }
+            }
+            if (under.isEmpty()) continue;
+            s.persistent.put("under:" + iid, AnnotationInfo.newBuilder().setAffectorId(iid).addAllAffectedIds(under)
+                    .addType(AnnotationType.AnnotationType_DisplayCardUnderCard).addDetails(intDetail("Disable", 0)));
+        }
     }
 
     /** Emblems/effects are not client objects: their abilities are shown as coming from the card that made them. */

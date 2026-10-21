@@ -509,8 +509,10 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
-        if ("et".equals(rig)) {      // eldrazi deck: Eldrazi Temple, Wastes, Swamp in play; Kozilek's Command, Thought-Knot Seer, Dismember in hand
-            for (String name : List.of("Eldrazi Temple", "Wastes", "Swamp", "Kozilek's Command", "Thought-Knot Seer", "Dismember")) {
+        if ("et".equals(rig)) {      // eldrazi deck: Eldrazi Temple, Wastes, Swamp in play; Kozilek's Command, Thought-Knot Seer, Dismember,
+                                     // Ugin's Labyrinth (imprint) and Ulamog's Crusher (a card it can exile) in hand
+            for (String name : List.of("Eldrazi Temple", "Wastes", "Swamp", "Kozilek's Command", "Thought-Knot Seer", "Dismember",
+                    "Ugin's Labyrinth", "Ulamog's Crusher")) {
                 Card pick = null;
                 for (Card c : p.getCardsIn(ZoneType.Library)) {
                     if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
@@ -731,8 +733,10 @@ public final class ForgeBackend implements GameBackend {
         Card host = sa.getHostCard();
         int cardGrp = grp(host);
         List<Integer> childIds = new ArrayList<>();
+        int modalAbility = 0;
         for (CardDb.Ability a : db.abilities(cardGrp)) {
             if (a.modalChildIds() == null || a.modalChildIds().isBlank()) continue;
+            if (modalAbility == 0) modalAbility = a.id();
             for (String id : a.modalChildIds().split(",")) childIds.add(Integer.parseInt(id.trim()));
         }
         if (childIds.isEmpty()) return null;
@@ -749,6 +753,35 @@ public final class ForgeBackend implements GameBackend {
             if (best != 0) byGrp.put(best, sub);
         }
         if (byGrp.size() != possible.size()) return null;
+        if (num > 1) {
+            // "Choose two" (Kozilek's Command, ...): only the Modal casting-time option opens the client's multi-select
+            // browser (ModalWorkflow: toggle modes, Done). A SelectNReq of ability ids opens SelectNWorkflow_Ability,
+            // which submits the first mode clicked.
+            GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_CastingTimeOptionsReq);
+            com.wizards.mtga.gre.CastingTimeOptionReq.Builder o = com.wizards.mtga.gre.CastingTimeOptionReq.newBuilder().setCtoId(1)
+                    .setCastingTimeOptionType(com.wizards.mtga.gre.CastingTimeOptionType.CastingTimeOptionType_Modal)
+                    .setAffectorId(iid(host)).setAffectedId(iid(host)).setGrpId(cardGrp).setIsRequired(min > 0);
+            o.getPromptBuilder().setPromptId(PROMPT_CHOOSE_MODES);
+            com.wizards.mtga.gre.ModalReq.Builder modal = o.getModalReqBuilder().setAbilityGrpId(modalAbility).setMinSel(min).setMaxSel(num);
+            for (int id : byGrp.keySet()) modal.addModalOptions(com.wizards.mtga.gre.ModalOption.newBuilder().setGrpId(id));
+            // modes Forge rules out right now (no legal target...) are shown greyed out, as on Arena
+            for (int id : childIds) if (!byGrp.containsKey(id)) modal.addExcludedOptions(com.wizards.mtga.gre.ModalOption.newBuilder().setGrpId(id));
+            req.getCastingTimeOptionsReqBuilder().addCastingTimeOptionReq(o);
+            System.out.println("[mtga] asking modes (" + min + "-" + num + ") " + byGrp.keySet() + " for " + host);
+            sendRequest(req);
+            ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_CastingTimeOptionsResp, ClientMessageType.ClientMessageType_CancelActionReq));
+            if (r.getType() != ClientMessageType.ClientMessageType_CastingTimeOptionsResp) return new ArrayList<>();
+            List<com.wizards.mtga.gre.CastingTimeOptionResp> resps = new ArrayList<>(r.getCastingTimeOptionsResp().getCastingTimeOptionRespsList());
+            if (r.getCastingTimeOptionsResp().hasCastingTimeOptionResp()) resps.add(r.getCastingTimeOptionsResp().getCastingTimeOptionResp());
+            List<AbilitySub> out = new ArrayList<>();
+            for (com.wizards.mtga.gre.CastingTimeOptionResp resp : resps) {
+                for (int id : resp.getChooseModalResp().getGrpIdsList()) {
+                    AbilitySub sub = byGrp.get(id);
+                    if (sub != null && !out.contains(sub)) out.add(sub);
+                }
+            }
+            return out;
+        }
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
         com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(min).setMaxSel(num)
                 .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Modal)
