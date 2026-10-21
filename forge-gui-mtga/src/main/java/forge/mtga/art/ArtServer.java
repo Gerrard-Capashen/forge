@@ -59,12 +59,14 @@ public final class ArtServer {
                 }
             }
             if (file == null || !file.isFile()) {
+                System.out.println("[mtga] art " + id + " not available (404)");
                 ex.sendResponseHeaders(404, -1);
                 return;
             }
             byte[] bytes = Files.readAllBytes(file.toPath());
             ex.getResponseHeaders().set("Content-Type", "image/jpeg");
             ex.sendResponseHeaders(200, bytes.length);
+            System.out.println("[mtga] art " + id + " served (" + bytes.length + " bytes)");
             try (OutputStream out = ex.getResponseBody()) {
                 out.write(bytes);
             }
