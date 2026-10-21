@@ -254,8 +254,11 @@ public final class StateSync {
             }
             if (sa != null && sa.isSpell() && sa.getHostCard() != null) categoryHint.put(sa.getHostCard().getId(), e.hasFizzled() ? "Countered" : "Resolve");
         } else if (ev instanceof GameEventSpellRemovedFromStack e) {
-            CardView host = e.sa() == null ? null : e.sa().getHostCard();
-            if (host != null) categoryHint.put(host.getId(), "Countered");
+            // fired after EVERY stack item leaves, resolved or not: only a spell that did not resolve was countered. An
+            // ability's removal named its host (Devourer of Destiny's own cast trigger), and that stale "Countered"
+            // labelled the creature's later Stack -> Battlefield move: the client burned it instead of resolving it
+            CardView host = e.sa() == null || !e.sa().isSpell() ? null : e.sa().getHostCard();
+            if (host != null && !"Resolve".equals(categoryHint.get(host.getId()))) categoryHint.put(host.getId(), "Countered");
         } else if (ev instanceof GameEventCardSacrificed e) {
             if (e.card() != null) categoryHint.put(e.card().getId(), "Sacrifice");
         } else if (ev instanceof GameEventCardDamaged e) {

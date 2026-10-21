@@ -150,6 +150,16 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Plains", 40);
         }
+        if ("devourer".equals(deck)) {      // opening-hand reveal, upkeep look trigger, cast trigger + creature resolving
+            green.clear();
+            green.put("Eldrazi Temple", 12);
+            green.put("Wastes", 12);
+            green.put("Devourer of Destiny", 20);
+            green.put("Thought-Knot Seer", 16);
+            red.clear();
+            red.put("Forest", 16);
+            red.put("Grizzly Bears", 24);
+        }
         if ("bolt".equals(rig)) {      // test rig: burn deck vs creature deck
             green.clear();
             green.put("Mountain", 16);

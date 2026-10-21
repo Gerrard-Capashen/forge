@@ -461,7 +461,11 @@ public final class SelfPlay {
             }
             if (combatDamage && turn != null) {
                 String key = turn.getTurnNumber() + "/" + turn.getStep();
-                if (key.equals(lastCombatDamageStep)) problem("combat damage of one step split over several diffs");
+                if (key.equals(lastCombatDamageStep)) {
+                    problem("combat damage of one step split over several diffs");
+                    System.out.println("[selfplay] DEBUG split diff anns " + gs.getAnnotationsList().stream().map(x -> x.getType(0) + "(" + x.getAffectorId() + ">" + x.getAffectedIdsList() + ")").toList()
+                            + " persistent " + gs.getPersistentAnnotationsList().stream().map(x -> x.getType(0) + "").toList());
+                }
                 lastCombatDamageStep = key;
             }
 
@@ -492,6 +496,8 @@ public final class SelfPlay {
                         if (!zones.containsKey(src) || !zones.containsKey(dst)) problem("ZoneTransfer zone unknown");
                         if (!zone(dst).getObjectInstanceIdsList().contains(id)) problem("ZoneTransfer dest zone does not list object");
                         if (category(a) == null) problem("ZoneTransfer without category");
+                        // a permanent spell entering the battlefield resolved: "Countered" plays the burn animation
+                        if ("Countered".equals(category(a)) && dst == 28) problem("Stack -> Battlefield labelled Countered: " + backend.debugName(id));
                     }
                     case AnnotationType_TappedUntappedPermanent -> {
                         int id = a.getAffectedIds(0);

@@ -38,6 +38,16 @@ final class AbilityMap {
             score += overlap(words, words(a.text(), sa.getHostCard()));
             if (score > bestScore) { bestScore = score; best = a.id(); }
         }
+        if (want == 2) {
+            // a trigger set up by a non-triggered ability (Devourer of Destiny's upkeep look, created by its opening-hand
+            // reveal, category 9) showed the card's unrelated "when you cast" trigger: a much closer text wins
+            double triggerOverlap = best == 0 ? 0 : bestScore - 2;
+            for (CardDb.Ability a : abs) {
+                if (a.category() == 2 || a.category() == 1) continue;
+                double s = overlap(words, words(a.text(), sa.getHostCard()));
+                if (s >= 0.4 && s > triggerOverlap + 0.25) { triggerOverlap = s; best = a.id(); }
+            }
+        }
         if (best == 0) {      // e.g. a delayed trigger set up by an activated ability: show the closest printed ability
             for (CardDb.Ability a : abs) {
                 double score = overlap(words, words(a.text(), sa.getHostCard()));

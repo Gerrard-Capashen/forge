@@ -129,7 +129,7 @@ public final class ForgeBackend implements GameBackend {
                  ClientMessageType_NumericInputResp, ClientMessageType_OrderResp, ClientMessageType_CastingTimeOptionsResp,
                  ClientMessageType_EffectCostResp -> inbox.add(msg);
             case ClientMessageType_SetSettingsReq -> {
-                settings.merge(msg.getSetSettingsReq().getSettings());
+                settings.merge(msg.getSetSettingsReq().getSettings(), msg.getSetSettingsReq().getTurnNumber());
                 System.out.println("[mtga] settings now: " + settings);
                 GREToClientMessage.Builder resp = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_SetSettingsResp)
                         .addSystemSeatIds(StateSync.HUMAN_SEAT).setGameStateId(sync == null ? 0 : sync.lastStateId());
@@ -169,6 +169,7 @@ public final class ForgeBackend implements GameBackend {
 
             Match match = new Match(rules, players, "MTGA");
             game = match.createGame();
+            settings.setTurnSupplier(() -> Math.max(0, game.getPhaseHandler().getTurn()));      // the client's TurnInfo.turnNumber
             human = game.getPlayers().get(0);
             Player ai = game.getPlayers().get(1);
             sync = new StateSync(game, human, ai, db, grpByName, matchId);
@@ -422,6 +423,29 @@ public final class ForgeBackend implements GameBackend {
 
     /** Test aid (-Dmtga.rig=...): deterministic opening setups for the scripted regression recipes. */
     private void rigHand(Player p) {
+        if ("dv".equals(System.getProperty("mtga.rig"))) {      // devourer deck: Wastes x7 in play, Devourer of Destiny in hand,
+                                                                 // the AI's Grizzly Bears in play (a target for the cast trigger)
+            List<String> mine = new ArrayList<>(java.util.Collections.nCopies(7, "Wastes"));
+            mine.add("Devourer of Destiny");
+            Player ai = game.getPlayers().get(1);
+            for (String name : mine) {
+                Card pick = null;
+                for (Card c : p.getCardsIn(ZoneType.Library)) {
+                    if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
+                }
+                if (pick == null) continue;
+                if (name.startsWith("Devourer")) game.getAction().moveToHand(pick, null);
+                else game.getAction().moveTo(ZoneType.Battlefield, pick, null, null);
+                System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
+            }
+            for (Card c : ai.getCardsIn(ZoneType.Library)) {
+                if (!c.getName().equals("Grizzly Bears")) continue;
+                game.getAction().moveTo(ZoneType.Battlefield, c, null, null);
+                System.out.println("[mtga] rig: AI Grizzly Bears instance " + iid(c));
+                break;
+            }
+            return;
+        }
         if ("block".equals(System.getProperty("mtga.rig"))) {      // my Elves vs the AI's Bears, both already in play
             for (Player pl : game.getPlayers()) {
                 String name = pl == p ? "Llanowar Elves" : "Grizzly Bears";
@@ -1874,6 +1898,19 @@ public final class ForgeBackend implements GameBackend {
             }
             Card src = cardToShow != null ? cardToShow : sa == null ? null : sa.getHostCard();
             return askOptional(src, promptFor(message), List.of(), message);
+        }
+
+        /** "You may reveal this card from your opening hand" (Devourer of Destiny, Leylines, Gemstone Caverns): ask per card. */
+        @Override
+        public List<SpellAbility> chooseSaToActivateFromOpeningHand(List<SpellAbility> usable) {
+            if (!live()) return super.chooseSaToActivateFromOpeningHand(usable);
+            List<SpellAbility> chosen = new ArrayList<>();
+            for (SpellAbility sa : usable) {
+                String q = sa.getDescription();
+                if (q == null || q.isEmpty()) q = sa.getHostCard().getName() + ": use from your opening hand?";
+                if (askOptional(sa.getHostCard(), promptFor(q), List.of(), "opening hand " + sa.getHostCard())) chosen.add(sa);
+            }
+            return chosen;
         }
 
         @Override

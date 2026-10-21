@@ -23,8 +23,20 @@ public final class ClientSettings {
     private AutoPassOption defaultAutoPass = AutoPassOption.AutoPassOption_None;
     private AutoPassOption stackAutoPass = AutoPassOption.AutoPassOption_None;
     private ManaSelectionType manaSelection = ManaSelectionType.ManaSelectionType_Auto;
+    private int autoPassTurnNumber;      // the turn a SetSettingsReq's autoPassOption was set for (0 = no limit)
+    private java.util.function.IntSupplier currentTurn = () -> 0;
 
-    public synchronized void merge(SettingsMessage s) {
+    public synchronized void setTurnSupplier(java.util.function.IntSupplier turn) { currentTurn = turn; }
+
+    public synchronized void merge(SettingsMessage s) { merge(s, 0); }
+
+    /**
+     * turnNumber: SetSettingsReq.turnNumber. The pass-turn button (UnlessOpponentAction / Turn) is sent with the turn
+     * it was pressed in and only lasts for that turn: pressed on the opponent's turn it must stop again on mine (it
+     * kept passing through my whole turn 6 until the client reset it at Main 2).
+     */
+    public synchronized void merge(SettingsMessage s, int turnNumber) {
+        if (s.getAutoPassOption() != AutoPassOption.AutoPassOption_None) autoPassTurnNumber = turnNumber;
         if (s.getClearAllStops() == SettingStatus.SettingStatus_Set) {
             myStops.clear();
             opponentStops.clear();
@@ -41,6 +53,10 @@ public final class ClientSettings {
     }
 
     private AutoPassOption turnOption() {
+        if (autoPassTurnNumber > 0 && currentTurn.getAsInt() > autoPassTurnNumber) {      // that turn is over
+            autoPass = AutoPassOption.AutoPassOption_None;
+            autoPassTurnNumber = 0;
+        }
         boolean set = autoPass != AutoPassOption.AutoPassOption_None && autoPass != AutoPassOption.AutoPassOption_Clear;
         return set ? autoPass : defaultAutoPass;
     }
