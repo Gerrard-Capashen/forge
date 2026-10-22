@@ -54,6 +54,7 @@ public final class SelfPlay {
         }
         if (Boolean.getBoolean("selfplay.pvp")) System.exit(pvp(db, decks, games, seed));
         if (Boolean.getBoolean("selfplay.peer")) System.exit(peer(db, decks, games, seed));
+        if (System.getProperty("selfplay.online") != null) System.exit(online(db, decks, games, seed, System.getProperty("selfplay.online")));
         int failed = 0;
         Map<String, Integer> totals = new TreeMap<>();
         for (int g = 0; g < games; g++) {
@@ -220,6 +221,60 @@ public final class SelfPlay {
         System.out.println("rejected (host not waiting): " + idle.error());
         if (idle.error() == null || !idle.error().contains("not waiting")) failed++;
         System.out.println(failed == 0 ? "SELFPLAY PEER OK" : "SELFPLAY PEER FAILED games=" + failed);
+        return failed == 0 ? 0 : 1;
+    }
+
+    /**
+     * -Dselfplay.online=ws://127.0.0.1:8787 (coordinator running, `npm run dev` in coordinator/): both players queue at the
+     * coordinator, the one who waited longest hosts, the other joins through the relay room and the game is played to the end.
+     */
+    static int online(CardDb db, Map<String, Integer>[] decks, int games, long seed, String url) throws Exception {
+        int failed = 0;
+        String queue = "CasualPlay_Modern", fp = "selfplay-db-" + System.nanoTime();     // own card DB name: never meets another test's queue
+        for (int g = 0; g < games; g++) {
+            PublicProfile alice = new PublicProfile("id-alice", "Alice", "Avatar_Basic_JaceBeleren", "CardBack_Default", "", "", List.of(), "Gold", 2);
+            PublicProfile bob = new PublicProfile("id-bob", "Bob", "Avatar_Basic_LilianaVess", "CardBack_Basic_Streamer", "", "", List.of(), "Mythic", 1);
+            forge.mtga.peer.Coordinator.Ticket ta = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, "id-alice", "Alice", "");
+            Thread.sleep(500);                                           // Alice waits longest: she hosts
+            forge.mtga.peer.Coordinator.Ticket tb = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, "id-bob", "Bob", "");
+            forge.mtga.peer.Coordinator.Paired pa = ta.result().get(15, TimeUnit.SECONDS), pb = tb.result().get(15, TimeUnit.SECONDS);
+            System.out.println("=== online paired: Alice " + pa.role() + " (sees " + pa.opponent() + "), Bob " + pb.role() + " (sees " + pb.opponent() + "), match " + pa.match());
+            if (!pa.host() || pb.host() || !pa.match().equals(pb.match())) { System.out.println("  PROBLEM: wrong pairing"); failed++; continue; }
+
+            forge.mtga.peer.PeerHost host = new forge.mtga.peer.PeerHost(db, 0, "", fp);
+            ForgeMatch room = new ForgeMatch(db, pa.match());
+            ForgeBackend mine = new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of()));
+            CountDownLatch joined = new CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicReference<PublicProfile> hostSaw = new java.util.concurrent.atomic.AtomicReference<>();
+            host.offer(new forge.mtga.peer.PeerHost.Offer(pa.match(), room, alice, queue, guest -> { hostSaw.set(guest); joined.countDown(); }));
+            forge.mtga.peer.PeerLink hostLink = forge.mtga.peer.Coordinator.openRoom(pa);
+            Thread serve = new Thread(() -> host.serveOnline(hostLink), "online-host");
+            serve.setDaemon(true);
+            serve.start();
+            forge.mtga.peer.PeerLink guestLink = forge.mtga.peer.Coordinator.openRoom(pb);
+            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.joinOnline(guestLink, fp, queue, bob, decks[1], Map.of());
+            if (j.error() != null || !joined.await(5, TimeUnit.SECONDS)) {
+                System.out.println("  PROBLEM: guest could not join: " + j.error());
+                failed++;
+                continue;
+            }
+            if (!alice.equals(j.host()) || !bob.equals(hostSaw.get())) { System.out.println("  PROBLEM: profiles differ after the handshake"); failed++; }
+            FakeClient[] fc = { new FakeClient(new Random(seed + 2L * g)), new FakeClient(new Random(seed + 2L * g + 1)) };
+            fc[0].backend = mine;
+            fc[1].backend = j.backend();
+            ClientToGREMessage.Builder connect = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConnectReq);
+            connect.getConnectReqBuilder().getDefaultSettingsBuilder();
+            mine.onConnect(fc[0], connect.build());
+            j.backend().onConnect(fc[1], connect.build());
+            if (!awaitAndCheck(fc, g, "online", Long.getLong("selfplay.timeout", 300))) failed++;
+            j.backend().onDisconnect(fc[1]);
+            mine.onDisconnect(fc[0]);
+        }
+        // a lone player can leave the queue
+        forge.mtga.peer.Coordinator.Ticket lone = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, "id-eve", "Eve", "");
+        Thread.sleep(500);
+        lone.cancel();
+        System.out.println(failed == 0 ? "SELFPLAY ONLINE OK" : "SELFPLAY ONLINE FAILED games=" + failed);
         return failed == 0 ? 0 : 1;
     }
 

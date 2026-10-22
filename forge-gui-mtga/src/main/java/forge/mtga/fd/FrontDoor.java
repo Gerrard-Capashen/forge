@@ -225,6 +225,7 @@ public final class FrontDoor {
         on("EventLeavePairing", (s, r) -> {      // the client left the "waiting for a match" screen
             Peer p = peer;
             if (p != null && p.host() != null) p.host().cancel();
+            leaveOnlineQueue();
             return GSON.toJson("Success");
         });
         // after a match: no rewards/rank/quests offline, just "found" so the end screen continues to the home page
@@ -309,7 +310,10 @@ public final class FrontDoor {
     public void setMatchDoor(String host, int port) { matchHost = host; matchPort = port; }
 
     /** Player-vs-player settings: {@code host} set = this server hosts (waits for one guest), else it joins {@code joinHost:joinPort}. */
-    public record Peer(forge.mtga.peer.PeerHost host, String joinHost, int joinPort, String key, String fingerprint) { }
+    /** {@code coordinator} != null = online matchmaking (ws(s):// address of the coordinator); {@code friendCode} limits the pairing to players with the same code. */
+    public record Peer(forge.mtga.peer.PeerHost host, String joinHost, int joinPort, String key, String fingerprint, String coordinator, String friendCode) {
+        public Peer(forge.mtga.peer.PeerHost host, String joinHost, int joinPort, String key, String fingerprint) { this(host, joinHost, joinPort, key, fingerprint, null, ""); }
+    }
 
     private volatile Peer peer;
 
@@ -409,7 +413,7 @@ public final class FrontDoor {
             if (problem != null) return new Err(7000, PlayQueues.queueLabel(eventId) + ": " + problem);
         }
         if (mode == PlayQueues.Mode.CASUAL) {
-            if (peer == null) return new Err(7000, "Casual Play needs another player: start MTGA-Forge as host or guest (online matchmaking is not available yet)");
+            if (peer == null) return new Err(7000, "Casual Play needs online matchmaking, which is switched off in this start (-Dmtga.p2p=off)");
             return startPeerMatch(s, deckName, human, printing, me, eventId);
         }
         forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(mode == PlayQueues.Mode.BOT ? queueFormat : deckFormat(summary));
@@ -435,6 +439,7 @@ public final class FrontDoor {
      */
     private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId) {
         Peer p = peer;
+        if (p.coordinator() != null) return startOnlineMatch(s, deckName, human, printing, me, eventId, p);
         if (p.host() != null) {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
             forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
@@ -450,6 +455,73 @@ public final class FrontDoor {
         System.out.println("[mtga] FD P2P guest: '" + deckName + "' vs " + j.host().name() + " (match " + j.matchId() + ")");
         pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), eventId);
         return GSON.toJson(j.matchId());
+    }
+
+    private volatile forge.mtga.peer.Coordinator.Ticket onlineTicket;
+
+    private void leaveOnlineQueue() {
+        forge.mtga.peer.Coordinator.Ticket t = onlineTicket;
+        onlineTicket = null;
+        if (t != null) t.cancel();
+    }
+
+    /**
+     * Online player vs player: the client waits in its queue screen while the coordinator looks for a second player of the same
+     * queue (event) and card database. The one who waited longest hosts: its engine runs the game and the other server joins
+     * through the coordinator's relay room instead of a TCP connection; from there it is the same as a P2P match.
+     */
+    private Object startOnlineMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
+        leaveOnlineQueue();
+        forge.mtga.peer.Coordinator.Ticket ticket = forge.mtga.peer.Coordinator.queue(p.coordinator(), eventId, p.fingerprint(),
+                forge.mtga.peer.PeerGuest.VERSION, me.playerId(), me.name(), p.friendCode());
+        onlineTicket = ticket;
+        try {
+            ticket.opened().get(8, java.util.concurrent.TimeUnit.SECONDS);      // fail now, not after a silent wait
+        } catch (Exception e) {
+            leaveOnlineQueue();
+            Throwable c = e.getCause() != null ? e.getCause() : e;
+            System.out.println("[mtga] FD online: matchmaking server unreachable (" + c.getMessage() + ")");
+            return new Err(7000, "Can't reach the matchmaking server. Check your internet connection and try again.");
+        }
+        System.out.println("[mtga] FD online: '" + deckName + "' queues in " + eventId + (p.friendCode().isBlank() ? "" : " with friend code " + p.friendCode()));
+        ticket.result().whenComplete((paired, err) -> {
+            if (err != null) {
+                if (!ticket.result().isCancelled()) System.out.println("[mtga] FD online: no match (" + err.getMessage() + ")");
+                return;
+            }
+            Thread t = new Thread(() -> playOnline(s, paired, human, printing, me, eventId, p), "online-match");
+            t.setDaemon(true);
+            t.start();
+        });
+        return GSON.toJson("online-" + System.currentTimeMillis() + "-" + (++matchCounter));
+    }
+
+    private void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
+        String matchId = paired.match();
+        System.out.println("[mtga] FD online: paired with " + paired.opponent() + " as " + paired.role() + ", match " + matchId);
+        forge.mtga.peer.PeerLink link = null;
+        try {
+            if (paired.host()) {
+                forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
+                forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing));
+                forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
+                p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), eventId)));
+                link = forge.mtga.peer.Coordinator.openRoom(paired);
+                p.host().serveOnline(link);              // returns when the guest has left
+                return;
+            }
+            link = forge.mtga.peer.Coordinator.openRoom(paired);
+            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.joinOnline(link, p.fingerprint(), eventId, me, human, printing);
+            if (j.error() != null) {
+                System.out.println("[mtga] FD online: join failed: " + j.error());
+                return;
+            }
+            forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
+            pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), eventId);
+        } catch (Exception e) {
+            System.out.println("[mtga] FD online: " + e);
+            if (link != null) link.close();
+        }
     }
 
     /**

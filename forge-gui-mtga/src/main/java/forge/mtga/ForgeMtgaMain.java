@@ -72,16 +72,28 @@ public final class ForgeMtgaMain {
         Thread.currentThread().join();
     }
 
+    /** The matchmaking coordinator everybody uses unless -Dmtga.coordinator says otherwise (a free Cloudflare Worker, see coordinator/). */
+    static final String DEFAULT_COORDINATOR = "wss://mm.mtga-forge.workers.dev";
+
     /**
-     * -Dmtga.p2p=host|join: player-vs-player with a friend instead of a bot match when a deck is played from the bot queue.
-     * host: listens on -Dmtga.peerport (default 30012) for one guest; join: connects to -Dmtga.peer=ip[:port];
-     * -Dmtga.peerkey is a shared secret both sides must give. Both need the same card DB (MTGA build + this package).
+     * Casual Play pairs players online through the coordinator (-Dmtga.coordinator=wss://... to use another one; -Dmtga.friendcode=<code>
+     * only pairs players who typed the same code). -Dmtga.p2p=off: no online play. DEPRECATED: -Dmtga.p2p=host|join, a direct TCP
+     * link to one friend (-Dmtga.peerport, -Dmtga.peer=ip[:port], -Dmtga.peerkey); both need the same card DB (MTGA build + this package).
      */
     private static forge.mtga.fd.FrontDoor.Peer peerConfig(CardDb db, File clientDir) throws Exception {
-        String role = System.getProperty("mtga.p2p");
-        if (role == null || role.isBlank()) return null;
+        String role = System.getProperty("mtga.p2p", "online");
+        if ("off".equals(role)) {
+            System.out.println("[mtga] online play off (-Dmtga.p2p=off): Casual Play is not available");
+            return null;
+        }
         String fingerprint = forge.mtga.peer.PeerGuest.fingerprint(CardDb.findDatabase(clientDir));
         String key = System.getProperty("mtga.peerkey", "");
+        if (role.isBlank() || "online".equals(role)) {
+            String url = System.getProperty("mtga.coordinator", DEFAULT_COORDINATOR);
+            String code = System.getProperty("mtga.friendcode", "").trim();
+            System.out.println("[mtga] online play through " + url + (code.isEmpty() ? "" : " (friend code " + code + ")"));
+            return new forge.mtga.fd.FrontDoor.Peer(new forge.mtga.peer.PeerHost(db, 0, key, fingerprint), null, 0, key, fingerprint, url, code);
+        }
         if ("host".equals(role)) {
             forge.mtga.peer.PeerHost host = new forge.mtga.peer.PeerHost(db, Integer.getInteger("mtga.peerport", 30012), key, fingerprint);
             host.start();
@@ -96,7 +108,7 @@ public final class ForgeMtgaMain {
             System.out.println("[mtga] P2P: playing from the bot queue joins the host at " + h + ":" + p);
             return new forge.mtga.fd.FrontDoor.Peer(null, h, p, key, fingerprint);
         }
-        throw new IllegalArgumentException("-Dmtga.p2p must be host or join, not " + role);
+        throw new IllegalArgumentException("-Dmtga.p2p must be host, join or online, not " + role);
     }
 
     /** [human deck, AI deck] for a deck name (-Dmtga.deck) / test rig (-Dmtga.rig). */

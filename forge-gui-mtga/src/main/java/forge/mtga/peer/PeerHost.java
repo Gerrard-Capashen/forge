@@ -76,12 +76,24 @@ public final class PeerHost {
     }
 
     private void serve(Socket socket) {
-        PeerLink link = null;
+        PeerLink link;
+        try {
+            link = new PeerLink(socket);
+        } catch (IOException e) {
+            System.out.println("[mtga] peer: guest link failed: " + e);
+            return;
+        }
+        serve(link, String.valueOf(socket.getRemoteSocketAddress()));
+    }
+
+    /** Online: the guest the coordinator paired with this host arrives through the room instead of the listening socket. Blocks for the match. */
+    public void serveOnline(PeerLink link) { serve(link, "the coordinator room"); }
+
+    private void serve(PeerLink link, String remote) {
         ForgeBackend theirs = null;
         ProxySession proxy = null;
         try {
-            socket.setSoTimeout(10_000);
-            link = new PeerLink(socket);
+            link.setReadTimeout(10_000);
             PeerLink.Frame hello = link.read();
             if (hello == null || hello.type() != PeerLink.HELLO) return;
             JsonObject h = JsonParser.parseString(hello.text()).getAsJsonObject();
@@ -103,11 +115,11 @@ public final class PeerHost {
                 }
             }
             if (reject != null) {
-                System.out.println("[mtga] peer: rejected " + socket.getRemoteSocketAddress() + ": " + reject);
+                System.out.println("[mtga] peer: rejected " + remote + ": " + reject);
                 link.sendText(PeerLink.REJECT, reject);
                 return;
             }
-            socket.setSoTimeout(0);
+            link.setReadTimeout(0);
             theirs = new ForgeBackend(db, o.room(), 1, seat);
             proxy = new ProxySession(link);
             JsonObject ok = new JsonObject();
@@ -115,7 +127,7 @@ public final class PeerHost {
             ok.addProperty("name", o.host().name());
             ok.add("profile", o.host().toJson());
             link.sendText(PeerLink.HELLO_OK, ok.toString());
-            System.out.println("[mtga] peer: guest '" + seat.name() + "' joined match " + o.matchId() + " from " + socket.getRemoteSocketAddress());
+            System.out.println("[mtga] peer: guest '" + seat.name() + "' joined match " + o.matchId() + " from " + remote);
             o.onGuestJoined().accept(guestProfile(h, seat.name()));
 
             PeerLink.Frame f;
@@ -131,7 +143,7 @@ public final class PeerHost {
             System.out.println("[mtga] peer: guest link failed: " + e);
         } finally {
             if (theirs != null) theirs.onDisconnect(proxy);
-            if (link != null) link.close();
+            link.close();
         }
     }
 

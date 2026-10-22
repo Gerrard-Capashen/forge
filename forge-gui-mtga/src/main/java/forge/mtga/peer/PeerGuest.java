@@ -33,12 +33,27 @@ public final class PeerGuest {
     /** {@code queue}: the queue event this guest plays in; the host only accepts a guest of the queue it waits in. */
     public static Joined join(String host, int port, String key, String fingerprint, String queue, PublicProfile me,
                               Map<String, Integer> deck, Map<String, Integer> printing) {
-        Socket socket = new Socket();
         PeerLink link = null;
         try {
+            Socket socket = new Socket();
             socket.connect(new InetSocketAddress(host, port), 5000);
-            socket.setSoTimeout(15_000);
             link = new PeerLink(socket);
+            return join(link, host + ":" + port, fingerprint, key, queue, me, deck, printing);
+        } catch (Exception e) {
+            return fail(link, "could not reach the host " + host + ":" + port + " (" + e.getMessage() + ")");
+        }
+    }
+
+    /** Online: the host the coordinator paired this guest with is on the other end of {@code link} (a room). */
+    public static Joined joinOnline(PeerLink link, String fingerprint, String queue, PublicProfile me,
+                                    Map<String, Integer> deck, Map<String, Integer> printing) {
+        return join(link, "the coordinator room", fingerprint, "", queue, me, deck, printing);
+    }
+
+    private static Joined join(PeerLink link, String where, String fingerprint, String key, String queue, PublicProfile me,
+                               Map<String, Integer> deck, Map<String, Integer> printing) {
+        try {
+            link.setReadTimeout(15_000);
             JsonObject hello = new JsonObject();
             hello.addProperty("v", VERSION);
             hello.addProperty("fp", fingerprint);
@@ -54,13 +69,13 @@ public final class PeerGuest {
             if (f.type() == PeerLink.REJECT) return fail(link, f.text());
             if (f.type() != PeerLink.HELLO_OK) return fail(link, "unexpected answer from the host");
             JsonObject ok = JsonParser.parseString(f.text()).getAsJsonObject();
-            socket.setSoTimeout(0);
-            System.out.println("[mtga] peer: joined " + host + ":" + port + ", match " + ok.get("matchId").getAsString());
+            link.setReadTimeout(0);
+            System.out.println("[mtga] peer: joined " + where + ", match " + ok.get("matchId").getAsString());
             PublicProfile theirs = ok.has("profile") && ok.get("profile").isJsonObject() ? PublicProfile.fromJson(ok.getAsJsonObject("profile"))
                     : PublicProfile.fromJson(JsonParser.parseString("{\"name\":" + GSON.toJson(ok.get("name").getAsString()) + "}").getAsJsonObject());
             return new Joined(null, ok.get("matchId").getAsString(), theirs, new RemoteSeatBackend(link));
         } catch (Exception e) {
-            return fail(link, "could not reach the host " + host + ":" + port + " (" + e.getMessage() + ")");
+            return fail(link, "could not reach the host at " + where + " (" + e.getMessage() + ")");
         }
     }
 
