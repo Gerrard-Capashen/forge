@@ -35,6 +35,10 @@ public final class ForgeMtgaMain {
         if (rename != null && !rename.isBlank() && !forge.mtga.profile.Profile.cleanName(rename).equals(profileStore.load().displayName)) {
             profileStore.update(p -> p.displayName = forge.mtga.profile.Profile.cleanName(rename));
         }
+        // Online play: register the player id with the coordinator (device key, "Name#tag" is unique there) before the client reads the tag.
+        if (System.getProperty("mtga.p2p", "online").matches("online|")) {
+            forge.mtga.social.Accounts.sync(profileStore, new forge.mtga.social.Accounts(System.getProperty("mtga.coordinator", DEFAULT_COORDINATOR), new forge.mtga.social.IdentityStore(dataDir)));
+        }
         forge.mtga.profile.Profile me = profileStore.load();
         System.setProperty("mtga.name", me.displayName);       // the Match Door and the engine seats use it
         System.out.println("[mtga] profile: " + me.clientName() + " (" + me.playerId + ")");
