@@ -14,7 +14,11 @@ import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -47,6 +51,9 @@ public final class SocialClient {
     private volatile long tokenAt;
     private volatile WebSocket socket;
     private volatile boolean stopped;
+    private final List<Consumer<JsonObject>> challengeListeners = new CopyOnWriteArrayList<>();
+    private final ArrayDeque<JsonObject> messages = new ArrayDeque<>();      // friend messages for the client, newest last: {seq, from, payload, at}
+    private long messageSeq;
 
     public SocialClient(Accounts accounts, FileProfileStore profiles) {
         this.accounts = accounts;
@@ -87,6 +94,11 @@ public final class SocialClient {
             o.addProperty("version", version);
             o.addProperty("connected", connected);
             o.addProperty("status", status);
+            JsonArray msgs = new JsonArray();
+            long now = System.currentTimeMillis();
+            messages.removeIf(m -> now - m.get("at").getAsLong() > 120_000);
+            for (JsonObject m : messages) msgs.add(m);
+            o.add("messages", msgs);
         }
         Profile p = profiles.load();
         JsonObject self = new JsonObject();
@@ -196,6 +208,24 @@ public final class SocialClient {
                 }
                 case "presence" -> setFriendStatus(m.get("playerId").getAsString(), m.get("status").getAsString());
                 case "changed" -> refresh();
+                case "challenge" -> {
+                    for (Consumer<JsonObject> l : challengeListeners) {
+                        try { l.accept(m); } catch (RuntimeException e) { System.out.println("[mtga] social: challenge event failed: " + e); }
+                    }
+                }
+                case "game" -> {
+                    JsonObject in = new JsonObject();
+                    in.addProperty("from", m.get("from").getAsString());
+                    in.addProperty("payload", m.get("payload").getAsString());
+                    in.addProperty("at", System.currentTimeMillis());
+                    synchronized (lock) {
+                        in.addProperty("seq", ++messageSeq);
+                        messages.addLast(in);
+                        while (messages.size() > 30) messages.removeFirst();
+                        version++;
+                        lock.notifyAll();
+                    }
+                }
                 default -> { }
             }
         } catch (RuntimeException | IOException e) {
@@ -260,6 +290,24 @@ public final class SocialClient {
     private JsonObject changed(JsonObject answer) throws IOException {
         refresh();
         return answer;
+    }
+
+    /** The coordinator's challenge pushes ({"t":"challenge","kind":"status|countdown|match|kick|close",...}), on the session thread. */
+    public void onChallengeEvent(Consumer<JsonObject> listener) { challengeListeners.add(listener); }
+
+    /** A REST call of this player's (challenges, ...): token and re-login handled. */
+    public JsonObject api(String method, String path, JsonObject body) throws IOException { return call(method, path, body); }
+
+    /** An opaque message for a friend (the client's challenge invites); dropped by the coordinator when not friends or the friend is offline. */
+    public boolean sendGame(String to, String payload) {
+        WebSocket w = socket;
+        if (w == null || to == null || to.isBlank() || payload == null) return false;
+        JsonObject m = new JsonObject();
+        m.addProperty("t", "game");
+        m.addProperty("to", to);
+        m.addProperty("payload", payload);
+        w.sendText(m.toString(), true);
+        return true;
     }
 
     /** The player's own presence: Available, Busy, Away or Offline (appears offline to friends, the session stays). */

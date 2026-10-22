@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
  *   GET  /social/state?since=N&amp;wait=MS   the {@link SocialClient#snapshot()} once its version is above N (long poll, at most 30 s)
  *   POST /social/invite|block {full|playerId}   /social/accept|decline|revoke|remove|unblock {playerId}   /social/status {status}
  *   POST /social/resolve {full}              -> the player behind "Name#12345"
+ *   POST /social/game {to, payload}          an opaque message for a friend (challenge invites)
  * </pre>
  * Every POST must carry the header {@code X-Forge-Social: 1}: a web page in the player's browser can send simple cross-site
  * requests to 127.0.0.1, but not ones with a custom header (the browser would ask first, and we never answer that).
@@ -51,6 +52,7 @@ public final class SocialEndpoints implements HttpHandler {
                     case "unblock" -> social.unblock(id);
                     case "status" -> social.setStatus(str(b, "status"));
                     case "resolve" -> answer = social.resolve(full);
+                    case "game" -> answer.addProperty("sent", social.sendGame(str(b, "to"), str(b, "payload")));
                     default -> {
                         reply(ex, 404, error("unknown action " + action, 404));
                         return;

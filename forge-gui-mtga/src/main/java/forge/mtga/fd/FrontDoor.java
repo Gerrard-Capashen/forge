@@ -208,7 +208,8 @@ public final class FrontDoor {
             bots.add(botEvent(BOT_EVENT, ForgeFormats.ANY, 100));
             bots.add(botEvent(BOT_EVENT + "_Rebalanced", "Alchemy", 99));
             return obj("DynamicFilterTags", new JsonArray(), "CacheVersion", 1, "Events", allEvents(),
-                    "Challenges", null, "AiBotMatches", bots);
+                    "Challenges", challenges != null ? new JsonArray() : null,     // non-null makes the client build its private game event (the challenge screen's deck selector needs it)
+                    "AiBotMatches", bots);
         });
         on("EventGetCoursesV2", (s, r) -> obj("Courses", events.courseList()));
 
@@ -275,7 +276,11 @@ public final class FrontDoor {
             WpnNotificationPreference off = WpnNotificationPreference.getDefaultInstance();
             return GetWpnNotificationPreferencesResp.newBuilder().setDefaultWpnNotificationPreference(off).setGlobalNotificationPreference(off).build();
         });
-        on("ChallengeReconnectAll", (s, r) -> ChallengeReconnectAllResp.getDefaultInstance());
+        // direct challenges: through the coordinator when online play is on (ChallengeService), else nothing to reconnect and no challenges
+        for (String cmd : ChallengeService.COMMANDS) {
+            on(cmd, (s, r) -> challenges != null ? challenges.handle(cmd, s, r)
+                    : "ChallengeReconnectAll".equals(cmd) ? ChallengeReconnectAllResp.getDefaultInstance() : new Err(7000, "challenges need online play"));
+        }
         // ---- cosmetics: catalogue (StaticContent), owned and equipped, all from the player's profile ----
         on("CosmeticsGetPlayerOwnedCosmetics", (s, r) -> GetPlayerOwnedCosmeticsResp.newBuilder().setOwnedCosmetics(profile.owned()).build());
         on("CosmeticsGetPreferredCosmetics", (s, r) -> profile.preferred());
@@ -316,6 +321,14 @@ public final class FrontDoor {
     }
 
     private volatile Peer peer;
+    private volatile ChallengeService challenges;
+
+    /** Direct challenges need the coordinator's friends: set by the server main when online play is on. */
+    public void setSocial(forge.mtga.social.SocialClient social) { challenges = social == null ? null : new ChallengeService(this, social); }
+
+    FdSession session() { return current; }
+
+    Peer peer() { return peer; }
 
     public void setPeer(Peer p) { peer = p; }
 
@@ -350,7 +363,7 @@ public final class FrontDoor {
     }
 
     /** Why the main deck (client JSON) is not playable in a client format, null if it is. */
-    private String deckProblem(String format, JsonObject deck) {
+    String deckProblem(String format, JsonObject deck) {
         Map<String, Integer> names = new LinkedHashMap<>();
         int unknown = 0;
         JsonArray main = deck.getAsJsonArray("MainDeck");
@@ -363,6 +376,26 @@ public final class FrontDoor {
             }
         }
         return forgeFormats().problem(format, names, unknown);
+    }
+
+    /** A client-JSON deck as Forge card names with counts and the client printing each name has (cards Forge does not know are left out). */
+    record Cards(Map<String, Integer> human, Map<String, Integer> printing) { }
+
+    Cards cardsOf(JsonObject deck) {
+        Map<String, Integer> human = new LinkedHashMap<>();
+        Map<String, Integer> printing = new HashMap<>();
+        JsonArray main = deck.getAsJsonArray("MainDeck");
+        if (main != null) {
+            for (JsonElement e : main) {
+                JsonObject c = e.getAsJsonObject();
+                int grp = c.get("cardId").getAsInt(), qty = c.get("quantity").getAsInt();
+                String name = db.name(grp);
+                if (name == null || StaticData.instance().getCommonCards().getUniqueByName(name) == null) continue;
+                human.merge(name, qty, Integer::sum);
+                printing.putIfAbsent(name, grp);
+            }
+        }
+        return new Cards(human, printing);
     }
 
     /** EventEnterPairing: a Bot Play / Casual Play queue starts its match; for a draft event play the course's deck against one of the bots' drafted decks. */
@@ -496,7 +529,7 @@ public final class FrontDoor {
         return GSON.toJson("online-" + System.currentTimeMillis() + "-" + (++matchCounter));
     }
 
-    private void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
+    void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
         String matchId = paired.match();
         System.out.println("[mtga] FD online: paired with " + paired.opponent() + " as " + paired.role() + ", match " + matchId);
         forge.mtga.peer.PeerLink link = null;

@@ -124,6 +124,10 @@ public final class ForgeFormats {
         return out;
     }
 
+    /** Format of the direct challenge screen's slot name (client format names): Standard / Pioneer / Modern / Limited rules under the slot's own name. */
+    private static final Map<String, List<String>> DIRECT_SLOTS = Map.of("Standard", List.of("DirectGame"), "Pioneer", List.of("DirectGameBrawlRebalanced"),
+            "Modern", List.of("DirectGameAlchemy"), "Limited", List.of("DirectGameLimited"));
+
     public synchronized GetFormatsResponse response() {
         GetFormatsResponse.Builder b = GetFormatsResponse.newBuilder();
         List<String> order = new ArrayList<>();
@@ -163,6 +167,10 @@ public final class ForgeFormats {
                 }
             }
             b.addFormats(f);
+            for (String alias : DIRECT_SLOTS.getOrDefault(s.name(), List.of())) {      // the challenge screen's fixed slots, re-skinned (docs/online-identity-friends.md, section 8)
+                b.addFormats(f.clone().setName(alias));
+                legal.put(alias, allowed);
+            }
             if (!LIMITED.equals(s.name())) order.add(s.name());
             System.out.println("[mtga] FD format " + s.name() + ": " + names.size() + " legal cards (" + allowed.size() + " titles), "
                     + banned + " banned, " + restricted + " restricted, " + filterSets.size() + " Arena sets");
