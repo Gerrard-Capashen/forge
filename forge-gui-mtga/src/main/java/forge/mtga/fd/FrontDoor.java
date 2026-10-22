@@ -13,6 +13,7 @@ import com.wizards.mtga.fd.*;
 import forge.StaticData;
 import forge.mtga.forge.CardDb;
 import forge.mtga.net.Capture;
+import forge.mtga.profile.PublicProfile;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -20,7 +21,6 @@ import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.TreeMap;
 
 /**
  * Front Door command handlers. Each request carries a CmdType and a JSON or protobuf payload; the reply uses the same
@@ -43,25 +43,25 @@ public final class FrontDoor {
     private final CardDb db;
     private final DeckStore decks;
     private final DraftEvents events;
-    private final File prefsFile;
+    private final ProfileApi profile;
     private final Map<String, Handler> handlers = new HashMap<>();
-    private final Map<String, String> prefs = new TreeMap<>();
     private String collectionJson;
     private GetFormatsResponse formats;
     private volatile FdSession current;
 
-    public FrontDoor(CardDb db, File dataDir) {
+    public FrontDoor(CardDb db, File dataDir, ProfileApi profile) {
         this.db = db;
         this.decks = new DeckStore(new File(dataDir, "decks"));
         this.events = new DraftEvents(db, dataDir);
-        this.prefsFile = new File(dataDir, "preferences.json");
-        loadPrefs();
+        this.profile = profile;
         seedStarterDecks(dataDir);
         register();
         System.out.println("[mtga] FD data dir " + dataDir.getAbsolutePath() + " (" + decks.all().size() + " decks)");
     }
 
     public DeckStore decks() { return decks; }
+
+    public ProfileApi profile() { return profile; }
 
     /** The connected client, if any (push notifications). */
     public FdSession current() { return current; }
@@ -120,7 +120,11 @@ public final class FrontDoor {
     // ---- handlers -----------------------------------------------------------------------------------------------
 
     private void register() {
-        Handler session = (s, r) -> obj("SessionId", "forge-local-session", "Attached", true, "PlayerConditions", 0);
+        Handler session = (s, r) -> {
+            String who = str(r.obj(), "PlayerId");
+            if (who != null && !who.equals(profile.profile().playerId)) System.out.println("[mtga] FD: client authenticated as " + who + ", profile is " + profile.profile().playerId);
+            return obj("SessionId", "forge-local-session", "Attached", true, "PlayerConditions", 0);
+        };
         on("Authenticate", session);
         on("Attach", session);
 
@@ -136,19 +140,18 @@ public final class FrontDoor {
         });
         on("EventGetActiveMatches", (s, r) -> obj("MatchesV3", new JsonArray()));
 
-        // player preferences: a string map persisted next to the decks
+        // player preferences: a string map, part of the player's profile document
         on("GetPlayerPreferences", (s, r) -> prefsJson());
         on("SetPlayerPreferences", (s, r) -> {
             JsonObject p = r.obj().has("Preferences") && r.obj().get("Preferences").isJsonObject()
                     ? r.obj().getAsJsonObject("Preferences") : new JsonObject();
             JsonElement map = p.get("Preferences");
             if (map != null && map.isJsonObject()) {
-                synchronized (prefs) {
+                profile.store().update(pr -> {
                     for (Map.Entry<String, JsonElement> e : map.getAsJsonObject().entrySet()) {
-                        prefs.put(e.getKey(), e.getValue().isJsonNull() ? null : e.getValue().getAsString());
+                        pr.preferences.put(e.getKey(), e.getValue().isJsonNull() ? null : e.getValue().getAsString());
                     }
-                    savePrefs();
-                }
+                });
             }
             return prefsJson();
         });
@@ -234,7 +237,7 @@ public final class FrontDoor {
                 "questUpdates", new JsonArray(), "rankUpdates", null, "mythicRatingUpdates", null, "periodicRewardsProgress", null));
 
         // ---- neutral answers so the home page has no errors (no store, quests, rank, rewards, social offline) ----
-        on("StaticContent", (s, r) -> obj());
+        on("StaticContent", (s, r) -> profile.staticContent());
         on("RankGetCombinedRankInfo", (s, r) -> obj("constructedSeasonOrdinal", 1, "constructedClass", "Bronze", "constructedLevel", 4,
                 "constructedStep", 0, "constructedMatchesWon", 0, "constructedMatchesLost", 0, "constructedMatchesDrawn", 0,
                 "limitedSeasonOrdinal", 1, "limitedClass", "Bronze", "limitedLevel", 4, "limitedStep", 0, "limitedMatchesWon", 0,
@@ -256,9 +259,17 @@ public final class FrontDoor {
                 "_weeklyRewardSequenceId", 0, "_weeklyRewardResetTimestamp", "2099-01-01T00:00:00Z",
                 "_dailyRewardChestDescriptions", obj(), "_weeklyRewardChestDescriptions", obj()));
         on("CarouselGetCarouselItems", (s, r) -> "[]");
-        // no store offline: failing the listings keeps the Store tab locked (an empty catalogue opens a Store page that
-        // hangs on "Waiting for the Server" because its set filter has no entries)
-        on("MercGetSkusAndListings", (s, r) -> new Err(ERR_NOT_IMPLEMENTED, "no store offline"));
+        // No store offline (MercGetStoreStatusV2 says StoreEnabled=false, which keeps the Store tab locked), but the client also builds
+        // the cosmetic catalogues (profile pickers, deck cosmetics, emotes) from this call: answer it with every listing type EMPTY.
+        on("MercGetSkusAndListings", (s, r) -> {
+            JsonObject versions = new JsonObject(), listings = new JsonObject();
+            for (String t : new String[] {"Card", "Pet", "ArtStyle", "Avatar", "Sleeve", "Booster", "SetMastery", "Bundle", "Sale", "Economic",
+                    "Emote", "PreconDeck", "PrizeWall"}) {
+                versions.addProperty(t, "1");
+                listings.add(t, new JsonArray());
+            }
+            return obj("SkusCacheVersionHash", "1", "Skus", new JsonObject(), "ListingCacheVersionsHash", versions, "Listings", listings);
+        });
         // no season payouts offline: a plain error makes the client skip the payout popup
         on("RankEvaluatePayoutsV2", (s, r) -> new Err(ERR_NOT_IMPLEMENTED, "no season payouts offline"));
         on("StoreGetEntitlementsV2", (s, r) -> obj("InventoryInfo", null, "ContainsFirstPurchase", false));
@@ -269,9 +280,14 @@ public final class FrontDoor {
             return GetWpnNotificationPreferencesResp.newBuilder().setDefaultWpnNotificationPreference(off).setGlobalNotificationPreference(off).build();
         });
         on("ChallengeReconnectAll", (s, r) -> ChallengeReconnectAllResp.getDefaultInstance());
-        Handler cosmetics = (s, r) -> PreferredCosmetics.getDefaultInstance();
-        for (String c : new String[] {"CosmeticsGetPreferredCosmetics", "CosmeticsSetPreferredAvatar", "CosmeticsSetPreferredSleeve",
-                "CosmeticsSetPreferredPet", "CosmeticsSetPreferredTitle", "CosmeticsSetPreferredEmotes"}) on(c, cosmetics);
+        // ---- cosmetics: catalogue (StaticContent), owned and equipped, all from the player's profile ----
+        on("CosmeticsGetPlayerOwnedCosmetics", (s, r) -> GetPlayerOwnedCosmeticsResp.newBuilder().setOwnedCosmetics(profile.owned()).build());
+        on("CosmeticsGetPreferredCosmetics", (s, r) -> profile.preferred());
+        on("CosmeticsSetPreferredAvatar", (s, r) -> profile.setAvatar(unpack(r, SetPreferredAvatarCosmeticRequest.class).getId()));
+        on("CosmeticsSetPreferredSleeve", (s, r) -> profile.setSleeve(unpack(r, SetPreferredSleeveCosmeticRequest.class).getId()));
+        on("CosmeticsSetPreferredPet", (s, r) -> profile.setPet(unpack(r, SetPreferredPetCosmeticRequest.class).getId()));
+        on("CosmeticsSetPreferredTitle", (s, r) -> profile.setTitle(unpack(r, SetPreferredTitleCosmeticRequest.class).getId()));
+        on("CosmeticsSetPreferredEmotes", (s, r) -> profile.setEmotes(unpack(r, SetPreferredEmotesCosmeticRequest.class).getIdsList()));
         on("GetSets", (s, r) -> sets());
 
         // telemetry: swallow
@@ -351,7 +367,8 @@ public final class FrontDoor {
         if (human.isEmpty()) return new Err(7000, "deck '" + deckName + "' has no cards Forge knows");
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
 
-        if (peer != null) return startPeerMatch(s, deckName, human, printing);
+        PublicProfile me = profile.forDeck(summary);
+        if (peer != null) return startPeerMatch(s, deckName, human, printing, me);
         forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(deckFormat(summary));
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
         String aiName = "Forge AI";
@@ -363,50 +380,56 @@ public final class FrontDoor {
         System.out.println("[mtga] FD bot match " + matchId + " (" + eventId + "): '" + deckName + "' (" + total + " cards) vs AI deck '" + ai.name() + "'");
         Capture.log("FD bot match " + matchId + " deck '" + deckName + "' vs '" + ai.name() + "'");
 
-        pushMatchCreated(s, matchId, aiName + " (" + ai.name() + ")", eventId);
+        pushMatchCreated(s, matchId, me, profile.forAi(aiName + " (" + ai.name() + ")"), eventId);
         return GSON.toJson(matchId);
     }
 
     /**
      * Player vs player instead of a bot match (-Dmtga.p2p). Host: this client's seat is built now and the client waits in its
      * queue screen until a guest joins. Guest: connects to the host, then plays through the host's engine.
-     * Either way the client's own Match Door connection (127.0.0.1) is what it plays on.
+     * Either way the client's own Match Door connection (127.0.0.1) is what it plays on. The two servers swap the PUBLIC part
+     * of the players' profiles in the peer handshake, so each client draws the other's avatar, sleeve, pet, title and emotes.
      */
-    private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing) {
-        String myName = System.getProperty("mtga.name", "Forge Player");
+    private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me) {
         Peer p = peer;
         if (p.host() != null) {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
             forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
-            forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(myName, human, printing));
+            forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing));
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
             System.out.println("[mtga] FD P2P host: '" + deckName + "' waits for a guest (match " + matchId + ")");
-            p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, guest -> pushMatchCreated(s, matchId, guest)));
+            p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), BOT_EVENT)));
             return GSON.toJson(matchId);
         }
-        forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join(p.joinHost(), p.joinPort(), p.key(), p.fingerprint(), myName, human, printing);
+        forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join(p.joinHost(), p.joinPort(), p.key(), p.fingerprint(), me, human, printing);
         if (j.error() != null) return new Err(7000, "P2P: " + j.error());
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
-        System.out.println("[mtga] FD P2P guest: '" + deckName + "' vs " + j.hostName() + " (match " + j.matchId() + ")");
-        pushMatchCreated(s, j.matchId(), j.hostName());
+        System.out.println("[mtga] FD P2P guest: '" + deckName + "' vs " + j.host().name() + " (match " + j.matchId() + ")");
+        pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), BOT_EVENT);
         return GSON.toJson(j.matchId());
     }
 
-    /** MatchCreated for this client: it is seat 1 on the Match Door of this process, the opponent seat 2. */
-    private void pushMatchCreated(FdSession s, String matchId, String opponentLabel) { pushMatchCreated(s, matchId, opponentLabel, BOT_EVENT); }
-
-    private void pushMatchCreated(FdSession s, String matchId, String opponentLabel, String eventId) {
+    /**
+     * MatchCreated for this client: it is seat 1 on the Match Door of this process, the opponent seat 2. Each player carries
+     * the cosmetics the client draws (avatar, sleeve, pet, title, emotes) in {@code CosmeticsSelection}.
+     */
+    private void pushMatchCreated(FdSession s, String matchId, PublicProfile me, PublicProfile opponent, String eventId) {
         JsonArray players = new JsonArray();
-        players.add(obj("ScreenName", System.getProperty("mtga.name", "Forge Player"), "RankingClass", "Bronze", "RankingTier", 4, "SeatId", 1, "TeamId", 1, "IsWotc", false));
-        players.add(obj("ScreenName", opponentLabel, "RankingClass", "Bronze", "RankingTier", 4, "SeatId", 2, "TeamId", 2, "IsWotc", false));
+        players.add(playerInfo(me, 1, 1));
+        players.add(playerInfo(opponent, 2, 2));
         JsonObject info = obj("MatchEndpointHost", matchHost, "MatchEndpointPort", matchPort, "MatchId", matchId,
                 "McFabricId", "fabric:/forge/" + matchId, "EventId", eventId, "Battlefield", "", "MatchType", "Queue",
                 "YourSeat", 1, "ClientMetadata", obj(), "PlayerInfos", players);
         String push = obj("Type", "MatchCreated", "MatchInfoV4", info).toString();
         LATER.schedule(() -> {
-            Capture.log("FD push MatchCreated " + Capture.flat(push, 400));
+            Capture.log("FD push MatchCreated " + Capture.flat(push, 600));
             s.push(push);
         }, 1500, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    private JsonObject playerInfo(PublicProfile p, int seat, int team) {
+        return obj("ScreenName", p.name(), "RankingClass", p.rankClass(), "RankingTier", p.rankTier(), "SeatId", seat, "TeamId", team,
+                "IsWotc", false, "CosmeticsSelection", profile.selectionJson(p));
     }
 
     /** The deck's "Format" attribute (the deck builder's format dropdown), null if none. */
@@ -608,7 +631,7 @@ public final class FrontDoor {
      */
     static final String[] KILL_SWITCHES = {"WPNFavoriteStoreStatus", "PlayerReportingStatus", "HasbroGoAddRemoveFriends",
             "SocialBladeStatus", "SocialBladeV2Status", "SocialChallengeStatus", "SocialGatheringStatus", "SocialChatStatus",
-            "AchievementSceneStatus", "TournamentStatus",
+            "AchievementSceneStatus", "TournamentStatus", "StoreStatus",     // StoreStatus: no store offline (its listings are empty; the cosmetic catalogues come from the profile, see CosmeticCatalogs.cs)
             "BoosterStatus"};   // Packs tab: no packs to open, the whole collection is owned from the start
 
     private static Map<String, Boolean> killSwitchMap() {
@@ -626,7 +649,7 @@ public final class FrontDoor {
                 .setDeckLimit(1000)
                 .setKillSwitchNotification(KillSwitchNotification.newBuilder().putAllKillSwitches(killSwitchMap()).putAllUxKillSwitches(killSwitchMap()))
                 .setHomePageAchievements(HomePageAchievements.getDefaultInstance())
-                .setPreferredCosmetics(PreferredCosmetics.getDefaultInstance())
+                .setPreferredCosmetics(profile.preferred())
                 .setCardMetadataInfo(CardMetadataInfo.getDefaultInstance())
                 .setServerTimeInternal(Timestamp.newBuilder().setSeconds(now / 1000).setNanos((int) (now % 1000) * 1_000_000));
         // The decks MUST come with StartHook: the client initializes its deck cache from this list and considers it
@@ -707,11 +730,13 @@ public final class FrontDoor {
     private static String nz(String s) { return s == null ? "" : s;
     }
 
-    static InventoryInfo inventory() {
-        return InventoryInfo.newBuilder().setSeqId(1).setGems(0).setGold(0)
+    private InventoryInfo inventory() {
+        return InventoryInfo.newBuilder().setSeqId(profile.inventorySeq()).setGems(0).setGold(0)
                 .setWildCardCommons(0).setWildCardUnCommons(0).setWildCardRares(0).setWildCardMythics(0)
-                .setCosmetics(CosmeticsClient.getDefaultInstance()).build();
+                .setCosmetics(profile.owned()).build();
     }
+
+    private static <T extends Message> T unpack(Req r, Class<T> type) throws Exception { return r.any().unpack(type); }
 
     // ---- collection: every collectible printing Forge can play, x4 ----------------------------------------------
 
@@ -752,29 +777,8 @@ public final class FrontDoor {
 
     private String prefsJson() {
         JsonObject m = new JsonObject();
-        synchronized (prefs) { prefs.forEach(m::addProperty); }
+        profile.profile().preferences.forEach(m::addProperty);
         return obj("Preferences", m).toString();
-    }
-
-    private void loadPrefs() {
-        try {
-            if (!prefsFile.isFile()) return;
-            JsonObject o = JsonParser.parseString(Files.readString(prefsFile.toPath(), StandardCharsets.UTF_8)).getAsJsonObject();
-            for (Map.Entry<String, JsonElement> e : o.entrySet()) prefs.put(e.getKey(), e.getValue().isJsonNull() ? null : e.getValue().getAsString());
-        } catch (Exception e) {
-            System.out.println("[mtga] FD: cannot read " + prefsFile + ": " + e);
-        }
-    }
-
-    private void savePrefs() {
-        try {
-            JsonObject o = new JsonObject();
-            prefs.forEach(o::addProperty);
-            prefsFile.getParentFile().mkdirs();
-            Files.writeString(prefsFile.toPath(), o.toString(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            System.out.println("[mtga] FD: cannot write " + prefsFile + ": " + e);
-        }
     }
 
     // ---- json helpers -------------------------------------------------------------------------------------------

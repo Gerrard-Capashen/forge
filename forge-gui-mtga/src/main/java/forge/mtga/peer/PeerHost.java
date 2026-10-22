@@ -8,6 +8,7 @@ import forge.StaticData;
 import forge.mtga.forge.CardDb;
 import forge.mtga.forge.ForgeBackend;
 import forge.mtga.forge.ForgeMatch;
+import forge.mtga.profile.PublicProfile;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -22,8 +23,8 @@ import java.util.function.Consumer;
  * names its deck; the match then runs in the host's engine with the guest's client reached through a {@link ProxySession}.
  */
 public final class PeerHost {
-    /** A host waiting for a guest: the shared match with the host's seat already in it. */
-    public record Offer(String matchId, ForgeMatch room, Consumer<String> onGuestJoined) { }
+    /** A host waiting for a guest: the shared match with the host's seat already in it, the host's public profile for this match, and who to tell when the guest's profile arrives. */
+    public record Offer(String matchId, ForgeMatch room, PublicProfile host, Consumer<PublicProfile> onGuestJoined) { }
 
     private final CardDb db;
     private final int port;
@@ -105,10 +106,11 @@ public final class PeerHost {
             proxy = new ProxySession(link);
             JsonObject ok = new JsonObject();
             ok.addProperty("matchId", o.matchId());
-            ok.addProperty("name", System.getProperty("mtga.name", "Forge Player"));
+            ok.addProperty("name", o.host().name());
+            ok.add("profile", o.host().toJson());
             link.sendText(PeerLink.HELLO_OK, ok.toString());
             System.out.println("[mtga] peer: guest '" + seat.name() + "' joined match " + o.matchId() + " from " + socket.getRemoteSocketAddress());
-            o.onGuestJoined().accept(seat.name());
+            o.onGuestJoined().accept(guestProfile(h, seat.name()));
 
             PeerLink.Frame f;
             while ((f = link.read()) != null) {
@@ -134,6 +136,12 @@ public final class PeerHost {
         }
         if (!key.equals(str(h, "key"))) return "wrong key";
         return null;
+    }
+
+    /** The guest's public profile from its HELLO (a peer without one is shown by name only). */
+    static PublicProfile guestProfile(JsonObject h, String name) {
+        PublicProfile p = h.has("profile") && h.get("profile").isJsonObject() ? PublicProfile.fromJson(h.getAsJsonObject("profile")) : null;
+        return p != null ? p : new PublicProfile("", name, "", "", "", "", null, "", 4);
     }
 
     private ForgeMatch.Seat seatOf(JsonObject h) {

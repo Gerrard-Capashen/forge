@@ -28,6 +28,20 @@ public final class ForgeMtgaMain {
         FModel.initialize(null, null);
         CardDb db = new CardDb(CardDb.findDatabase(clientDir));
 
+        // The player's profile (identity, name, cosmetics, preferences); -Dmtga.name (launcher "-Name") renames it.
+        File dataDir = new File(System.getProperty("mtga.data", new File(clientDir.getCanonicalFile().getParentFile(), "data").getPath()));
+        forge.mtga.profile.FileProfileStore profileStore = new forge.mtga.profile.FileProfileStore(dataDir);
+        String rename = System.getProperty("mtga.name");
+        if (rename != null && !rename.isBlank() && !forge.mtga.profile.Profile.cleanName(rename).equals(profileStore.load().displayName)) {
+            profileStore.update(p -> p.displayName = forge.mtga.profile.Profile.cleanName(rename));
+        }
+        forge.mtga.profile.Profile me = profileStore.load();
+        System.setProperty("mtga.name", me.displayName);       // the Match Door and the engine seats use it
+        System.out.println("[mtga] profile: " + me.clientName() + " (" + me.playerId + ")");
+        forge.mtga.profile.CosmeticCatalog cosmetics = forge.mtga.profile.CosmeticCatalog.load(clientDir);
+        System.out.println("[mtga] cosmetics: " + cosmetics.summary());
+        forge.mtga.fd.ProfileApi profileApi = new forge.mtga.fd.ProfileApi(profileStore, cosmetics);
+
         Map<String, Integer>[] decks = decks(System.getProperty("mtga.deck"), System.getProperty("mtga.rig"));
         Map<String, Integer> green = decks[0], red = decks[1];
 
@@ -43,8 +57,7 @@ public final class ForgeMtgaMain {
         // Front Door (menus, collection, decks, events) for the client's normal UI; -Dmtga.fdport=0 disables it.
         int fdPort = Integer.getInteger("mtga.fdport", 30010);
         if (fdPort > 0) {
-            File dataDir = new File(System.getProperty("mtga.data", new File(clientDir.getCanonicalFile().getParentFile(), "data").getPath()));
-            forge.mtga.fd.FrontDoor fd = new forge.mtga.fd.FrontDoor(db, dataDir);
+            forge.mtga.fd.FrontDoor fd = new forge.mtga.fd.FrontDoor(db, dataDir, profileApi);
             fd.setMatchDoor("127.0.0.1", port);
             fd.setPeer(peerConfig(db, clientDir));
             new forge.mtga.fd.FrontDoorServer(fdPort, fd).start();

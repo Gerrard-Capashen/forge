@@ -8,9 +8,11 @@ import forge.mtga.forge.ForgeBackend;
 import forge.mtga.forge.ForgeMatch;
 import forge.mtga.forge.HeadlessGui;
 import forge.mtga.net.MatchSession;
+import forge.mtga.profile.PublicProfile;
 
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -112,12 +114,37 @@ public final class SelfPlay {
                 be[1].onDisconnect(fc[1]);
                 continue;
             }
+            if (!emoteExchange(fc, be, "pvp")) failed++;
             if (!awaitAndCheck(fc, g, "pvp", limit)) failed++;
             for (int i = 0; i < 2; i++) be[i].onDisconnect(fc[i]);
         }
         System.out.println("opponent hand cards visible to a client (reveals): " + OPP_HAND_VISIBLE.get());
         System.out.println(failed == 0 ? "SELFPLAY PVP OK" : "SELFPLAY PVP FAILED games=" + failed);
         return failed == 0 ? 0 : 1;
+    }
+
+    /**
+     * Each client sends an emote (GRE UIMessage OnChat) once both have their first state: the other client must receive exactly that
+     * emote as a UIMessage, the sender must not get an echo, and a hover (which names the sender's object ids) must not be passed on.
+     */
+    static boolean emoteExchange(FakeClient[] fc, forge.mtga.net.GameBackend[] be, String label) throws InterruptedException {
+        long end = System.currentTimeMillis() + 20_000;
+        while ((fc[0].states == 0 || fc[1].states == 0) && System.currentTimeMillis() < end) Thread.sleep(20);
+        String[] text = { "Phrase_Basic_Hello", "Sticker_AFR_Beholder" };
+        for (int i = 0; i < 2; i++) {
+            ClientToGREMessage.Builder m = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_UIMessage);
+            m.getUiMessageBuilder().getOnChatBuilder().setText(text[i]);
+            be[i].onClientMessage(fc[i], m.build());
+        }
+        ClientToGREMessage.Builder hover = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_UIMessage);
+        hover.getUiMessageBuilder().getOnHoverBuilder().setObjectId(101);
+        be[0].onClientMessage(fc[0], hover.build());
+        end = System.currentTimeMillis() + 5_000;
+        while ((fc[0].emotesGot.isEmpty() || fc[1].emotesGot.isEmpty()) && System.currentTimeMillis() < end) Thread.sleep(20);
+        boolean ok = fc[1].emotesGot.equals(List.of(text[0])) && fc[0].emotesGot.equals(List.of(text[1]));
+        System.out.println("=== " + label + " emotes: Bob got " + fc[1].emotesGot + ", Alice got " + fc[0].emotesGot + (ok ? "" : "  (WRONG)"));
+        if (!ok) System.out.println("  PROBLEM: emotes were not relayed to the other seat only");
+        return ok;
     }
 
     /** Wait for both clients' results, print them and check them: no problems, and exactly one winner (or both see the draw). */
@@ -150,13 +177,22 @@ public final class SelfPlay {
             ForgeMatch room = new ForgeMatch(db, "peer-" + g);
             ForgeBackend mine = new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of()));
             CountDownLatch joined = new CountDownLatch(1);
-            host.offer(new forge.mtga.peer.PeerHost.Offer(room.matchId(), room, guest -> joined.countDown()));
-            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", "Bob", decks[1], Map.of());
+            java.util.concurrent.atomic.AtomicReference<PublicProfile> hostSaw = new java.util.concurrent.atomic.AtomicReference<>();
+            PublicProfile alice = new PublicProfile("id-alice", "Alice", "Avatar_Basic_JaceBeleren", "CardBack_Default", "AFR_Dragon.Skin1",
+                    "Title_Core_AchievementHunter", List.of("Phrase_Basic_Hello", "Sticker_AFR_Beholder"), "Gold", 2);
+            PublicProfile bob = new PublicProfile("id-bob", "Bob", "Avatar_Basic_LilianaVess", "CardBack_Basic_Streamer", "", "", List.of("Phrase_Basic_GoodGame"), "Mythic", 1);
+            host.offer(new forge.mtga.peer.PeerHost.Offer(room.matchId(), room, alice, guest -> { hostSaw.set(guest); joined.countDown(); }));
+            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", bob, decks[1], Map.of());
             if (j.error() != null || !joined.await(5, TimeUnit.SECONDS)) {
                 System.out.println("  PROBLEM: guest could not join: " + j.error());
                 failed++;
                 continue;
             }
+            // the handshake carries each side's PUBLIC profile, unchanged
+            boolean profiles = alice.equals(j.host()) && bob.equals(hostSaw.get());
+            System.out.println("=== peer handshake: guest sees host " + j.host().name() + "/" + j.host().avatar() + "/" + j.host().pet() + ", host sees guest "
+                    + (hostSaw.get() == null ? null : hostSaw.get().name() + "/" + hostSaw.get().avatar() + "/" + hostSaw.get().rankClass()) + (profiles ? "" : "  (WRONG)"));
+            if (!profiles) failed++;
             FakeClient[] fc = { new FakeClient(new Random(seed + 2L * g)), new FakeClient(new Random(seed + 2L * g + 1)) };
             fc[0].backend = mine;
             fc[1].backend = j.backend();
@@ -164,20 +200,23 @@ public final class SelfPlay {
             connect.getConnectReqBuilder().getDefaultSettingsBuilder();
             mine.onConnect(fc[0], connect.build());
             j.backend().onConnect(fc[1], connect.build());
+            if (!emoteExchange(fc, new forge.mtga.net.GameBackend[] {mine, j.backend()}, "peer")) failed++;
             if (!awaitAndCheck(fc, g, "peer", Long.getLong("selfplay.timeout", 300))) failed++;
             j.backend().onDisconnect(fc[1]);
             mine.onDisconnect(fc[0]);
         }
         // a guest with another card DB and one without a waiting host are turned away
-        forge.mtga.peer.PeerGuest.Joined bad = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "other-db", "Eve", decks[1], Map.of());
+        forge.mtga.peer.PeerGuest.Joined bad = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "other-db", eve(), decks[1], Map.of());
         System.out.println("rejected (other card DB): " + bad.error());
         if (bad.error() == null || !bad.error().contains("card database")) failed++;
-        forge.mtga.peer.PeerGuest.Joined idle = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", "Eve", decks[1], Map.of());
+        forge.mtga.peer.PeerGuest.Joined idle = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", eve(), decks[1], Map.of());
         System.out.println("rejected (host not waiting): " + idle.error());
         if (idle.error() == null || !idle.error().contains("not waiting")) failed++;
         System.out.println(failed == 0 ? "SELFPLAY PEER OK" : "SELFPLAY PEER FAILED games=" + failed);
         return failed == 0 ? 0 : 1;
     }
+
+    private static PublicProfile eve() { return new PublicProfile("id-eve", "Eve", "", "", "", "", null, "", 4); }
 
     static final Set<Integer> ADDED_SEEN = Collections.synchronizedSet(new TreeSet<>());
     static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
@@ -196,6 +235,8 @@ public final class SelfPlay {
         private ArrayDeque<Attacker> attackPlan;
         private final Set<Integer> expectedAttackers = new HashSet<>();
         String result = "?";
+        /** Emotes the opponent's client sent (UIMessage OnChat). */
+        final List<String> emotesGot = new CopyOnWriteArrayList<>();
 
         private final Map<Integer, GameObjectInfo> objs = new HashMap<>();
         private final Map<Integer, ZoneInfo> zones = new HashMap<>();
@@ -443,6 +484,7 @@ public final class SelfPlay {
                     requests++;
                     reply(msg(ClientMessageType.ClientMessageType_SubmitBlockersReq));
                 }
+                case GREMessageType_UIMessage -> { if (g.getUiMessage().hasOnChat()) emotesGot.add(g.getUiMessage().getOnChat().getText()); }
                 case GREMessageType_IntermissionReq -> result = g.getIntermissionReq().getResult().getResult() + " team " + g.getIntermissionReq().getResult().getWinningTeamId();
                 case GREMessageType_ConnectResp, GREMessageType_SubmitTargetsResp, GREMessageType_SubmitAttackersResp,
                      GREMessageType_SubmitBlockersResp, GREMessageType_SetSettingsResp -> { }

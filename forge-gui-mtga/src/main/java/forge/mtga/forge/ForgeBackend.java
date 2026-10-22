@@ -141,7 +141,7 @@ public final class ForgeBackend implements GameBackend {
                 resp.getSetSettingsRespBuilder().setSettings(settings.toMessage());
                 s.sendGre(resp);
             }
-            case ClientMessageType_UIMessage -> { }
+            case ClientMessageType_UIMessage -> room.relayUi(this, msg.getUiMessage());
             default -> forge.mtga.net.Capture.log("UNHANDLED client message " + msg.getType());
         }
     }
@@ -155,6 +155,16 @@ public final class ForgeBackend implements GameBackend {
 
     /** The other seat's client left: a pending decision here must end too. */
     void wake() { inbox.add(POISON); }
+
+    /** An emote (or pet gesture) the opponent's client sent, passed on to this seat's client; it draws it on the opponent's side. */
+    void deliverUi(com.wizards.mtga.gre.UIMessage ui) {
+        MatchSession s = session;
+        if (s == null) return;
+        GREToClientMessage.Builder m = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_UIMessage)
+                .addSystemSeatIds(StateSync.HUMAN_SEAT).setGameStateId(sync == null ? 0 : sync.lastStateId());
+        m.setUiMessage(ui.toBuilder().clearSeatIds().addSeatIds(StateSync.AI_SEAT));
+        s.sendGre(m);
+    }
 
     LobbyPlayer newLobbyPlayer() { return new MtgaLobbyPlayer(seat.name()); }
 

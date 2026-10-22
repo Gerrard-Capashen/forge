@@ -73,6 +73,18 @@ public final class ForgeMatch {
         for (ForgeBackend b : humans) if (b != null && b != leaving) b.wake();
     }
 
+    /**
+     * A client's UI message: emotes (OnChat) and pet gestures (OnGenericEvent) go to the other human seat as sent. Hover and
+     * select name objects by the sender's instance ids, which mean nothing to the other client, so they are dropped.
+     */
+    void relayUi(ForgeBackend from, com.wizards.mtga.gre.UIMessage ui) {
+        if (!ui.hasOnChat() && !ui.hasOnGenericEvent()) return;
+        if (ui.hasOnChat()) System.out.println("[mtga] emote '" + ui.getOnChat().getText() + "' from seat " + indexOf(from));
+        for (ForgeBackend b : humans) if (b != null && b != from) b.deliverUi(ui);
+    }
+
+    private int indexOf(ForgeBackend b) { return humans[0] == b ? 0 : humans[1] == b ? 1 : -1; }
+
     boolean opponentLeft(ForgeBackend me) {
         for (ForgeBackend b : humans) if (b != null && b != me && b.isDisconnected()) return true;
         return false;
