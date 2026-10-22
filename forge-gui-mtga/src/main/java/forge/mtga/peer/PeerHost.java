@@ -121,6 +121,10 @@ public final class PeerHost {
             }
             link.setReadTimeout(0);
             theirs = new ForgeBackend(db, o.room(), 1, seat);
+            final PeerLink guestLink = link;
+            theirs.setOutcomeListener(outcome -> {      // the guest's own server reports it to the coordinator
+                try { guestLink.sendText(PeerLink.RESULT, outcome); } catch (IOException ignored) { }
+            });
             proxy = new ProxySession(link);
             JsonObject ok = new JsonObject();
             ok.addProperty("matchId", o.matchId());

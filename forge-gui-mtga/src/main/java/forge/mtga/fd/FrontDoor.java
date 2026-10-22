@@ -332,6 +332,17 @@ public final class FrontDoor {
 
     public void setPeer(Peer p) { peer = p; }
 
+    private volatile forge.mtga.social.ResultReporter results;
+
+    /** Online matches report how they ended to the coordinator (set by the server main when online play is on). */
+    public void setResults(forge.mtga.social.ResultReporter r) { results = r; }
+
+    /** What a seat of this online match tells when it ends: the result goes to the coordinator (nothing without an account). */
+    private java.util.function.Consumer<String> outcomeReport(forge.mtga.peer.Coordinator.Paired paired, String pool) {
+        forge.mtga.social.ResultReporter r = results;
+        return r == null ? null : outcome -> r.report(paired, pool, outcome);
+    }
+
     private static JsonObject botEvent(String internalName, String format, int priority) {
         return obj("PublicEventName", BOT_EVENT, "InternalEventName", internalName, "Format", format,
                 "WinCondition", "SingleElimination", "StartingPlayer", "Random", "TimerPackage", "None",
@@ -538,6 +549,7 @@ public final class FrontDoor {
                 forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
                 forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing));
                 forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
+                mine.setOutcomeListener(outcomeReport(paired, eventId));
                 p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), eventId)));
                 link = forge.mtga.peer.Coordinator.openRoom(paired);
                 p.host().serveOnline(link);              // returns when the guest has left
@@ -549,6 +561,7 @@ public final class FrontDoor {
                 System.out.println("[mtga] FD online: join failed: " + j.error());
                 return;
             }
+            j.backend().setOutcomeListener(outcomeReport(paired, eventId));
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
             pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), eventId);
         } catch (Exception e) {

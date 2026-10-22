@@ -75,6 +75,7 @@ public final class ForgeMtgaMain {
             fd.setMatchDoor("127.0.0.1", port);
             fd.setPeer(peerConfig(db, clientDir));
             fd.setSocial(social);
+            if (accounts != null) fd.setResults(new forge.mtga.social.ResultReporter(accounts, profileStore));
             new forge.mtga.fd.FrontDoorServer(fdPort, fd).start();
         } else {
             System.out.println("[mtga] Front Door disabled (fdport=0)");

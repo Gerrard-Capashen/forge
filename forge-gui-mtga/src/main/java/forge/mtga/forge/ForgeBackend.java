@@ -99,6 +99,17 @@ public final class ForgeBackend implements GameBackend {
     /** Told once whether the human won the game (event matches count wins and losses). */
     private java.util.function.Consumer<Boolean> onResult;
 
+    /** Told once how the match ended for this seat: "win", "loss" or "draw" (online matches report it to the coordinator). */
+    private volatile java.util.function.Consumer<String> outcomeListener;
+
+    public void setOutcomeListener(java.util.function.Consumer<String> l) { outcomeListener = l; }
+
+    private void tellOutcome(String outcome) {
+        java.util.function.Consumer<String> l = outcomeListener;
+        outcomeListener = null;
+        if (l != null) l.accept(outcome);
+    }
+
     /** One human seat of {@code room}; add the other seat (a second backend or {@link ForgeMatch#addAi}) before the clients connect. */
     public ForgeBackend(CardDb db, ForgeMatch room, int index, ForgeMatch.Seat seat) {
         this.db = db;
@@ -205,13 +216,17 @@ public final class ForgeBackend implements GameBackend {
         java.util.function.Consumer<Boolean> cb = onResult;
         onResult = null;
         if (cb != null && !draw) cb.accept(humanWon);
+        tellOutcome(draw ? "draw" : humanWon ? "win" : "loss");
     }
 
     /** The game thread died: when the opponent's client left, this seat wins by forfeit; otherwise nothing more can be sent. */
     void matchAborted() {
         if (disconnected || session == null || sync == null || !introSent) return;
         boolean opponentLeft = room.opponentLeft(this);
-        if (opponentLeft) sendMatchResult(StateSync.HUMAN_SEAT, false);
+        if (opponentLeft) {
+            sendMatchResult(StateSync.HUMAN_SEAT, false);
+            tellOutcome("win");
+        }
     }
 
     private void sendMatchResult(int winningTeam, boolean withStateDiff) {

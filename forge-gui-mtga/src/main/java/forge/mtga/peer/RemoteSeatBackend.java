@@ -15,6 +15,18 @@ public final class RemoteSeatBackend implements GameBackend {
     private final PeerLink link;
     private volatile MatchSession session;
     private volatile boolean leaving;
+    private volatile boolean resultSeen;
+    private volatile java.util.function.Consumer<String> outcomeListener;
+
+    /** Told once how the match ended for this seat ("win" | "loss" | "draw"): the host says so, or "win" when the host vanished without a word. */
+    public void setOutcomeListener(java.util.function.Consumer<String> l) { outcomeListener = l; }
+
+    private void tellOutcome(String outcome) {
+        if (resultSeen) return;
+        resultSeen = true;
+        java.util.function.Consumer<String> l = outcomeListener;
+        if (l != null) l.accept(outcome);
+    }
 
     RemoteSeatBackend(PeerLink link) {
         this.link = link;
@@ -58,6 +70,8 @@ public final class RemoteSeatBackend implements GameBackend {
                     MatchServiceToClientMessage.Builder b = MatchServiceToClientMessage.parseFrom(f.body()).toBuilder();
                     MatchSession s = session;
                     if (s != null) s.send(b, b.getRequestId());
+                } else if (f.type() == PeerLink.RESULT) {
+                    tellOutcome(f.text());
                 } else if (f.type() == PeerLink.BYE) {
                     break;
                 }
@@ -69,6 +83,7 @@ public final class RemoteSeatBackend implements GameBackend {
     }
 
     private void hostGone() {
+        if (!leaving) tellOutcome("win");     // the host dropped before the game ended: the coordinator checks that with what its relay room saw
         MatchSession s = session;
         link.close();
         if (s != null) s.close();      // the client shows its own "connection lost"

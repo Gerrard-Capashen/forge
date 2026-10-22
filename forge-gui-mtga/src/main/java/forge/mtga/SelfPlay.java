@@ -231,12 +231,31 @@ public final class SelfPlay {
     static int online(CardDb db, Map<String, Integer>[] decks, int games, long seed, String url) throws Exception {
         int failed = 0;
         String queue = "CasualPlay_Modern", fp = "selfplay-db-" + System.nanoTime();     // own card DB name: never meets another test's queue
+        // -Dselfplay.results=true: two real accounts (zztest...) report the outcomes and the coordinator must verify the match
+        boolean results = Boolean.getBoolean("selfplay.results");
+        forge.mtga.social.Accounts accA = null, accB = null;
+        forge.mtga.profile.FileProfileStore storeA = null, storeB = null;
+        String idA = "id-alice", idB = "id-bob";
+        if (results) {
+            String http = url.replaceFirst("^ws", "http"), run = Integer.toHexString(new Random().nextInt(0xffffff));
+            java.io.File da = java.nio.file.Files.createTempDirectory("selfplay-a").toFile(), db2 = java.nio.file.Files.createTempDirectory("selfplay-b").toFile();
+            storeA = new forge.mtga.profile.FileProfileStore(da);
+            storeB = new forge.mtga.profile.FileProfileStore(db2);
+            storeA.update(p -> p.displayName = "zztest sp alice " + run);
+            storeB.update(p -> p.displayName = "zztest sp bob " + run);
+            accA = new forge.mtga.social.Accounts(http, new forge.mtga.social.IdentityStore(da));
+            accB = new forge.mtga.social.Accounts(http, new forge.mtga.social.IdentityStore(db2));
+            forge.mtga.social.Accounts.sync(storeA, accA);
+            forge.mtga.social.Accounts.sync(storeB, accB);
+            idA = storeA.load().playerId;
+            idB = storeB.load().playerId;
+        }
         for (int g = 0; g < games; g++) {
             PublicProfile alice = new PublicProfile("id-alice", "Alice", "Avatar_Basic_JaceBeleren", "CardBack_Default", "", "", List.of(), "Gold", 2);
             PublicProfile bob = new PublicProfile("id-bob", "Bob", "Avatar_Basic_LilianaVess", "CardBack_Basic_Streamer", "", "", List.of(), "Mythic", 1);
-            forge.mtga.peer.Coordinator.Ticket ta = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, "id-alice", "Alice", "");
+            forge.mtga.peer.Coordinator.Ticket ta = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, idA, "Alice", "");
             Thread.sleep(500);                                           // Alice waits longest: she hosts
-            forge.mtga.peer.Coordinator.Ticket tb = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, "id-bob", "Bob", "");
+            forge.mtga.peer.Coordinator.Ticket tb = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, idB, "Bob", "");
             forge.mtga.peer.Coordinator.Paired pa = ta.result().get(15, TimeUnit.SECONDS), pb = tb.result().get(15, TimeUnit.SECONDS);
             System.out.println("=== online paired: Alice " + pa.role() + " (sees " + pa.opponent() + "), Bob " + pb.role() + " (sees " + pb.opponent() + "), match " + pa.match());
             if (!pa.host() || pb.host() || !pa.match().equals(pb.match())) { System.out.println("  PROBLEM: wrong pairing"); failed++; continue; }
@@ -262,11 +281,31 @@ public final class SelfPlay {
             FakeClient[] fc = { new FakeClient(new Random(seed + 2L * g)), new FakeClient(new Random(seed + 2L * g + 1)) };
             fc[0].backend = mine;
             fc[1].backend = j.backend();
+            java.util.concurrent.atomic.AtomicReference<String> outA = new java.util.concurrent.atomic.AtomicReference<>(), outB = new java.util.concurrent.atomic.AtomicReference<>();
+            forge.mtga.social.ResultReporter repA = results ? new forge.mtga.social.ResultReporter(accA, storeA) : null;
+            forge.mtga.social.ResultReporter repB = results ? new forge.mtga.social.ResultReporter(accB, storeB) : null;
+            final forge.mtga.peer.Coordinator.Paired fpa = pa, fpb = pb;
+            mine.setOutcomeListener(o -> { outA.set(o); if (repA != null) repA.report(fpa, queue, o); });
+            j.backend().setOutcomeListener(o -> { outB.set(o); if (repB != null) repB.report(fpb, queue, o); });
             ClientToGREMessage.Builder connect = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConnectReq);
             connect.getConnectReqBuilder().getDefaultSettingsBuilder();
             mine.onConnect(fc[0], connect.build());
             j.backend().onConnect(fc[1], connect.build());
             if (!awaitAndCheck(fc, g, "online", Long.getLong("selfplay.timeout", 300))) failed++;
+            for (int i = 0; i < 100 && (outA.get() == null || outB.get() == null); i++) Thread.sleep(50);
+            boolean complementary = outA.get() != null && outB.get() != null
+                    && (outA.get().equals("draw") ? outB.get().equals("draw") : outA.get().equals("win") ? outB.get().equals("loss") : outB.get().equals("win"));
+            System.out.println("  outcomes: host " + outA.get() + ", guest " + outB.get() + (complementary ? "" : "  (WRONG)"));
+            if (!complementary) failed++;
+            if (results) {
+                String status = "pending";
+                for (int i = 0; i < 100 && status.equals("pending"); i++) {
+                    Thread.sleep(100);
+                    try { status = accA.call("GET", "/matches/" + pa.match(), null, accA.login(idA)).get("status").getAsString(); } catch (Exception e) { status = "error " + e.getMessage(); }
+                }
+                System.out.println("  coordinator verdict: " + status + (status.equals("verified") ? "" : "  (WRONG)"));
+                if (!status.equals("verified")) failed++;
+            }
             j.backend().onDisconnect(fc[1]);
             mine.onDisconnect(fc[0]);
         }

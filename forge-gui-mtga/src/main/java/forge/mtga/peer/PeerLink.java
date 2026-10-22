@@ -42,6 +42,8 @@ public final class PeerLink {
     public static final int TO_GUEST = 6;
     /** The sender is leaving. */
     public static final int BYE = 7;
+    /** UTF-8 text "win" | "loss" | "draw": how the match ended for the receiving seat. Host -> guest. */
+    public static final int RESULT = 8;
 
     private static final int MAX_BODY = 16 * 1024 * 1024;
 
