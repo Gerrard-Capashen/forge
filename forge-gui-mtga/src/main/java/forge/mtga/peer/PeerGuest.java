@@ -27,6 +27,12 @@ public final class PeerGuest {
 
     public static Joined join(String host, int port, String key, String fingerprint, PublicProfile me,
                               Map<String, Integer> deck, Map<String, Integer> printing) {
+        return join(host, port, key, fingerprint, "", me, deck, printing);
+    }
+
+    /** {@code queue}: the queue event this guest plays in; the host only accepts a guest of the queue it waits in. */
+    public static Joined join(String host, int port, String key, String fingerprint, String queue, PublicProfile me,
+                              Map<String, Integer> deck, Map<String, Integer> printing) {
         Socket socket = new Socket();
         PeerLink link = null;
         try {
@@ -37,6 +43,7 @@ public final class PeerGuest {
             hello.addProperty("v", VERSION);
             hello.addProperty("fp", fingerprint);
             hello.addProperty("key", key == null ? "" : key);
+            hello.addProperty("queue", queue == null ? "" : queue);
             hello.addProperty("name", me.name());
             hello.add("profile", me.toJson());
             hello.add("deck", GSON.toJsonTree(deck));

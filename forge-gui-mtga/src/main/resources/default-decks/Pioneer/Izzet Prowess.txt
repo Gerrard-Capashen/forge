@@ -1,0 +1,32 @@
+4 Academic Dispute [STX] (F)
+2 Boomerang Basics [TLA] (F)
+4 Burst Lightning <019db241-92fb-7838-84a8-7af6ec445773> [SOA] (F)
+1 Den of the Bugbear <prerelease> [AFR] (F)
+4 Emberheart Challenger <showcase> [BLB] (F)
+4 Fire-Brained Scheme [OM1]
+1 Hearth Elemental [WOE] (F)
+4 Monastery Swiftspear [BRO] (F)
+3 Monstrous Rage <019e89e2-8459-7a15-b7ce-e5a202cc5141> [MAR]
+4 Mountain <253> [THB]
+4 Pompous Battlemage <01a08238-1d8e-7a4a-bb2d-10027a4fd120> [FRA]
+1 Reckless Rage [RIX] (F)
+4 Riverpyre Verge <prerelease> [DFT] (F)
+3 Shivan Reef <prerelease> [DMU] (F)
+1 Slickshot Show-Off <prerelease> [OTJ] (F)
+4 Spirebluff Canal <prerelease> [OTJ] (F)
+4 Steam Vents [ECL]
+4 Stormchaser's Talent [BLB] (F)
+4 Wrenn's Resolve [MOM] (F)
+
+1 Abandon Attachments [TLA] (F)
+1 Aether Gust <promo pack> [M20] (F)
+1 Boomerang Basics [TLA] (F)
+2 Detect Intrusion [OM1]
+1 Fiery Impulse [ORI]
+1 Firebending Lesson [TLA] (F)
+1 Iroh's Demonstration [TLA] (F)
+2 Octopus Form [TLA] (F)
+2 Precise Redaction <01a0aac7-b0e0-7b90-b8e4-8f7489d4a76c> [FRA] (F)
+1 Redcap Melee [ELD] (F)
+1 Rending Volley [DTK]
+1 Stormwing Entity <prerelease> [M21] (F)

@@ -1,0 +1,18 @@
+Modern/Boros Energy.txt
+Modern/Broodscale Combo.txt
+Modern/Esper.txt
+Modern/Izzet Affinity.txt
+Modern/Izzet Prowess.txt
+Modern/W-U-R-G Domain Zoo.txt
+Pioneer/Dimir Aggro.txt
+Pioneer/Golgari Midrange.txt
+Pioneer/Izzet Prowess.txt
+Pioneer/Jund Sacrifice.txt
+Pioneer/Mono-Red Prowess.txt
+Pioneer/Nykthos Ramp.txt
+Standard/Azorius Control.txt
+Standard/Boros Dragons.txt
+Standard/Dimir Midrange.txt
+Standard/Izzet Spellementals.txt
+Standard/Mono-Green Landfall.txt
+Standard/Orzhov Life Gain.txt

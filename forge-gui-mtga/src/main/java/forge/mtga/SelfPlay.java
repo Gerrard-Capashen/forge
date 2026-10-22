@@ -209,6 +209,13 @@ public final class SelfPlay {
         forge.mtga.peer.PeerGuest.Joined bad = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "other-db", eve(), decks[1], Map.of());
         System.out.println("rejected (other card DB): " + bad.error());
         if (bad.error() == null || !bad.error().contains("card database")) failed++;
+        // a guest of another queue is turned away, and the host keeps waiting for one of its own queue
+        ForgeMatch qroom = new ForgeMatch(db, "peer-queue");
+        host.offer(new forge.mtga.peer.PeerHost.Offer("peer-queue", qroom, eve(), "CasualPlay_Modern", guest -> { }));
+        forge.mtga.peer.PeerGuest.Joined other = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", "CasualPlay_Standard", eve(), decks[1], Map.of());
+        System.out.println("rejected (other queue): " + other.error());
+        if (other.error() == null || !other.error().contains("same queue")) failed++;
+        host.cancel();
         forge.mtga.peer.PeerGuest.Joined idle = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", eve(), decks[1], Map.of());
         System.out.println("rejected (host not waiting): " + idle.error());
         if (idle.error() == null || !idle.error().contains("not waiting")) failed++;

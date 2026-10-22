@@ -1,0 +1,31 @@
+4 Burst Lightning <019db241-92fb-7838-84a8-7af6ec445773> [SOA] (F)
+4 Eddymurk Crab [BLB] (F)
+2 Get Out [DSK] (F)
+4 Hearth Elemental [WOE] (F)
+2 Impractical Joke <019d6da1-1cc9-795e-8cd0-49a1650560e4> [SOS] (F)
+6 Island <251> [THB]
+4 Opt [FDN]
+4 Prismari Charm <019d4526-f197-7f4e-9608-7c17abc2dd81> [SOS]
+4 Riverpyre Verge <prerelease> [DFT] (F)
+1 Sear [ECL]
+4 Sleight of Hand <019db242-6250-7824-9e09-ac42943cdd5b> [SOA] (F)
+1 Spell Pierce <019db242-6b96-774d-8e15-7440ff7d99f8> [SOA] (F)
+2 Spell Snare [ECL]
+4 Spirebluff Canal <prerelease> [OTJ] (F)
+4 Steam Vents [ECL]
+1 Stormcarved Coast <019d4527-1349-7a2c-af9e-8edb63ec2a10> [SOS]
+4 Sunderflock [ECL]
+1 Thundering Falls <prerelease> [MKM] (F)
+4 Traumatic Critique <019d53de-0982-715b-92c8-367fa629b00f> [SOS] (F)
+
+1 Annul <promo pack> [EOE] (F)
+1 Belion, the Parched [OM1]
+1 Broadside Barrage [DFT]
+4 Colorstorm Stallion <019d4526-e863-7ef7-b40c-cc8a7f1a0ab4> [SOS]
+1 Disdainful Stroke <019db241-be92-74ab-8fb7-2b78716daf02> [SOA] (F)
+2 Flashfreeze <beginner box> [FDN]
+1 Ghost Vacuum <showcase> [DSK] (F)
+1 Into the Flood Maw [BLB] (F)
+1 Return the Favor <019db242-42a8-74ee-86e0-fb259d7298f1> [SOA] (F)
+1 Spell Pierce <019db242-6b96-774d-8e15-7440ff7d99f8> [SOA] (F)
+1 Spell Snare [ECL]

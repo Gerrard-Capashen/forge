@@ -1,0 +1,24 @@
+4 Academic Dispute [STX] (F)
+4 Burst Lightning <019db241-92fb-7838-84a8-7af6ec445773> [SOA] (F)
+4 Emberheart Challenger <showcase> [BLB] (F)
+4 Kumano Faces Kakkazan [NEO] (F)
+4 Monastery Swiftspear [BRO] (F)
+16 Mountain <253> [THB]
+4 Mutavault [M14]
+4 Pompous Battlemage <01a08238-1d8e-7a4a-bb2d-10027a4fd120> [FRA]
+2 Ramunap Ruins [AKR]
+4 Reckless Rage [RIX] (F)
+4 Screaming Nemesis [DSK] (F)
+1 Sokenzan, Crucible of Defiance <prerelease> [NEO] (F)
+4 Soul-Scar Mage [AKR]
+1 The Legend of Roku <prerelease> [TLA] (F)
+
+1 Abandon Attachments [TLA] (F)
+2 Cut Propulsion [EOE] (F)
+1 Firebending Lesson [TLA] (F)
+1 Improvisation Capstone <019d4526-c1f1-7789-89a8-6ede57cbafd4> [SOS]
+1 Iroh's Demonstration [TLA] (F)
+2 Magebane Lizard [OTJ] (F)
+2 Pyroclasm <promo pack> [DSK] (F)
+3 The Legend of Roku <prerelease> [TLA] (F)
+2 Unlicensed Hearse <showcase> [OTP] (F)

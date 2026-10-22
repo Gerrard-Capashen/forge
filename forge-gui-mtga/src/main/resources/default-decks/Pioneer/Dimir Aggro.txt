@@ -1,0 +1,29 @@
+2 Bitter Triumph <019db241-7893-7e14-af43-a4ad7bee2c64> [SOA] (F)
+4 Darkslick Shores <prerelease> [ONE] (F)
+4 Faerie Miscreant [M20] (F)
+4 Fatal Push <masterpiece> [KLR]
+4 Floodpits Drowner [DSK] (F)
+4 Gloomlake Verge <borderless> [DSK] (F)
+3 Island <251> [THB]
+4 Kaito, Bane of Nightmares <double exposure> [DSK] (F)
+4 Mockingbird <showcase> [BLB]
+4 Moon-Circuit Hacker <showcase> [NEO] (F)
+4 Mutavault [M14]
+1 Nowhere to Run [DSK] (F)
+1 Otawara, Soaring City <prerelease> [NEO] (F)
+3 Sheoldred, the Apocalypse <concept praetor - Step and Compleat Foil> [ONE]
+2 Swamp <252> [THB]
+1 Takenuma, Abandoned Mire <prerelease> [NEO] (F)
+4 Thoughtseize <showcase> [OTP]
+2 Unholy Annex/Ritual Chamber <borderless> [DSK] (F)
+1 Urborg, Tomb of Yawgmoth [PRM-UMA]
+4 Watery Grave <borderless - galaxy foil> [EOE] (F)
+
+1 Brazen Borrower <planeswalker stamp> [ELD] (F)
+2 Change the Equation [MOM] (F)
+2 Duress <beginner box> [FDN]
+1 Enduring Curiosity <showcase japan - fracture foil> [DSK] (F)
+1 Languish <019fd5cc-7fee-7bf5-8527-fb570bd57d10> [HOC] (F)
+4 Leyline of the Void <extended> [DSK] (F)
+2 Path of Peril <prerelease> [VOW] (F)
+2 Tishana's Tidebinder <prerelease> [LCI] (F)

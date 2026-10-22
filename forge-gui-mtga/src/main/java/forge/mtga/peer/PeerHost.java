@@ -24,7 +24,10 @@ import java.util.function.Consumer;
  */
 public final class PeerHost {
     /** A host waiting for a guest: the shared match with the host's seat already in it, the host's public profile for this match, and who to tell when the guest's profile arrives. */
-    public record Offer(String matchId, ForgeMatch room, PublicProfile host, Consumer<PublicProfile> onGuestJoined) { }
+    /** {@code queue} = the queue event the host waits in ("CasualPlay_Modern"); a guest must ask for the same one ("" = no queue). */
+    public record Offer(String matchId, ForgeMatch room, PublicProfile host, String queue, Consumer<PublicProfile> onGuestJoined) {
+        public Offer(String matchId, ForgeMatch room, PublicProfile host, Consumer<PublicProfile> onGuestJoined) { this(matchId, room, host, "", onGuestJoined); }
+    }
 
     private final CardDb db;
     private final int port;
@@ -93,7 +96,10 @@ public final class PeerHost {
                 synchronized (this) {
                     o = offer;
                     if (o == null) reject = "the host is not waiting for a game (start a game on the host first)";
-                    else offer = null;
+                    else if (!o.queue().equals(str(h, "queue"))) {
+                        reject = "the host waits in " + queueName(o.queue()) + ", you chose " + queueName(str(h, "queue")) + ": both players need the same queue";
+                        o = null;
+                    } else offer = null;
                 }
             }
             if (reject != null) {
@@ -128,6 +134,8 @@ public final class PeerHost {
             if (link != null) link.close();
         }
     }
+
+    private static String queueName(String q) { return q == null || q.isEmpty() ? "no queue" : q; }
 
     private String check(JsonObject h) {
         if (!h.has("v") || h.get("v").getAsInt() != PeerGuest.VERSION) return "different peer protocol version";

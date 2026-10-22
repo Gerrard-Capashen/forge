@@ -1,0 +1,26 @@
+4 Burst Lightning <019db241-92fb-7838-84a8-7af6ec445773> [SOA] (F)
+3 Cavern of Souls <prerelease> [LCI] (F)
+4 Clarion Conqueror <prerelease> [TDM] (F)
+2 Erode <019d6369-06cd-7359-8deb-fa417c0467a5> [SOS] (F)
+4 Inspiring Vantage <prerelease> [OTJ] (F)
+3 Maelstrom of the Spirit Dragon <prerelease> [TDM] (F)
+4 Magmatic Hellkite <prerelease> [TDM] (F)
+4 Momo, Friendly Flier <prerelease> [TLA] (F)
+1 Mountain <253> [THB]
+4 Multiversal Passage [OM1]
+4 Nova Hellkite <borderless - surreal space> [EOE] (F)
+1 Plains <250> [THB]
+4 Sacred Foundry <borderless - galaxy foil> [EOE] (F)
+4 Sarkhan, Dragon Ascendant <prerelease> [TDM] (F)
+4 Smaug the Magnificent <019de565-93d4-79c5-997a-174a62dff24a> [HOB]
+4 Sunbillow Verge <prerelease> [DFT] (F)
+2 Twinmaw Stormbrood <showcase> [TDM] (F)
+4 Voice of Victory <prerelease> [TDM] (F)
+
+2 Boros Charm <beginner box> [FDN] (F)
+2 Desolation of Smaug <019f760b-4aaf-75ee-ad96-d71085a5a198> [HOB]
+1 Dragonhawk, Fate's Tempest [BLB] (F)
+2 Get Lost <prerelease> [LCI] (F)
+3 Rest in Peace [MAR] (F)
+4 Seam Rip [EOE]
+1 The Legend of Roku <prerelease> [TLA] (F)

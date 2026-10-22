@@ -43,6 +43,7 @@ public final class FrontDoor {
     private final CardDb db;
     private final DeckStore decks;
     private final DraftEvents events;
+    private final PlayQueues queues = new PlayQueues();
     private final ProfileApi profile;
     private final Map<String, Handler> handlers = new HashMap<>();
     private String collectionJson;
@@ -200,31 +201,25 @@ public final class FrontDoor {
             return obj("GraphStates", states, "InventoryInfo", null);
         });
 
-        // ---- play: one bot-match queue ("AIBotMatch") whose matches run on the local Match Door vs the Forge AI ----
-        on("GetPlayBladeQueueConfig", (s, r) -> {
-            JsonArray q = new JsonArray();
-            q.add(obj("Id", "forge-ai", "QueueType", "Unranked", "LocTitle", "Events/Event_Title_AIBotMatch",
-                    "EventNameBO1", BOT_EVENT, "EventNameBO3", null, "DeckSizeBO1", null, "DeckSizeBO3", null,
-                    "SideBoardBO1", null, "SideBoardBO3", null, "Tags", new JsonArray()));
-            return q.toString();
-        });
+        // ---- play: Bot Play (vs the Forge AI) and Casual Play (vs another player) in Standard, Pioneer and Modern, see PlayQueues ----
+        on("GetPlayBladeQueueConfig", (s, r) -> queues.queueConfig().toString());
         on("EventGetActiveEventsV2", (s, r) -> {
             JsonArray bots = new JsonArray();
             bots.add(botEvent(BOT_EVENT, ForgeFormats.ANY, 100));
             bots.add(botEvent(BOT_EVENT + "_Rebalanced", "Alchemy", 99));
-            return obj("DynamicFilterTags", new JsonArray(), "CacheVersion", 1, "Events", events.eventInfos(),
+            return obj("DynamicFilterTags", new JsonArray(), "CacheVersion", 1, "Events", allEvents(),
                     "Challenges", null, "AiBotMatches", bots);
         });
         on("EventGetCoursesV2", (s, r) -> obj("Courses", events.courseList()));
 
         // ---- quick drafts: one event per Forge set, bot pod run by Forge (see DraftEvents) ----
-        on("EventJoin", (s, r) -> events.join(r.obj()));
+        on("EventJoin", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.join(str(r.obj(), "EventName")) : events.join(r.obj()));
         on("BotDraftStartDraft", (s, r) -> events.startDraft(r.obj()));
         on("BotDraftDraftStatus", (s, r) -> events.draftStatus(r.obj()));
         on("BotDraftDraftPick", (s, r) -> events.draftPick(r.obj()));
-        on("EventSetDeckV3", (s, r) -> events.setDeck(r.obj()));
-        on("EventDrop", (s, r) -> events.drop(r.obj(), true));
-        on("EventResign", (s, r) -> events.drop(r.obj(), false));
+        on("EventSetDeckV3", (s, r) -> setEventDeck(r.obj()));
+        on("EventDrop", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), true) : events.drop(r.obj(), true));
+        on("EventResign", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), false) : events.drop(r.obj(), false));
         on("EventEnterPairing", (s, r) -> startEventMatch(s, str(r.obj(), "EventName")));
         on("EventAiBotMatch", (s, r) -> startBotMatch(s, r.obj()));
         on("EventLeavePairing", (s, r) -> {      // the client left the "waiting for a match" screen
@@ -334,8 +329,47 @@ public final class FrontDoor {
         return startMatch(s, stored.getAsJsonObject("Summary"), stored.getAsJsonObject("Deck"), null, BOT_EVENT);
     }
 
-    /** EventEnterPairing for a draft event: play the course's deck against one of the bots' drafted decks. */
+    private JsonArray allEvents() {
+        JsonArray all = queues.eventInfos();
+        all.addAll(events.eventInfos());
+        return all;
+    }
+
+    /** EventSetDeckV3: a queue event checks the deck against its format first; draft events keep their own course. */
+    private Object setEventDeck(JsonObject req) {
+        String name = str(req, "EventName");
+        if (!PlayQueues.isQueueEvent(name)) return events.setDeck(req);
+        JsonObject deck = req.has("Deck") && req.get("Deck").isJsonObject() ? req.getAsJsonObject("Deck") : null;
+        String problem = deck == null ? "no deck submitted" : deckProblem(PlayQueues.formatOf(name), deck);
+        if (problem != null) System.out.println("[mtga] FD " + name + ": deck refused: " + problem);
+        return queues.setDeck(name, req, problem);
+    }
+
+    /** Why the main deck (client JSON) is not playable in a client format, null if it is. */
+    private String deckProblem(String format, JsonObject deck) {
+        Map<String, Integer> names = new LinkedHashMap<>();
+        int unknown = 0;
+        JsonArray main = deck.getAsJsonArray("MainDeck");
+        if (main != null) {
+            for (JsonElement e : main) {
+                JsonObject c = e.getAsJsonObject();
+                String n = db.name(c.get("cardId").getAsInt());
+                if (n == null || StaticData.instance().getCommonCards().getUniqueByName(n) == null) unknown += c.get("quantity").getAsInt();
+                else names.merge(n, c.get("quantity").getAsInt(), Integer::sum);
+            }
+        }
+        return forgeFormats().problem(format, names, unknown);
+    }
+
+    /** EventEnterPairing: a Bot Play / Casual Play queue starts its match; for a draft event play the course's deck against one of the bots' drafted decks. */
     private Object startEventMatch(FdSession s, String eventName) {
+        if (PlayQueues.isQueueEvent(eventName)) {
+            JsonObject c = queues.course(eventName);
+            if (c == null || !c.has("CourseDeck") || !c.get("CourseDeck").isJsonObject() || c.getAsJsonObject("CourseDeck").getAsJsonArray("MainDeck").size() == 0) {
+                return new Err(7000, "no deck for event " + eventName);
+            }
+            return startMatch(s, c.getAsJsonObject("CourseDeckSummary"), c.getAsJsonObject("CourseDeck"), null, eventName);
+        }
         JsonObject course = DraftEvents.isDraftEvent(eventName) ? events.course(eventName) : null;
         if (course == null || !course.has("CourseDeck") || !course.get("CourseDeck").isJsonObject()) return new Err(7000, "no deck for event " + eventName);
         Map<String, Integer> bot = events.botDeck(eventName);
@@ -368,8 +402,17 @@ public final class FrontDoor {
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
 
         PublicProfile me = profile.forDeck(summary);
-        if (peer != null) return startPeerMatch(s, deckName, human, printing, me);
-        forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(deckFormat(summary));
+        PlayQueues.Mode mode = PlayQueues.modeOf(eventId);
+        String queueFormat = PlayQueues.formatOf(eventId);
+        if (mode != null) {
+            String problem = deckProblem(queueFormat, deck);   // the client only offers legal decks; this is the server's own check
+            if (problem != null) return new Err(7000, PlayQueues.queueLabel(eventId) + ": " + problem);
+        }
+        if (mode == PlayQueues.Mode.CASUAL) {
+            if (peer == null) return new Err(7000, "Casual Play needs another player: start MTGA-Forge as host or guest (online matchmaking is not available yet)");
+            return startPeerMatch(s, deckName, human, printing, me, eventId);
+        }
+        forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(mode == PlayQueues.Mode.BOT ? queueFormat : deckFormat(summary));
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
         String aiName = "Forge AI";
         boolean event = DraftEvents.isDraftEvent(eventId);
@@ -390,7 +433,7 @@ public final class FrontDoor {
      * Either way the client's own Match Door connection (127.0.0.1) is what it plays on. The two servers swap the PUBLIC part
      * of the players' profiles in the peer handshake, so each client draws the other's avatar, sleeve, pet, title and emotes.
      */
-    private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me) {
+    private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId) {
         Peer p = peer;
         if (p.host() != null) {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
@@ -398,14 +441,14 @@ public final class FrontDoor {
             forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing));
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
             System.out.println("[mtga] FD P2P host: '" + deckName + "' waits for a guest (match " + matchId + ")");
-            p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), BOT_EVENT)));
+            p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), eventId)));
             return GSON.toJson(matchId);
         }
-        forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join(p.joinHost(), p.joinPort(), p.key(), p.fingerprint(), me, human, printing);
+        forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join(p.joinHost(), p.joinPort(), p.key(), p.fingerprint(), eventId, me, human, printing);
         if (j.error() != null) return new Err(7000, "P2P: " + j.error());
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
         System.out.println("[mtga] FD P2P guest: '" + deckName + "' vs " + j.host().name() + " (match " + j.matchId() + ")");
-        pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), BOT_EVENT);
+        pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), eventId);
         return GSON.toJson(j.matchId());
     }
 
@@ -450,6 +493,8 @@ public final class FrontDoor {
     private forge.mtga.AiDecks.Choice aiDeck(String format) {
         String spec = System.getProperty("mtga.aideck");
         if (spec == null || spec.isBlank()) {
+            forge.mtga.AiDecks.Choice builtIn = forge.mtga.AiDecks.fromDefaults(format, this::playable);
+            if (builtIn != null) return builtIn;
             forge.game.GameFormat gf = ForgeFormats.forgeFormat(format);
             if (gf != null && !"Commander".equals(gf.getName())) {
                 System.out.println("[mtga] FD: AI deck for format " + format);
@@ -560,51 +605,95 @@ public final class FrontDoor {
 
     // ---- starter decks ------------------------------------------------------------------------------------------
 
+    /** Marker of the built-in deck set; a new set (new name) is seeded once on the next start. */
+    private static final String SEED_MARKER = ".seeded-defaults-v3";
+
+    /** Can the built-in deck be played as its own format: every card on the client and legal in the format? Reason in the log. */
+    private boolean playable(forge.mtga.DefaultDecks.Entry d) {
+        for (String n : d.main().keySet()) {
+            if (db.grpId(n) == 0) { System.out.println("[mtga] FD built-in deck " + d.format() + " / " + d.name() + " skipped: client has no card " + n); return false; }
+        }
+        String problem = forgeFormats().problem(d.format(), d.main(), 0);
+        if (problem != null) System.out.println("[mtga] FD built-in deck " + d.format() + " / " + d.name() + " skipped: " + problem);
+        return problem == null;
+    }
+
     /**
-     * First start only (marker file data/.seeded): copy Forge's "MTGA ..." precons into the player's decks so there are
-     * ready 60-card decks to play and edit. Delete the marker to seed again.
+     * First start with this deck set (marker file data/.seeded-defaults-v3): the player gets the built-in Standard, Pioneer and
+     * Modern decks (DefaultDecks). The earlier starter decks ("Forge: <precon>", Timeless) are removed if the player never
+     * changed them. Delete the marker to seed again.
      */
     private void seedStarterDecks(File dataDir) {
-        File marker = new File(dataDir, ".seeded");
+        File marker = new File(dataDir, SEED_MARKER);
         if (marker.exists()) return;
-        File[] precons = new File(forge.localinstance.properties.ForgeConstants.QUEST_PRECON_DIR)
-                .listFiles((d, n) -> n.startsWith("MTGA ") && n.endsWith(".dck"));
-        int made = 0;
-        if (precons != null) {
-            java.util.Arrays.sort(precons);
-            for (File f : precons) {
+        File old = new File(dataDir, ".seeded");
+        if (old.exists()) {
+            int removed = 0;
+            for (JsonObject d : new java.util.ArrayList<>(decks.all())) {
+                JsonObject summary = d.getAsJsonObject("Summary");
+                String name = str(summary, "Name"), updated = lastUpdated(summary);
                 try {
-                    forge.mtga.AiDecks.Choice c = forge.mtga.AiDecks.pick(f.getPath());
-                    if (saveDeck("Forge: " + c.name(), c.cards())) made++;
+                    boolean untouched = updated != null && java.time.OffsetDateTime.parse(updated).toInstant().toEpochMilli() <= old.lastModified() + 60_000;
+                    if (name != null && name.startsWith("Forge: ") && untouched && decks.delete(str(summary, "DeckId"))) removed++;
                 } catch (Exception e) {
-                    System.out.println("[mtga] FD: cannot seed " + f.getName() + ": " + e);
+                    // unreadable timestamp: leave the deck alone
                 }
+            }
+            old.delete();
+            System.out.println("[mtga] FD removed " + removed + " old starter decks");
+        }
+        int made = 0;
+        java.util.Set<String> have = new java.util.HashSet<>();
+        for (JsonObject d : decks.all()) have.add(str(d.getAsJsonObject("Summary"), "Name"));
+        for (forge.mtga.DefaultDecks.Entry d : forge.mtga.DefaultDecks.all()) {
+            try {
+                String name = d.name() + " (" + d.format() + ")";
+                if (!have.contains(name) && playable(d) && saveDeck(name, d.format(), d.main(), d.side())) made++;
+            } catch (Exception e) {
+                System.out.println("[mtga] FD: cannot seed " + d.name() + ": " + e);
             }
         }
         try {
             marker.getParentFile().mkdirs();
-            Files.writeString(marker.toPath(), "starter decks seeded: " + made + "\n", StandardCharsets.UTF_8);
+            Files.writeString(marker.toPath(), "built-in decks seeded: " + made + System.lineSeparator(), StandardCharsets.UTF_8);
         } catch (Exception e) {
             System.out.println("[mtga] FD: cannot write " + marker + ": " + e);
         }
-        System.out.println("[mtga] FD seeded " + made + " starter decks from Forge precons");
+        System.out.println("[mtga] FD seeded " + made + " built-in decks");
     }
 
-    /** Store a deck given by Forge card names, in the same JSON shape the client writes (DeckUpsertDeckV3). */
-    private boolean saveDeck(String name, Map<String, Integer> cards) throws java.io.IOException {
-        JsonArray main = new JsonArray();
-        int tile = 0, total = 0;
+    private static String lastUpdated(JsonObject summary) {
+        JsonElement attrs = summary.get("Attributes");
+        if (attrs == null || !attrs.isJsonArray()) return null;
+        for (JsonElement a : attrs.getAsJsonArray()) {
+            JsonObject o = a.getAsJsonObject();
+            if ("LastUpdated".equals(str(o, "name"))) return str(o, "value").replace("\"", "");
+        }
+        return null;
+    }
+
+    private JsonArray cardList(Map<String, Integer> cards, String deckName, int[] totals) {
+        JsonArray out = new JsonArray();
         for (Map.Entry<String, Integer> e : cards.entrySet()) {
             int grp = db.grpId(e.getKey());
             if (grp == 0) {
-                System.out.println("[mtga] FD: '" + name + "': client has no card " + e.getKey());
+                System.out.println("[mtga] FD: '" + deckName + "': client has no card " + e.getKey());
                 continue;
             }
-            main.add(obj("cardId", grp, "quantity", e.getValue()));
-            total += e.getValue();
+            out.add(obj("cardId", grp, "quantity", e.getValue()));
+            totals[0] += e.getValue();
             boolean basic = e.getKey().matches("Plains|Island|Swamp|Mountain|Forest|Wastes");
-            if (tile == 0 && !basic) tile = grp;
+            if (totals[1] == 0 && !basic) totals[1] = grp;   // deck tile: first non-basic card
         }
+        return out;
+    }
+
+    /** Store a deck given by Forge card names, in the same JSON shape the client writes (DeckUpsertDeckV3). */
+    private boolean saveDeck(String name, String format, Map<String, Integer> cards, Map<String, Integer> side) throws java.io.IOException {
+        int[] totals = new int[2];   // cards, tile
+        JsonArray main = cardList(cards, name, totals);
+        JsonArray sideboard = cardList(side, name, new int[2]);
+        int total = totals[0], tile = totals[1];
         if (total < 40) return false;
         String id = java.util.UUID.randomUUID().toString();
         String now = java.time.OffsetDateTime.now().toString();
@@ -614,12 +703,12 @@ public final class FrontDoor {
         attrs.add(obj("name", "LastPlayed", "value", "\"0001-01-01T00:00:00\""));
         attrs.add(obj("name", "LastUpdated", "value", "\"" + now + "\""));
         attrs.add(obj("name", "IsFavorite", "value", "false"));
-        attrs.add(obj("name", "Format", "value", "Timeless"));
+        attrs.add(obj("name", "Format", "value", format));
         JsonObject summary = obj("DeckId", id, "Mana", "", "Name", name, "Attributes", attrs, "Description", null,
                 "DeckTileId", tile, "DeckArtId", db.artId(tile), "IsCompanionValid", false,
                 "PreferredCosmetics", obj("Avatar", "", "Sleeve", "", "Pet", "", "Title", "", "Emotes", new JsonArray()),
                 "NetDeckFolderId", null, "IsNetDeck", false, "checkInbox", false);
-        JsonObject deck = obj("MainDeck", main, "Sideboard", new JsonArray(), "CommandZone", new JsonArray(),
+        JsonObject deck = obj("MainDeck", main, "Sideboard", sideboard, "CommandZone", new JsonArray(),
                 "Companions", new JsonArray(), "CardSkins", new JsonArray());
         decks.put(id, summary, deck);
         return true;

@@ -64,8 +64,25 @@ public final class ForgeFormats {
         for (CardDb.Printing p : db.printings()) {
             PaperCard pc = forgeCards.computeIfAbsent(p.name(), n -> StaticData.instance().getCommonCards().getUniqueByName(n));
             if (pc == null) continue;
+            // Arena-only reprints under a flavor name are legal wherever a paper printing of the same card is
+            String real = pc.getRules().getName();
+            if (!real.equals(p.name())) {
+                java.util.Collection<PaperCard> all = StaticData.instance().getCommonCards().getAllCards(real);
+                if (all != null) aliasPrintings.put(p.name(), new ArrayList<>(all));
+            }
             titlesByName.computeIfAbsent(p.name(), k -> new TreeSet<>()).add(db.titleId(p.grpId()));
             if (p.expansion() != null && !p.expansion().isBlank()) setsByName.computeIfAbsent(p.name(), k -> new TreeSet<>()).add(p.expansion());
+        }
+        // Arena-only digital versions under a flavor name (Fire-Brained Scheme = Heroes' Hangout) are separate client rows
+        // (not primary cards); they play and are legal exactly like the paper card.
+        for (Map.Entry<Integer, String> e : db.namesByGrp().entrySet()) {
+            String name = e.getValue();
+            if (forgeCards.containsKey(name)) continue;
+            PaperCard pc = StaticData.instance().getCommonCards().getUniqueByName(name);
+            if (pc == null || pc.getRules().getName().equals(name)) continue;
+            forgeCards.put(name, pc);
+            titlesByName.computeIfAbsent(name, k -> new TreeSet<>()).add(db.titleId(e.getKey()));
+            aliasPrintings.put(name, new ArrayList<>(StaticData.instance().getCommonCards().getAllCards(pc.getRules().getName())));
         }
         forgeCards.values().removeIf(java.util.Objects::isNull);
     }
@@ -84,10 +101,18 @@ public final class ForgeFormats {
         GameFormat gf = spec.forgeFormat() == null ? null : FModel.getFormats().getFormat(spec.forgeFormat());
         Predicate<PaperCard> rules = gf == null ? null : gf.getFilterRules();
         for (Map.Entry<String, PaperCard> e : forgeCards.entrySet()) {
-            boolean ok = rules != null ? rules.test(e.getValue()) : spec.rebalanced() || !e.getKey().startsWith("A-");
+            boolean ok = rules != null ? (rules.test(e.getValue()) || anyAliasLegal(rules, e.getKey())) : spec.rebalanced() || !e.getKey().startsWith("A-");
             if (ok) out.add(e.getKey());
         }
         return out;
+    }
+
+    /** Paper printings of cards the client knows under a flavor name (Fire-Brained Scheme = Heroes' Hangout). */
+    private final Map<String, List<PaperCard>> aliasPrintings = new HashMap<>();
+
+    private boolean anyAliasLegal(Predicate<PaperCard> rules, String clientName) {
+        for (PaperCard other : aliasPrintings.getOrDefault(clientName, List.of())) if (rules.test(other)) return true;
+        return false;
     }
 
     private Set<Integer> titles(Iterable<String> names) {
@@ -145,6 +170,32 @@ public final class ForgeFormats {
         b.addFormatGroups(FormatGroup.newBuilder().setGroupName("ConstructedSortOrder").addAllFormatNames(order));
         b.addFormatGroups(FormatGroup.newBuilder().setGroupName("EvergreenFormats").addAllFormatNames(order));
         return b.build();
+    }
+
+
+    private final Map<String, Set<String>> legalByFormat = new HashMap<>();
+
+    /**
+     * Server-side deck check for a queue whose deck format is {@code format}: null if the main deck (Forge names -> quantity) is
+     * playable there, else the reason. {@code unknownCards} = cards of the deck Forge could not resolve (never legal).
+     */
+    public synchronized String problem(String format, Map<String, Integer> main, int unknownCards) {
+        Spec spec = null;
+        for (Spec s : SPECS) if (s.name().equalsIgnoreCase(format)) spec = s;
+        if (spec == null) return "unknown format " + format;
+        if (unknownCards > 0) return "the deck has " + unknownCards + " card(s) that are not legal in " + spec.name();
+        Set<String> ok = legalByFormat.computeIfAbsent(spec.name(), k -> legalNames(SPECS.stream().filter(x -> x.name().equals(k)).findFirst().get()));
+        int total = 0;
+        for (Map.Entry<String, Integer> e : main.entrySet()) {
+            total += e.getValue();
+            if (!ok.contains(e.getKey())) return e.getKey() + " is not legal in " + spec.name();
+            PaperCard pc = forgeCards.get(e.getKey());
+            boolean unlimited = pc != null && (pc.getRules().getType().isBasicLand()
+                    || pc.getRules().getOracleText().contains("A deck can have any number of cards named"));
+            if (!unlimited && e.getValue() > 4) return "more than 4 copies of " + e.getKey();
+        }
+        if (total < spec.mainMin()) return "a " + spec.name() + " deck needs at least " + spec.mainMin() + " cards (this one has " + total + ")";
+        return null;
     }
 
     /** Title ids legal in a client format (after {@link #response()}), null if unknown. */

@@ -55,6 +55,15 @@ public final class AiDecks {
         return new Choice(name.replaceFirst("^MTGA ", ""), cards);
     }
 
+    /** A random built-in deck of the format (DefaultDecks) that {@code playable} accepts; null if there is none. */
+    public static Choice fromDefaults(String format, Predicate<DefaultDecks.Entry> playable) {
+        List<DefaultDecks.Entry> ok = new ArrayList<>();
+        for (DefaultDecks.Entry e : DefaultDecks.of(format == null ? "" : format)) if (playable.test(e)) ok.add(e);
+        if (ok.isEmpty()) return null;
+        DefaultDecks.Entry d = ok.get(RND.nextInt(ok.size()));
+        return new Choice(d.name() + " (" + d.format() + ")", d.main());
+    }
+
     /**
      * A deck for the AI in a Forge format, made only of cards the client can show: Forge's archetype generator
      * (res/deckgendecks) first, keeping the try with the fewest cards the client lacks and replacing those by basic

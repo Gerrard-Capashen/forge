@@ -1,0 +1,32 @@
+3 Abrupt Decay <showcase> [OTP] (F)
+4 Badgermole Cub <prerelease> [TLA] (F)
+2 Bitter Triumph <019db241-7893-7e14-af43-a4ad7bee2c64> [SOA] (F)
+4 Blooming Marsh <prerelease> [OTJ] (F)
+1 Boseiju, Who Endures <prerelease> [NEO] (F)
+1 Castle Locthwain <planeswalker stamp> [ELD] (F)
+2 Culling Ritual <019db241-a10e-7b76-9291-104d6744583a> [SOA] (F)
+1 Duress <beginner box> [FDN]
+4 Fatal Push <masterpiece> [KLR]
+1 Forest <254> [THB]
+4 Graveyard Trespasser <prerelease> [MID] (F)
+4 Llanowar Wastes <prerelease> [BRO] (F)
+4 Mutavault [M14]
+4 Overgrown Tomb [ECL]
+3 Professor Dellian Fel <019d4526-e09c-798b-9cb5-db10999163e0> [SOS]
+2 Restless Cottage <prerelease> [WOE] (F)
+3 Sheoldred, the Apocalypse <concept praetor - Step and Compleat Foil> [ONE]
+2 Swamp <252> [THB]
+1 Takenuma, Abandoned Mire <prerelease> [NEO] (F)
+1 Tear Asunder [DMU] (F)
+4 Thoughtseize <showcase> [OTP]
+4 Unholy Annex/Ritual Chamber <borderless> [DSK] (F)
+1 Urborg, Tomb of Yawgmoth [PRM-UMA]
+
+1 Culling Ritual <019db241-a10e-7b76-9291-104d6744583a> [SOA] (F)
+3 Duress <beginner box> [FDN]
+2 Go Blank [STX] (F)
+2 Invoke Despair <prerelease> [NEO] (F)
+1 Nowhere to Run [DSK] (F)
+1 Professor Dellian Fel <019d4526-e09c-798b-9cb5-db10999163e0> [SOS]
+3 Strategic Betrayal [TDM]
+2 Unlicensed Hearse <showcase> [OTP] (F)

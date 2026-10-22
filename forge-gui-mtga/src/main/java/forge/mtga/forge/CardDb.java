@@ -41,6 +41,9 @@ public final class CardDb {
     /** All primary non-token printings of the client's card database. */
     public List<Printing> printings() { return printings; }
 
+    /** Every card row with a title (tokens and non-primary rows included): GrpId -> plain title. */
+    public Map<Integer, String> namesByGrp() { return java.util.Collections.unmodifiableMap(nameByGrp); }
+
     /** One printed ability of a card: client ability id, category (1 activated, 2 triggered, 3 static, 4 spell, ...), loyalty cost, English text. */
     public record Ability(int id, int category, String loyaltyCost, String text, String modalChildIds) { }
 
