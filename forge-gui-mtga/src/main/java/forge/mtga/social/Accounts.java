@@ -27,6 +27,18 @@ public final class Accounts {
         public String fullName() { return name + "#" + tag; }
     }
 
+    /** The coordinator answered with an error status; {@code getMessage()} reads "/path: 409 reason". */
+    public static final class ApiException extends IOException {
+        public final int status;
+        public final String reason;
+
+        ApiException(String path, int status, String reason) {
+            super(path + ": " + status + " " + reason);
+            this.status = status;
+            this.reason = reason;
+        }
+    }
+
     private final String base;
     private final IdentityStore identity;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
@@ -85,7 +97,11 @@ public final class Accounts {
 
     private static Account account(JsonObject o) { return new Account(o.get("playerId").getAsString(), o.get("name").getAsString(), o.get("tag").getAsString()); }
 
-    private JsonObject call(String method, String path, JsonObject body, String token) throws IOException {
+    /** The coordinator's ws(s):// address of this server (for the session WebSocket). */
+    public String wsBase() { return base.replaceFirst("^https://", "wss://").replaceFirst("^http://", "ws://"); }
+
+    /** One REST call with an optional bearer token; the answer's JSON object, or an {@link ApiException}. */
+    public JsonObject call(String method, String path, JsonObject body, String token) throws IOException {
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(8))
                 .header("content-type", "application/json")
                 .method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(GSON.toJson(body), StandardCharsets.UTF_8));
@@ -105,7 +121,7 @@ public final class Accounts {
         } catch (RuntimeException e) {
             throw new IOException(path + ": " + r.statusCode() + " (not a coordinator answer)");
         }
-        if (r.statusCode() / 100 != 2) throw new IOException(path + ": " + r.statusCode() + " " + (o.has("error") ? o.get("error").getAsString() : r.body()));
+        if (r.statusCode() / 100 != 2) throw new ApiException(path, r.statusCode(), o.has("error") ? o.get("error").getAsString() : r.body());
         return o;
     }
 

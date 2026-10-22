@@ -28,6 +28,13 @@ public final class ArtServer {
     private final Map<Integer, CardDb.ArtRef> refs;
     private final ArtFetcher fetcher = new ArtFetcher();
     private final MtgPicsArt mtgpics = new MtgPicsArt();
+    private final java.util.Map<String, com.sun.net.httpserver.HttpHandler> extra = new java.util.LinkedHashMap<>();
+
+    /** Another loopback service on this HTTP server (before {@link #start}), e.g. the friends endpoints under {@code /social/}. */
+    public ArtServer addContext(String path, com.sun.net.httpserver.HttpHandler handler) {
+        extra.put(path, handler);
+        return this;
+    }
 
     public ArtServer(CardDb db, int port) throws Exception {
         this.port = port;
@@ -38,6 +45,7 @@ public final class ArtServer {
         HttpServer http = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 16);
         http.createContext("/art/", this::handle);
         http.createContext("/event/", this::handleEvent);
+        extra.forEach(http::createContext);
         http.setExecutor(Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "art-http");
             t.setDaemon(true);

@@ -35,9 +35,19 @@ public final class ForgeMtgaMain {
         if (rename != null && !rename.isBlank() && !forge.mtga.profile.Profile.cleanName(rename).equals(profileStore.load().displayName)) {
             profileStore.update(p -> p.displayName = forge.mtga.profile.Profile.cleanName(rename));
         }
+        forge.mtga.social.Accounts accounts = null;
+        forge.mtga.social.SocialClient social = null;
         // Online play: register the player id with the coordinator (device key, "Name#tag" is unique there) before the client reads the tag.
         if (System.getProperty("mtga.p2p", "online").matches("online|")) {
-            forge.mtga.social.Accounts.sync(profileStore, new forge.mtga.social.Accounts(System.getProperty("mtga.coordinator", DEFAULT_COORDINATOR), new forge.mtga.social.IdentityStore(dataDir)));
+            accounts = new forge.mtga.social.Accounts(System.getProperty("mtga.coordinator", DEFAULT_COORDINATOR), new forge.mtga.social.IdentityStore(dataDir));
+            forge.mtga.social.Accounts.sync(profileStore, accounts);
+            if (!"spike".equals(System.getProperty("mtga.social"))) {
+                System.setProperty("mtga.social", "online");                 // friends UI on (FrontDoor kill switches), the bridge uses the coordinator's friends
+                social = new forge.mtga.social.SocialClient(accounts, profileStore);
+                social.start();
+            }
+        } else if (!"spike".equals(System.getProperty("mtga.social"))) {
+            System.setProperty("mtga.social", "off");
         }
         forge.mtga.profile.Profile me = profileStore.load();
         System.setProperty("mtga.name", me.displayName);       // the Match Door and the engine seats use it
@@ -71,7 +81,11 @@ public final class ForgeMtgaMain {
 
         // Scryfall art for the cards CardDbBuilder added; -Dmtga.artport=0 disables it (the client keeps its placeholder).
         int artPort = Integer.getInteger("mtga.artport", 30011);
-        if (artPort > 0) new forge.mtga.art.ArtServer(db, artPort).start();
+        if (artPort > 0) {
+            forge.mtga.art.ArtServer art = new forge.mtga.art.ArtServer(db, artPort);
+            if (social != null) art.addContext("/social/", new forge.mtga.social.SocialEndpoints(social));
+            art.start();
+        }
         else System.out.println("[mtga] Art server disabled (artport=0)");
         Thread.currentThread().join();
     }

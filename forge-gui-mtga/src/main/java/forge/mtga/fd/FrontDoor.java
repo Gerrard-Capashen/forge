@@ -801,12 +801,13 @@ public final class FrontDoor {
         return m;
     }
 
-    /** The client's friends / chat / challenge screens: on (switch false) only with -Dmtga.social=spike (stage 2 spike, docs/online-identity-friends.md). */
+    /** The client's friends / chat / challenge screens: on (switch false) with -Dmtga.social=online (the coordinator's friends, set at start when online play is on) or spike (fake friends). */
     private static final java.util.Set<String> SOCIAL_SWITCHES = java.util.Set.of("HasbroGoAddRemoveFriends", "SocialBladeStatus",
             "SocialChallengeStatus", "SocialGatheringStatus", "SocialChatStatus");   // SocialBladeV2Status stays off: the client then builds its classic SocialUI (V2 loads another scene)
 
     private static boolean killSwitch(String name) {
-        return !("spike".equals(System.getProperty("mtga.social")) && SOCIAL_SWITCHES.contains(name));
+        String mode = System.getProperty("mtga.social", "off");
+        return !(("spike".equals(mode) || "online".equals(mode)) && SOCIAL_SWITCHES.contains(name));
     }
 
     // ---- StartHook ----------------------------------------------------------------------------------------------
