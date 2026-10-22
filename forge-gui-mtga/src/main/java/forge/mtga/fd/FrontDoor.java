@@ -166,14 +166,14 @@ public final class FrontDoor {
         on("DeckGetDeck", (s, r) -> {
             String id = str(r.obj(), "DeckId");
             JsonObject d = id == null ? null : decks.get(id);
-            return d == null ? new Err(404, "no deck " + id) : d.get("Deck").toString();
+            return d == null ? new Err(404, "no deck " + id) : primaryPrintings(d.getAsJsonObject("Deck").deepCopy()).toString();
         });
         on("DeckUpsertDeckV3", (s, r) -> {
             JsonObject summary = r.obj().getAsJsonObject("Summary");
             JsonObject deck = r.obj().getAsJsonObject("Deck");
             String id = str(summary, "DeckId");
             if (id == null || deck == null) return new Err(400, "bad upsert");
-            decks.put(id, summary, deck);
+            decks.put(id, summary, primaryPrintings(deck));
             System.out.println("[mtga] FD saved deck " + str(summary, "Name") + " (" + id + ")");
             return summary.toString();
         });
@@ -793,6 +793,24 @@ public final class FrontDoor {
         return out;
     }
 
+    /**
+     * The deck with every card as its primary printing: the client owns and legalises only those, so a deck holding another printing
+     * (client imports pick them by set code) would show missing wildcards and lose cards to "not legal in this format".
+     */
+    private JsonObject primaryPrintings(JsonObject deck) {
+        for (String pile : new String[] {"MainDeck", "Sideboard", "CommandZone", "Companions"}) {
+            if (!deck.has(pile) || !deck.get(pile).isJsonArray()) continue;
+            for (JsonElement e : deck.getAsJsonArray(pile)) {
+                JsonObject card = e.getAsJsonObject();
+                if (!card.has("cardId")) continue;
+                int grp = card.get("cardId").getAsInt(), primary = db.primaryPrinting(grp);
+                if (primary != grp) System.out.println("[mtga] FD deck card " + grp + " -> primary printing " + primary);
+                card.addProperty("cardId", primary);
+            }
+        }
+        return deck;
+    }
+
     /** Store a deck given by Forge card names, in the same JSON shape the client writes (DeckUpsertDeckV3). */
     private boolean saveDeck(String name, String format, Map<String, Integer> cards, Map<String, Integer> side) throws java.io.IOException {
         int[] totals = new int[2];   // cards, tile
@@ -862,7 +880,7 @@ public final class FrontDoor {
             try {
                 DeckSummaryV3 summary = summaryProto(d.getAsJsonObject("Summary"));
                 b.addDeckSummaries(summary);
-                b.putDecksInternal(summary.getDeckIdInternal(), deckProto(d.getAsJsonObject("Deck")));
+                b.putDecksInternal(summary.getDeckIdInternal(), deckProto(primaryPrintings(d.getAsJsonObject("Deck").deepCopy())));
                 n++;
             } catch (Exception e) {
                 System.out.println("[mtga] FD: skipping unreadable deck " + d.get("Summary") + ": " + e);

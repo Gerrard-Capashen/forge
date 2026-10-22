@@ -29,6 +29,9 @@ public final class CardDb {
     public record Printing(int grpId, String name, String expansion, String digitalSet, int artId) { }
 
     private final List<Printing> printings = new ArrayList<>();
+    private final Map<Integer, Integer> primaryOfAlternate = new HashMap<>();   // alternate printing -> primary printing of the same card
+    private final Map<Integer, Integer> primaryByTitle = new HashMap<>();       // title -> its newest primary printing
+    private final Map<Integer, Integer> alternateTitles = new HashMap<>();      // alternate printing -> title of the card it is a printing of
 
     private final Map<Integer, Integer> artByGrp = new HashMap<>();
 
@@ -40,6 +43,14 @@ public final class CardDb {
 
     /** All primary non-token printings of the client's card database. */
     public List<Printing> printings() { return printings; }
+
+    /**
+     * The primary printing of a card given any printing of it. The client only owns, legalises and plays primary rows
+     * (FormatManagerUtils.IsCardLegalForFormat): a deck holding an alternate printing (a Secret Lair or showcase version, an Omenpaths
+     * reskin) shows its copies as missing wildcards and "not legal in this format". Faces of two-sided and split cards, tokens and
+     * cards without a primary row are returned unchanged.
+     */
+    public int primaryPrinting(int grpId) { return primaryOfAlternate.getOrDefault(grpId, grpId); }
 
     /** Every card row with a title (tokens and non-primary rows included): GrpId -> plain title. */
     public Map<Integer, String> namesByGrp() { return java.util.Collections.unmodifiableMap(nameByGrp); }
@@ -61,7 +72,7 @@ public final class CardDb {
             // Alchemy "A-" sprite) there is also a plain Formatted=0 row. Split cards are titled "Commit /// Memory".
             try (ResultSet rs = st.executeQuery(
                     "select c.GrpId, coalesce(p.Loc, f.Loc), c.IsPrimaryCard, c.IsToken, c.IsDigitalOnly, c.IsRebalanced, c.TitleId, c.AbilityIds, "
-                            + "c.AbilityIdToLinkedTokenGrpId, c.Power, c.Toughness, c.LinkedFaceGrpIds, c.ExpansionCode, c.DigitalReleaseSet, c.ArtId "
+                            + "c.AbilityIdToLinkedTokenGrpId, c.Power, c.Toughness, c.LinkedFaceGrpIds, c.ExpansionCode, c.DigitalReleaseSet, c.ArtId, c.InterchangeableTitleId "
                             + "from Cards c left join Localizations_enUS p on p.LocId = c.TitleId and p.Formatted = 0 "
                             + "left join Localizations_enUS f on f.LocId = c.TitleId and f.Formatted = 1 where coalesce(p.Loc, f.Loc) is not null")) {
                 while (rs.next()) {
@@ -78,9 +89,17 @@ public final class CardDb {
                     // preferred printing for a name: primary, not a token, not digital-only/rebalanced; highest GrpId wins
                     boolean good = rs.getInt(3) == 1 && rs.getInt(4) == 0 && rs.getInt(5) == 0 && rs.getInt(6) == 0;
                     if (rs.getInt(3) == 1 && rs.getInt(4) == 0) printings.add(new Printing(grp, name, rs.getString(13), rs.getString(14), rs.getInt(15)));
+                    boolean primary = rs.getInt(3) == 1;
+                    int title = rs.getInt(7);
+                    if (good) primaryByTitle.merge(title, grp, Math::max);
+                    else if (!primary && rs.getInt(4) == 0 && (faces == null || faces.isBlank())) alternateTitles.put(grp, rs.getInt(16) != 0 ? rs.getInt(16) : title);
                     if (good) grpByName.merge(name, grp, Math::max);
                     else grpByName.putIfAbsent(name, grp);
                 }
+            }
+            for (Map.Entry<Integer, Integer> e : alternateTitles.entrySet()) {
+                Integer primary = primaryByTitle.get(e.getValue());
+                if (primary != null) primaryOfAlternate.put(e.getKey(), primary);
             }
             try (ResultSet rs = st.executeQuery(
                     "select a.Id, l.Loc from Abilities a join Localizations_enUS l on l.LocId = a.TextId "
