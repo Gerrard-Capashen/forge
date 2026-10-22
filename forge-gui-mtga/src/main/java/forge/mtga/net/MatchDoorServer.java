@@ -66,7 +66,7 @@ public final class MatchDoorServer {
                     AuthenticateRequest r = AuthenticateRequest.parseFrom(m.getPayload());
                     session.clientId = r.getClientId();
                     MatchServiceToClientMessage.Builder out = MatchServiceToClientMessage.newBuilder();
-                    out.getAuthenticateResponseBuilder().setClientId(r.getClientId()).setSessionId("local-session").setScreenName("Forge Player");
+                    out.getAuthenticateResponseBuilder().setClientId(r.getClientId()).setSessionId("local-session").setScreenName(System.getProperty("mtga.name", "Forge Player"));
                     out.setTransactionId(m.getTransactionId());
                     session.send(out, m.getRequestId());
                 }

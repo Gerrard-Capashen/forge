@@ -5,6 +5,7 @@ import forge.gui.GuiBase;
 import forge.model.FModel;
 import forge.mtga.forge.CardDb;
 import forge.mtga.forge.ForgeBackend;
+import forge.mtga.forge.ForgeMatch;
 import forge.mtga.forge.HeadlessGui;
 import forge.mtga.net.MatchSession;
 
@@ -49,6 +50,8 @@ public final class SelfPlay {
                 System.out.println("[selfplay] deck " + i + ": " + c.name() + " (" + added + " cards added by CardDbBuilder) " + c.cards());
             }
         }
+        if (Boolean.getBoolean("selfplay.pvp")) System.exit(pvp(db, decks, games, seed));
+        if (Boolean.getBoolean("selfplay.peer")) System.exit(peer(db, decks, games, seed));
         int failed = 0;
         Map<String, Integer> totals = new TreeMap<>();
         for (int g = 0; g < games; g++) {
@@ -83,14 +86,108 @@ public final class SelfPlay {
         System.exit(failed == 0 ? 0 : 1);
     }
 
+    /** -Dselfplay.pvp=true: two fake clients, one Forge game (two human seats, one ForgeMatch). Each must see a consistent game and the results must agree. */
+    static int pvp(CardDb db, Map<String, Integer>[] decks, int games, long seed) throws Exception {
+        int failed = 0;
+        for (int g = 0; g < games; g++) {
+            ForgeMatch room = new ForgeMatch(db, "pvp-" + g);
+            FakeClient[] fc = { new FakeClient(new Random(seed + 2L * g)), new FakeClient(new Random(seed + 2L * g + 1)) };
+            ForgeBackend[] be = {
+                new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of())),
+                new ForgeBackend(db, room, 1, new ForgeMatch.Seat("Bob", decks[1], Map.of())) };
+            ClientToGREMessage.Builder connect = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConnectReq);
+            connect.getConnectReqBuilder().getDefaultSettingsBuilder();
+            for (int i = 0; i < 2; i++) fc[i].backend = be[i];
+            for (int i = 0; i < 2; i++) be[i].onConnect(fc[i], connect.build());
+            long limit = Long.getLong("selfplay.timeout", 300);
+            if (Boolean.getBoolean("selfplay.pvp.leave")) {      // Alice's client drops mid-game: Bob must win by forfeit
+                long end = System.currentTimeMillis() + limit * 1000;
+                while (fc[0].states < 150 && fc[1].done.getCount() > 0 && System.currentTimeMillis() < end) Thread.sleep(50);
+                be[0].onDisconnect(fc[0]);
+                boolean got = fc[1].done.await(limit, TimeUnit.SECONDS);
+                boolean won = fc[1].result.endsWith("team 1");
+                System.out.println("=== pvp leave game " + (g + 1) + ": Bob " + (got ? "got a result" : "TIMEOUT") + ": " + fc[1].result + (won ? " (forfeit win)" : " (WRONG)"));
+                fc[1].problems.forEach((k, v) -> System.out.println("  PROBLEM x" + v + ": " + k));
+                if (!got || !won || !fc[1].problems.isEmpty()) failed++;
+                be[1].onDisconnect(fc[1]);
+                continue;
+            }
+            if (!awaitAndCheck(fc, g, "pvp", limit)) failed++;
+            for (int i = 0; i < 2; i++) be[i].onDisconnect(fc[i]);
+        }
+        System.out.println("opponent hand cards visible to a client (reveals): " + OPP_HAND_VISIBLE.get());
+        System.out.println(failed == 0 ? "SELFPLAY PVP OK" : "SELFPLAY PVP FAILED games=" + failed);
+        return failed == 0 ? 0 : 1;
+    }
+
+    /** Wait for both clients' results, print them and check them: no problems, and exactly one winner (or both see the draw). */
+    static boolean awaitAndCheck(FakeClient[] fc, int g, String label, long limit) throws InterruptedException {
+        boolean done = fc[0].done.await(limit, TimeUnit.SECONDS) && fc[1].done.await(limit, TimeUnit.SECONDS);
+        boolean ok = done;
+        for (int i = 0; i < 2; i++) {
+            System.out.println("=== " + label + " game " + (g + 1) + " " + (i == 0 ? "Alice" : "Bob") + ": " + (done ? "finished" : "TIMEOUT") + " after " + fc[i].states
+                    + " states, turn " + fc[i].turnNo + ", requests " + fc[i].requests + ", result " + fc[i].result);
+            fc[i].problems.forEach((k, v) -> System.out.println("  PROBLEM x" + v + ": " + k));
+            if (!fc[i].problems.isEmpty()) ok = false;
+        }
+        // every client numbers itself seat 1: exactly one of them is the winner, or both see the draw
+        boolean aWon = fc[0].result.endsWith("team 1"), bWon = fc[1].result.endsWith("team 1");
+        boolean draws = fc[0].result.endsWith("team 0") && fc[1].result.endsWith("team 0");
+        if (done && !draws && aWon == bWon) {
+            System.out.println("  PROBLEM: results disagree: " + fc[0].result + " / " + fc[1].result);
+            ok = false;
+        }
+        return ok;
+    }
+
+    /** -Dselfplay.peer=true: the same, but the guest's fake client plays through a real TCP PeerHost/PeerGuest link on localhost. */
+    static int peer(CardDb db, Map<String, Integer>[] decks, int games, long seed) throws Exception {
+        int port = Integer.getInteger("selfplay.peerport", 39555);
+        forge.mtga.peer.PeerHost host = new forge.mtga.peer.PeerHost(db, port, "k", "selfplay-db");
+        host.start();
+        int failed = 0;
+        for (int g = 0; g < games; g++) {
+            ForgeMatch room = new ForgeMatch(db, "peer-" + g);
+            ForgeBackend mine = new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of()));
+            CountDownLatch joined = new CountDownLatch(1);
+            host.offer(new forge.mtga.peer.PeerHost.Offer(room.matchId(), room, guest -> joined.countDown()));
+            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", "Bob", decks[1], Map.of());
+            if (j.error() != null || !joined.await(5, TimeUnit.SECONDS)) {
+                System.out.println("  PROBLEM: guest could not join: " + j.error());
+                failed++;
+                continue;
+            }
+            FakeClient[] fc = { new FakeClient(new Random(seed + 2L * g)), new FakeClient(new Random(seed + 2L * g + 1)) };
+            fc[0].backend = mine;
+            fc[1].backend = j.backend();
+            ClientToGREMessage.Builder connect = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConnectReq);
+            connect.getConnectReqBuilder().getDefaultSettingsBuilder();
+            mine.onConnect(fc[0], connect.build());
+            j.backend().onConnect(fc[1], connect.build());
+            if (!awaitAndCheck(fc, g, "peer", Long.getLong("selfplay.timeout", 300))) failed++;
+            j.backend().onDisconnect(fc[1]);
+            mine.onDisconnect(fc[0]);
+        }
+        // a guest with another card DB and one without a waiting host are turned away
+        forge.mtga.peer.PeerGuest.Joined bad = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "other-db", "Eve", decks[1], Map.of());
+        System.out.println("rejected (other card DB): " + bad.error());
+        if (bad.error() == null || !bad.error().contains("card database")) failed++;
+        forge.mtga.peer.PeerGuest.Joined idle = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", "Eve", decks[1], Map.of());
+        System.out.println("rejected (host not waiting): " + idle.error());
+        if (idle.error() == null || !idle.error().contains("not waiting")) failed++;
+        System.out.println(failed == 0 ? "SELFPLAY PEER OK" : "SELFPLAY PEER FAILED games=" + failed);
+        return failed == 0 ? 0 : 1;
+    }
+
     static final Set<Integer> ADDED_SEEN = Collections.synchronizedSet(new TreeSet<>());
     static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger ATTACH_SEEN = new java.util.concurrent.atomic.AtomicInteger();
+    static final java.util.concurrent.atomic.AtomicInteger OPP_HAND_VISIBLE = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger FACEDOWN_SEEN = new java.util.concurrent.atomic.AtomicInteger();
 
     static final class FakeClient extends MatchSession {
         final Random rnd;
-        ForgeBackend backend;
+        forge.mtga.net.GameBackend backend;
         final CountDownLatch done = new CountDownLatch(1);
         final Map<String, Integer> problems = new LinkedHashMap<>();
         final Map<String, Integer> annCounts = new TreeMap<>();
@@ -109,6 +206,8 @@ public final class SelfPlay {
         private int lastGsId;
 
         FakeClient(Random rnd) { this.rnd = rnd; }
+
+        private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
 
         private void problem(String p) { problems.merge(p, 1, Integer::sum); }
 
@@ -395,15 +494,20 @@ public final class SelfPlay {
                     boolean hiddenZone = z.getType() == ZoneType.ZoneType_Library || (z.getType() == ZoneType.ZoneType_Hand && z.getOwnerSeatId() != 1);
                     if (o == null && !hiddenZone) problem("public zone " + z.getType() + " lists id without object");
                     if (o != null && o.getZoneId() != z.getZoneId()) problem("object zoneId differs from listing zone");
+                    // player vs player: what the opponent holds must not reach this client (a revealed hand card is allowed, counted)
+                    if (o != null && z.getOwnerSeatId() == 2 && o.getGrpId() != 0) {
+                        if (z.getType() == ZoneType.ZoneType_Library) problem("opponent library card visible to the client");
+                        else if (z.getType() == ZoneType.ZoneType_Hand) OPP_HAND_VISIBLE.incrementAndGet();
+                    }
                 }
             }
             for (GameObjectInfo o : objs.values()) {
                 if (!seen.containsKey(o.getInstanceId())) problem("object not listed by any zone (" + o.getType() + ")");
-                if (o.getVisibility() != Visibility.Visibility_Hidden && o.getGrpId() == 0) problem("visible object without grpId: " + backend.debugName(o.getInstanceId()));
+                if (o.getVisibility() != Visibility.Visibility_Hidden && o.getGrpId() == 0) problem("visible object without grpId: " + debugName(o.getInstanceId()));
                 if (o.getIsFacedown()) FACEDOWN_SEEN.incrementAndGet();
                 if (o.getType() == GameObjectType.GameObjectType_Card && o.getGrpId() >= CardDbBuilder.GRP_BASE && ADDED_SEEN.add(o.getGrpId())) {
                     System.out.println("[selfplay] first added face " + o.getGrpId() + " " + o.getType() + " zone " + o.getZoneId()
-                            + " " + backend.debugName(o.getInstanceId()));
+                            + " " + debugName(o.getInstanceId()));
                 }
             }
             for (AnnotationInfo p : persistent.values()) {
@@ -418,7 +522,7 @@ public final class SelfPlay {
                         if (o == null && id <= 2) continue;
                         ZoneInfo z = o == null ? null : zones.get(o.getZoneId());
                         if (z == null || z.getType() != ZoneType.ZoneType_Battlefield) problem("Attachment on an object not on the battlefield: "
-                                + id + " " + backend.debugName(id));
+                                + id + " " + debugName(id));
                     }
                 }
                 if (p.getType(0) == AnnotationType.AnnotationType_DisplayCardUnderCard) {      // cards exiled under a permanent
@@ -428,7 +532,7 @@ public final class SelfPlay {
                         GameObjectInfo o = objs.get(id);
                         ZoneInfo z = o == null ? null : zones.get(o.getZoneId());
                         if (z == null || z.getType() != ZoneType.ZoneType_Exile) problem("card displayed under a permanent is not in exile: "
-                                + id + " " + backend.debugName(id) + " zone " + (z == null ? "none" : z.getType()) + ", under " + backend.debugName(p.getAffectorId()));
+                                + id + " " + debugName(id) + " zone " + (z == null ? "none" : z.getType()) + ", under " + debugName(p.getAffectorId()));
                     }
                 }
             }
@@ -497,7 +601,7 @@ public final class SelfPlay {
                         if (!zone(dst).getObjectInstanceIdsList().contains(id)) problem("ZoneTransfer dest zone does not list object");
                         if (category(a) == null) problem("ZoneTransfer without category");
                         // a permanent spell entering the battlefield resolved: "Countered" plays the burn animation
-                        if ("Countered".equals(category(a)) && dst == 28) problem("Stack -> Battlefield labelled Countered: " + backend.debugName(id));
+                        if ("Countered".equals(category(a)) && dst == 28) problem("Stack -> Battlefield labelled Countered: " + debugName(id));
                     }
                     case AnnotationType_TappedUntappedPermanent -> {
                         int id = a.getAffectedIds(0);
@@ -519,7 +623,7 @@ public final class SelfPlay {
                     }
                     case AnnotationType_AbilityInstanceDeleted, AnnotationType_TokenDeleted -> {
                         for (int id : a.getAffectedIdsList()) if (!oldObjs.containsKey(id)) problem(t + " for object the client never had");
-                        if (t == AnnotationType.AnnotationType_TokenDeleted) for (int id : a.getAffectedIdsList()) tokenDeleted.merge(backend.debugName(id), 1, Integer::sum);
+                        if (t == AnnotationType.AnnotationType_TokenDeleted) for (int id : a.getAffectedIdsList()) tokenDeleted.merge(debugName(id), 1, Integer::sum);
                     }
                     case AnnotationType_CounterAdded, AnnotationType_CounterRemoved -> {
                         if (!oldObjs.containsKey(a.getAffectedIds(0))) problem(t + " on object not in old state");
@@ -547,7 +651,7 @@ public final class SelfPlay {
                 }
                 if (old == null && !transferred.contains(o.getInstanceId()) && !created.contains(o.getInstanceId())
                         && !inAnyZone(oldZones, o.getInstanceId()) && o.getZoneId() != 25) {
-                    problem("new object without ZoneTransfer/TokenCreated/AbilityInstanceCreated (zone " + o.getZoneId() + " " + backend.debugName(o.getInstanceId()) + ")");
+                    problem("new object without ZoneTransfer/TokenCreated/AbilityInstanceCreated (zone " + o.getZoneId() + " " + debugName(o.getInstanceId()) + ")");
                 }
             }
         }

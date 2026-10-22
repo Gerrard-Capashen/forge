@@ -35,6 +35,7 @@ public final class ForgeMtgaMain {
         // hard-coded decks above when there is none (direct-to-duel mode / rig recipes).
         MatchDoorServer server = new MatchDoorServer(port, () -> {
             MatchSetup setup = MatchSetup.current();
+            if (setup != null && setup.seat() != null) return setup.seat();
             return setup != null ? new ForgeBackend(db, setup) : new ForgeBackend(db, green, red);
         });
         server.start();
@@ -45,6 +46,7 @@ public final class ForgeMtgaMain {
             File dataDir = new File(System.getProperty("mtga.data", new File(clientDir.getCanonicalFile().getParentFile(), "data").getPath()));
             forge.mtga.fd.FrontDoor fd = new forge.mtga.fd.FrontDoor(db, dataDir);
             fd.setMatchDoor("127.0.0.1", port);
+            fd.setPeer(peerConfig(db, clientDir));
             new forge.mtga.fd.FrontDoorServer(fdPort, fd).start();
         } else {
             System.out.println("[mtga] Front Door disabled (fdport=0)");
@@ -55,6 +57,33 @@ public final class ForgeMtgaMain {
         if (artPort > 0) new forge.mtga.art.ArtServer(db, artPort).start();
         else System.out.println("[mtga] Art server disabled (artport=0)");
         Thread.currentThread().join();
+    }
+
+    /**
+     * -Dmtga.p2p=host|join: player-vs-player with a friend instead of a bot match when a deck is played from the bot queue.
+     * host: listens on -Dmtga.peerport (default 30012) for one guest; join: connects to -Dmtga.peer=ip[:port];
+     * -Dmtga.peerkey is a shared secret both sides must give. Both need the same card DB (MTGA build + this package).
+     */
+    private static forge.mtga.fd.FrontDoor.Peer peerConfig(CardDb db, File clientDir) throws Exception {
+        String role = System.getProperty("mtga.p2p");
+        if (role == null || role.isBlank()) return null;
+        String fingerprint = forge.mtga.peer.PeerGuest.fingerprint(CardDb.findDatabase(clientDir));
+        String key = System.getProperty("mtga.peerkey", "");
+        if ("host".equals(role)) {
+            forge.mtga.peer.PeerHost host = new forge.mtga.peer.PeerHost(db, Integer.getInteger("mtga.peerport", 30012), key, fingerprint);
+            host.start();
+            return new forge.mtga.fd.FrontDoor.Peer(host, null, 0, key, fingerprint);
+        }
+        if ("join".equals(role)) {
+            String peer = System.getProperty("mtga.peer", "");
+            int colon = peer.lastIndexOf(':');
+            String h = colon > 0 ? peer.substring(0, colon) : peer;
+            if (h.isBlank()) throw new IllegalArgumentException("-Dmtga.p2p=join needs -Dmtga.peer=<host ip>[:port]");
+            int p = colon > 0 ? Integer.parseInt(peer.substring(colon + 1)) : 30012;
+            System.out.println("[mtga] P2P: playing from the bot queue joins the host at " + h + ":" + p);
+            return new forge.mtga.fd.FrontDoor.Peer(null, h, p, key, fingerprint);
+        }
+        throw new IllegalArgumentException("-Dmtga.p2p must be host or join, not " + role);
     }
 
     /** [human deck, AI deck] for a deck name (-Dmtga.deck) / test rig (-Dmtga.rig). */

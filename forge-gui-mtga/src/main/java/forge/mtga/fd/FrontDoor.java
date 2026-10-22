@@ -212,6 +212,11 @@ public final class FrontDoor {
         });
         on("EventGetCoursesV2", (s, r) -> obj("Courses", new JsonArray()));
         on("EventAiBotMatch", (s, r) -> startBotMatch(s, r.obj()));
+        on("EventLeavePairing", (s, r) -> {      // the client left the "waiting for a match" screen
+            Peer p = peer;
+            if (p != null && p.host() != null) p.host().cancel();
+            return GSON.toJson("Success");
+        });
         // after a match: no rewards/rank/quests offline, just "found" so the end screen continues to the home page
         on("EventGetMatchResultReport", (s, r) -> obj("CurrentModule", "Complete", "FoundMatch", true, "InventoryInfo", null,
                 "questUpdates", new JsonArray(), "rankUpdates", null, "mythicRatingUpdates", null, "periodicRewardsProgress", null));
@@ -278,6 +283,13 @@ public final class FrontDoor {
 
     public void setMatchDoor(String host, int port) { matchHost = host; matchPort = port; }
 
+    /** Player-vs-player settings: {@code host} set = this server hosts (waits for one guest), else it joins {@code joinHost:joinPort}. */
+    public record Peer(forge.mtga.peer.PeerHost host, String joinHost, int joinPort, String key, String fingerprint) { }
+
+    private volatile Peer peer;
+
+    public void setPeer(Peer p) { peer = p; }
+
     private static JsonObject botEvent(String internalName, String format, int priority) {
         return obj("PublicEventName", BOT_EVENT, "InternalEventName", internalName, "Format", format,
                 "WinCondition", "SingleElimination", "StartingPlayer", "Random", "TimerPackage", "None",
@@ -311,6 +323,7 @@ public final class FrontDoor {
         if (human.isEmpty()) return new Err(7000, "deck '" + deckName + "' has no cards Forge knows");
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
 
+        if (peer != null) return startPeerMatch(s, deckName, human, printing);
         forge.mtga.AiDecks.Choice ai = aiDeck(deckFormat(stored.getAsJsonObject("Summary")));
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
         String aiName = "Forge AI";
@@ -319,9 +332,40 @@ public final class FrontDoor {
         System.out.println("[mtga] FD bot match " + matchId + ": '" + deckName + "' (" + total + " cards) vs AI precon '" + ai.name() + "'");
         Capture.log("FD bot match " + matchId + " deck '" + deckName + "' vs '" + ai.name() + "'");
 
+        pushMatchCreated(s, matchId, aiName + " (" + ai.name() + ")");
+        return GSON.toJson(matchId);
+    }
+
+    /**
+     * Player vs player instead of a bot match (-Dmtga.p2p). Host: this client's seat is built now and the client waits in its
+     * queue screen until a guest joins. Guest: connects to the host, then plays through the host's engine.
+     * Either way the client's own Match Door connection (127.0.0.1) is what it plays on.
+     */
+    private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing) {
+        String myName = System.getProperty("mtga.name", "Forge Player");
+        Peer p = peer;
+        if (p.host() != null) {
+            String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
+            forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
+            forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(myName, human, printing));
+            forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
+            System.out.println("[mtga] FD P2P host: '" + deckName + "' waits for a guest (match " + matchId + ")");
+            p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, guest -> pushMatchCreated(s, matchId, guest)));
+            return GSON.toJson(matchId);
+        }
+        forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join(p.joinHost(), p.joinPort(), p.key(), p.fingerprint(), myName, human, printing);
+        if (j.error() != null) return new Err(7000, "P2P: " + j.error());
+        forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
+        System.out.println("[mtga] FD P2P guest: '" + deckName + "' vs " + j.hostName() + " (match " + j.matchId() + ")");
+        pushMatchCreated(s, j.matchId(), j.hostName());
+        return GSON.toJson(j.matchId());
+    }
+
+    /** MatchCreated for this client: it is seat 1 on the Match Door of this process, the opponent seat 2. */
+    private void pushMatchCreated(FdSession s, String matchId, String opponentLabel) {
         JsonArray players = new JsonArray();
-        players.add(obj("ScreenName", "Forge Player", "RankingClass", "Bronze", "RankingTier", 4, "SeatId", 1, "TeamId", 1, "IsWotc", false));
-        players.add(obj("ScreenName", aiName + " (" + ai.name() + ")", "RankingClass", "Bronze", "RankingTier", 4, "SeatId", 2, "TeamId", 2, "IsWotc", false));
+        players.add(obj("ScreenName", System.getProperty("mtga.name", "Forge Player"), "RankingClass", "Bronze", "RankingTier", 4, "SeatId", 1, "TeamId", 1, "IsWotc", false));
+        players.add(obj("ScreenName", opponentLabel, "RankingClass", "Bronze", "RankingTier", 4, "SeatId", 2, "TeamId", 2, "IsWotc", false));
         JsonObject info = obj("MatchEndpointHost", matchHost, "MatchEndpointPort", matchPort, "MatchId", matchId,
                 "McFabricId", "fabric:/forge/" + matchId, "EventId", BOT_EVENT, "Battlefield", "", "MatchType", "Queue",
                 "YourSeat", 1, "ClientMetadata", obj(), "PlayerInfos", players);
@@ -330,7 +374,6 @@ public final class FrontDoor {
             Capture.log("FD push MatchCreated " + Capture.flat(push, 400));
             s.push(push);
         }, 1500, java.util.concurrent.TimeUnit.MILLISECONDS);
-        return GSON.toJson(matchId);
     }
 
     /** The deck's "Format" attribute (the deck builder's format dropdown), null if none. */

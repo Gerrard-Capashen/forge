@@ -17,26 +17,20 @@ import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
 import forge.game.Game;
 import forge.game.GameEntity;
-import forge.game.GameRules;
-import forge.game.GameType;
-import forge.game.Match;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardCollectionView;
 import forge.game.event.GameEvent;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
-import forge.game.player.RegisteredPlayer;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
 import forge.LobbyPlayer;
 import forge.mtga.net.GameBackend;
 import forge.mtga.net.MatchSession;
-import forge.player.GamePlayerUtil;
 
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,7 +39,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Predicate;
 
 /**
- * One Forge game (human = client seat 1, Forge AI = seat 2) driven through the MTGA Match Door.
+ * One human seat of a Forge game driven through the MTGA Match Door: this client is seat 1, its opponent (Forge AI or
+ * the other human's backend of the same {@link ForgeMatch}) is seat 2.
  * The Forge game runs on its own thread; the human's decisions block it until the client answers.
  */
 public final class ForgeBackend implements GameBackend {
@@ -59,19 +54,19 @@ public final class ForgeBackend implements GameBackend {
 
     private final CardDb db;
     private final AbilityMap abilities;
-    private final Map<String, Integer> humanDeck;
-    private final Map<String, Integer> aiDeck;
-    private final Map<String, Integer> grpOverrides;
+    private final ForgeMatch room;
+    private final int index;
+    private final ForgeMatch.Seat seat;
     private final String matchId;
-    private final String aiName;
 
     private volatile MatchSession session;
     private final ClientSettings settings = new ClientSettings();
     private com.wizards.mtga.gre.ProtoVersion protoVer = com.wizards.mtga.gre.ProtoVersion.forNumber(0);
     private final LinkedBlockingQueue<ClientToGREMessage> inbox = new LinkedBlockingQueue<>();
-    private Thread gameThread;
     private Game game;
-    private Player human;
+    private Player human, opponent;
+    /** The client left (set on a Netty thread). */
+    private volatile boolean disconnected;
     private StateSync sync;
     private boolean introSent, playStageSent;
     /** While Forge redraws a mulligan hand, send one diff at the next prompt instead of one per card move. */
@@ -93,28 +88,34 @@ public final class ForgeBackend implements GameBackend {
         this(db, new forge.mtga.MatchSetup(DEFAULT_MATCH_ID, humanDeck, aiDeck, Map.of(), "Forge AI"));
     }
 
+    /** A human (seat 1) against Forge's AI. */
     public ForgeBackend(CardDb db, forge.mtga.MatchSetup setup) {
+        this(db, new ForgeMatch(db, setup.matchId() == null ? DEFAULT_MATCH_ID : setup.matchId()), 0,
+                new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides()));
+        room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of()), setup.aiName() == null ? "Forge AI" : setup.aiName());
+    }
+
+    /** One human seat of {@code room}; add the other seat (a second backend or {@link ForgeMatch#addAi}) before the clients connect. */
+    public ForgeBackend(CardDb db, ForgeMatch room, int index, ForgeMatch.Seat seat) {
         this.db = db;
         this.abilities = new AbilityMap(db);
-        this.humanDeck = setup.humanDeck();
-        this.aiDeck = setup.aiDeck();
-        this.grpOverrides = setup.grpOverrides() == null ? Map.of() : setup.grpOverrides();
-        this.matchId = setup.matchId() == null ? DEFAULT_MATCH_ID : setup.matchId();
-        this.aiName = setup.aiName() == null ? "Forge AI" : setup.aiName();
+        this.room = room;
+        this.index = index;
+        this.seat = seat;
+        this.matchId = room.matchId();
+        room.addHuman(index, this, seat);
     }
 
     // ---- transport callbacks (Netty threads) --------------------------------------------------------------------
 
     @Override
     public synchronized void onConnect(MatchSession s, ClientToGREMessage connectReq) {
-        if (gameThread != null) return;       // reconnects are not supported yet
+        if (session != null) return;       // reconnects are not supported yet
         session = s;
         protoVer = connectReq.getConnectReq().getProtoVer();
         settings.merge(connectReq.getConnectReq().getDefaultSettings());
         System.out.println("[mtga] default settings: " + settings);
-        gameThread = new Thread(this::runGame, "forge-game");
-        gameThread.setDaemon(true);
-        gameThread.start();
+        room.ready(this);
     }
 
     @Override
@@ -143,52 +144,32 @@ public final class ForgeBackend implements GameBackend {
 
     @Override
     public void onDisconnect(MatchSession s) {
+        disconnected = true;
         inbox.add(POISON);
+        room.seatLeft(this);
     }
+
+    /** The other seat's client left: a pending decision here must end too. */
+    void wake() { inbox.add(POISON); }
+
+    LobbyPlayer newLobbyPlayer() { return new MtgaLobbyPlayer(seat.name()); }
 
     // ---- game thread -------------------------------------------------------------------------------------------
 
-    private void runGame() {
-        try {
-            forge.deck.Deck d1 = ForgeSmoke.deck("You", humanDeck);
-            forge.deck.Deck d2 = ForgeSmoke.deck("Opponent", aiDeck);
-            GameRules rules = new GameRules(GameType.Constructed);
-            rules.setAppliedVariants(EnumSet.of(GameType.Constructed));
-            List<RegisteredPlayer> players = new ArrayList<>();
-            RegisteredPlayer rp1 = new RegisteredPlayer(d1);
-            rp1.setPlayer(new MtgaLobbyPlayer("Forge Player"));
-            players.add(rp1);
-            RegisteredPlayer rp2 = new RegisteredPlayer(d2);
-            rp2.setPlayer(GamePlayerUtil.createAiPlayer(aiName, 1, ""));
-            players.add(rp2);
-
-            Map<String, Integer> grpByName = new HashMap<>();
-            for (String n : humanDeck.keySet()) grpByName.put(n, db.grpId(n));
-            for (String n : aiDeck.keySet()) grpByName.put(n, db.grpId(n));
-            grpByName.putAll(grpOverrides);     // the printings the player chose in the deck builder
-
-            Match match = new Match(rules, players, "MTGA");
-            game = match.createGame();
-            settings.setTurnSupplier(() -> Math.max(0, game.getPhaseHandler().getTurn()));      // the client's TurnInfo.turnNumber
-            human = game.getPlayers().get(0);
-            Player ai = game.getPlayers().get(1);
-            sync = new StateSync(game, human, ai, db, grpByName, matchId);
-            sync.setAbilityResolver(sa -> {
-                Card host = sa == null ? null : StateSync.visibleSource(sa.getHostCard());
-                return host == null ? 0 : abilities.abilityId(sa, grp(host));
-            });
-            game.subscribeToEvents(new Object() {
-                @Subscribe public void on(GameEvent ev) { onGameEvent(ev); }
-            });
-            game.setNoGUIUser();
-            match.startGame(game);
-            System.out.println("[mtga] game over");
-            sendGameOver();
-        } catch (Throwable t) {
-            if (t instanceof InterruptedException || t.getCause() instanceof InterruptedException) return;
-            System.out.println("[mtga] game thread died: " + t);
-            t.printStackTrace(System.out);
-        }
+    /** The shared game exists (game thread, before it starts): this seat plays {@code me} against {@code opp}. */
+    void bind(Game g, Player me, Player opp, Map<String, Integer> grpByName) {
+        game = g;
+        human = me;
+        opponent = opp;
+        settings.setTurnSupplier(() -> Math.max(0, game.getPhaseHandler().getTurn()));      // the client's TurnInfo.turnNumber
+        sync = new StateSync(game, human, opponent, db, grpByName, matchId);
+        sync.setAbilityResolver(sa -> {
+            Card host = sa == null ? null : StateSync.visibleSource(sa.getHostCard());
+            return host == null ? 0 : abilities.abilityId(sa, grp(host));
+        });
+        game.subscribeToEvents(new Object() {
+            @Subscribe public void on(GameEvent ev) { onGameEvent(ev); }
+        });
     }
 
     private int grp(Card c) { return sync != null ? sync.grpIdOf(c) : db.grpId(c.getName()); }
@@ -203,10 +184,21 @@ public final class ForgeBackend implements GameBackend {
 
     private int iid(Card c) { return sync.iid(c); }
 
-    private void sendGameOver() {
+    void sendGameOver() {
         boolean draw = game.getOutcome().isDraw();
-        boolean humanWon = !draw && game.getOutcome().getWinningLobbyPlayer() instanceof MtgaLobbyPlayer;
-        int winningTeam = draw ? 0 : humanWon ? StateSync.HUMAN_SEAT : StateSync.AI_SEAT;
+        boolean humanWon = !draw && game.getOutcome().getWinningLobbyPlayer() == human.getLobbyPlayer();
+        sendMatchResult(draw ? 0 : humanWon ? StateSync.HUMAN_SEAT : StateSync.AI_SEAT, true);
+    }
+
+    /** The game thread died: when the opponent's client left, this seat wins by forfeit; otherwise nothing more can be sent. */
+    void matchAborted() {
+        if (disconnected || session == null || sync == null || !introSent) return;
+        boolean opponentLeft = room.opponentLeft(this);
+        if (opponentLeft) sendMatchResult(StateSync.HUMAN_SEAT, false);
+    }
+
+    private void sendMatchResult(int winningTeam, boolean withStateDiff) {
+        boolean draw = winningTeam == 0;
         List<com.wizards.mtga.gre.ResultSpec> results = new ArrayList<>();
         for (com.wizards.mtga.gre.MatchScope scope : List.of(com.wizards.mtga.gre.MatchScope.MatchScope_Game, com.wizards.mtga.gre.MatchScope.MatchScope_Match)) {
             results.add(com.wizards.mtga.gre.ResultSpec.newBuilder().setScope(scope)
@@ -214,10 +206,11 @@ public final class ForgeBackend implements GameBackend {
                     .setWinningTeamId(winningTeam).setReason(com.wizards.mtga.gre.ResultReason.ResultReason_Game).build());
         }
         sync.setResults(results);
-        GameStateMessage.Builder d = sync.diff(false);
+        GameStateMessage.Builder d = withStateDiff ? sync.diff(false) : sync.diff(false, true);
         GREToClientMessage.Builder inter = req(GREMessageType.GREMessageType_IntermissionReq);
         inter.getIntermissionReqBuilder().setResult(results.get(0));
-        session.sendGre(gameState(d), inter);
+        if (d != null) session.sendGre(gameState(d), inter);
+        else session.sendGre(inter);
 
         com.wizards.mtga.gre.MatchServiceToClientMessage.Builder out = com.wizards.mtga.gre.MatchServiceToClientMessage.newBuilder();
         com.wizards.mtga.gre.MatchGameRoomInfo.Builder info = out.getMatchGameRoomStateChangedEventBuilder().getGameRoomInfoBuilder();
@@ -241,7 +234,7 @@ public final class ForgeBackend implements GameBackend {
         GameStateMessage.Builder d = sync.diff(false, false);
         if (d == null) return;
         session.sendGre(gameState(d));
-        if (STEP_DELAY_MS > 0 && hasStepChange(d)) {
+        if (STEP_DELAY_MS > 0 && index == 0 && hasStepChange(d)) {
             // Forge runs steps without pause when nobody stops; give the client's phase ladder time to show each step.
             try { Thread.sleep(STEP_DELAY_MS); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
         }
@@ -345,17 +338,8 @@ public final class ForgeBackend implements GameBackend {
         sync.setMulliganCount(human, mulligans);
         if (!introSent) {
             if (System.getProperty("mtga.rig") != null) rigHand(human);
-            GREToClientMessage.Builder connect = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_ConnectResp)
-                    .addSystemSeatIds(StateSync.HUMAN_SEAT);
-            connect.getConnectRespBuilder().setStatus(ConnectionStatus.ConnectionStatus_Success).setProtoVer(protoVer).setSettings(settings.toMessage());
-            for (Card c : human.getCardsIn(List.of(ZoneType.Hand, ZoneType.Library))) {
-                connect.getConnectRespBuilder().getDeckMessageBuilder().addDeckCards(db.grpId(c.getName()));
-            }
-            sync.setDecisionPlayer(human);
-            session.sendGre(connect, gameState(sync.full(StateSync.DEFAULT_INFO)), mulliganReq());
-            session.sendRoomState(MatchGameRoomStateType.MatchGameRoomStateType_Playing, matchId);
-            introSent = true;
-            batching = true;       // mulligan stage: one diff per prompt (the opponent's mulligans included), like the real GRE
+            room.introduceOthers(this);      // a second human gets its ConnectResp + opening state while this seat decides
+            sendIntro(true);
         } else {
             batching = false;
             sync.setDecisionPlayer(human);
@@ -384,6 +368,25 @@ public final class ForgeBackend implements GameBackend {
         }
         return true;
     }
+
+    /** ConnectResp + the opening state (+ the mulligan question when this seat decides first). Game thread only. */
+    void sendIntro(boolean withMulliganReq) {
+        if (introSent) return;
+        GREToClientMessage.Builder connect = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_ConnectResp)
+                .addSystemSeatIds(StateSync.HUMAN_SEAT);
+        connect.getConnectRespBuilder().setStatus(ConnectionStatus.ConnectionStatus_Success).setProtoVer(protoVer).setSettings(settings.toMessage());
+        for (Card c : human.getCardsIn(List.of(ZoneType.Hand, ZoneType.Library))) {
+            connect.getConnectRespBuilder().getDeckMessageBuilder().addDeckCards(db.grpId(c.getName()));
+        }
+        sync.setDecisionPlayer(withMulliganReq ? human : null);
+        if (withMulliganReq) session.sendGre(connect, gameState(sync.full(StateSync.DEFAULT_INFO)), mulliganReq());
+        else session.sendGre(connect, gameState(sync.full(StateSync.DEFAULT_INFO)));
+        session.sendRoomState(MatchGameRoomStateType.MatchGameRoomStateType_Playing, matchId);
+        introSent = true;
+        batching = true;       // mulligan stage: one diff per prompt (the opponent's mulligans included), like the real GRE
+    }
+
+    boolean isDisconnected() { return disconnected; }
 
     private GREToClientMessage.Builder mulliganReq() {
         GREToClientMessage.Builder m = req(GREMessageType.GREMessageType_MulliganReq);
@@ -427,7 +430,7 @@ public final class ForgeBackend implements GameBackend {
                                                                  // the AI's Grizzly Bears in play (a target for the cast trigger)
             List<String> mine = new ArrayList<>(java.util.Collections.nCopies(7, "Wastes"));
             mine.add("Devourer of Destiny");
-            Player ai = game.getPlayers().get(1);
+            Player ai = opponent;
             for (String name : mine) {
                 Card pick = null;
                 for (Card c : p.getCardsIn(ZoneType.Library)) {
@@ -589,7 +592,7 @@ public final class ForgeBackend implements GameBackend {
         }
         boolean bolt = "bolt".equals(rig);
         String land = bolt ? "Mountain" : "Forest";
-        if ("bf".equals(rig)) game.getPlayers().get(1).setLife(2, null);      // one Bears hit ends the game
+        if ("bf".equals(rig)) opponent.setLife(2, null);      // one Bears hit ends the game
         if ("bf".equals(rig) || bolt) {      // two untapped lands already in play
             for (int i = 0; i < 2; i++) {
                 Card f = null;
@@ -1753,7 +1756,7 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public Player chooseStartingPlayer(boolean isFirstGame) {
-            if ("block".equals(System.getProperty("mtga.rig"))) return game.getPlayers().get(1);      // test rig: let the AI attack first
+            if ("block".equals(System.getProperty("mtga.rig"))) return opponent;      // test rig: let the AI attack first
             if ("playtest".equals(System.getProperty("mtga.deck"))) return player;      // solo sandbox: you start
             return super.chooseStartingPlayer(isFirstGame);
         }
