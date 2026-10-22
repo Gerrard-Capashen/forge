@@ -33,6 +33,9 @@ public final class ForgeFormats {
     public record Spec(String name, String forgeFormat, int mainMin, int mainMax, int sideMax, int commandMin, int commandMax,
                        boolean singleton, boolean rebalanced) { }
 
+    /** Deck rules of the draft events (EventUXInfo.DeckSelectFormat): 40 cards from the pool; not a constructed format, so not in the format lists. */
+    public static final String LIMITED = "Limited";
+
     /** Client format order (ConstructedSortOrder): the first one is the client's default format. */
     public static final List<Spec> SPECS = List.of(
             new Spec("Standard", "Standard", 60, 250, 15, 0, 0, false, false),
@@ -44,7 +47,8 @@ public final class ForgeFormats {
             new Spec("Commander", "Commander", 99, 99, 1, 1, 2, true, false),
             new Spec("Historic", "Historic", 60, 250, 15, 0, 0, false, true),
             new Spec("Alchemy", null, 60, 250, 15, 0, 0, false, true),
-            new Spec("Timeless", null, 60, 250, 15, 0, 0, false, false));
+            new Spec("Timeless", null, 60, 250, 15, 0, 0, false, false),
+            new Spec(LIMITED, null, 40, 250, 250, 0, 0, false, false));
 
     /** Format of the bot-match event: every deck is valid there, the AI deck follows the deck's own format. */
     public static final String ANY = "Timeless";
@@ -113,7 +117,7 @@ public final class ForgeFormats {
                     .addLegalSets("FORGE_" + s.name().toUpperCase())
                     .addAllFilterSets(filterSets)
                     .addAllAllowedTitleIds(allowed)
-                    .setFormatTypeInternal(3)   // EFormatType.Constructed
+                    .setFormatTypeInternal(LIMITED.equals(s.name()) ? 1 : 3)   // EFormatType.Draft : Constructed
                     .setMainDeckQuota(Quota.newBuilder().setMin(s.mainMin()).setMax(s.mainMax()))
                     .setSideBoardQuota(Quota.newBuilder().setMin(0).setMax(s.sideMax()))
                     .setUseRebalancedCards(s.rebalanced());
@@ -134,7 +138,7 @@ public final class ForgeFormats {
                 }
             }
             b.addFormats(f);
-            order.add(s.name());
+            if (!LIMITED.equals(s.name())) order.add(s.name());
             System.out.println("[mtga] FD format " + s.name() + ": " + names.size() + " legal cards (" + allowed.size() + " titles), "
                     + banned + " banned, " + restricted + " restricted, " + filterSets.size() + " Arena sets");
         }

@@ -27,6 +27,7 @@ public final class ArtServer {
     private final int port;
     private final Map<Integer, CardDb.ArtRef> refs;
     private final ArtFetcher fetcher = new ArtFetcher();
+    private final MtgPicsArt mtgpics = new MtgPicsArt();
 
     public ArtServer(CardDb db, int port) throws Exception {
         this.port = port;
@@ -36,6 +37,7 @@ public final class ArtServer {
     public void start() throws Exception {
         HttpServer http = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 16);
         http.createContext("/art/", this::handle);
+        http.createContext("/event/", this::handleEvent);
         http.setExecutor(Executors.newCachedThreadPool(r -> {
             Thread t = new Thread(r, "art-http");
             t.setDaemon(true);
@@ -73,6 +75,125 @@ public final class ArtServer {
         } catch (Exception e) {
             System.err.println("[art] request failed: " + e);
         }
+    }
+
+    private final Map<String, byte[]> eventArt = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** {@code GET /event/<SET>}: a 640x360 JPEG crop of a showcase card (a mythic, else a rare) of a Forge set, for its quick draft event. */
+    private void handleEvent(HttpExchange ex) {
+        try (ex) {
+            String set = ex.getRequestURI().getPath().substring("/event/".length());
+            byte[] bytes = set.matches("[A-Za-z0-9]{2,8}(-bg)?") ? eventArt.computeIfAbsent(set.toUpperCase(), this::buildEventArt) : null;
+            if (bytes == null || bytes.length == 0) {
+                System.out.println("[mtga] event art " + set + " not available (404)");
+                ex.sendResponseHeaders(404, -1);
+                return;
+            }
+            ex.getResponseHeaders().set("Content-Type", "image/jpeg");
+            ex.sendResponseHeaders(200, bytes.length);
+            System.out.println("[mtga] event art " + set + " served (" + bytes.length + " bytes)");
+            try (OutputStream out = ex.getResponseBody()) {
+                out.write(bytes);
+            }
+        } catch (Exception e) {
+            System.err.println("[art] event request failed: " + e);
+        }
+    }
+
+    private byte[] buildEventArt(String key) {
+        boolean background = key.endsWith("-BG");
+        String set = background ? key.substring(0, key.length() - 3) : key;
+        try {
+            // the page background: a large illustration from the mtgpics gallery (full-page quality); tiles use the Scryfall crop
+            if (background) {
+                java.awt.image.BufferedImage big = mtgpics.image(set);
+                if (big != null) return cover(big, 1920, 1080, 0.18);
+                return new byte[0];   // no usable large art: the client keeps its own default background
+            }
+            forge.card.CardEdition ed = StaticData.instance().getEditions().get(set);
+            if (ed == null) return new byte[0];
+            var cards = StaticData.instance().getCommonCards();
+            java.util.List<PaperCard> mythics = new java.util.ArrayList<>(), rares = new java.util.ArrayList<>();
+            for (forge.card.CardEdition.EditionEntry e : ed.getAllCardsInSet()) {
+                if (e.rarity() != forge.card.CardRarity.MythicRare && e.rarity() != forge.card.CardRarity.Rare) continue;
+                PaperCard pc = cards.getCard(e.name(), ed.getCode());
+                if (pc == null) continue;
+                (e.rarity() == forge.card.CardRarity.MythicRare ? mythics : rares).add(pc);
+            }
+            java.util.List<PaperCard> pool = mythics.isEmpty() ? rares : mythics;
+            if (pool.isEmpty()) return new byte[0];
+            // stable choice per set, falling back through the list when a download fails
+            int start = Math.floorMod(set.hashCode(), pool.size());
+            for (int i = 0; i < Math.min(pool.size(), 4); i++) {
+                PaperCard pc = pool.get((start + i) % pool.size());
+                File file;
+                try {
+                    file = fetcher.artCrop(pc, false).get(WAIT_SECONDS, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    System.err.println("[art] event " + set + " (" + pc + "): " + e);
+                    continue;
+                }
+                if (file == null || !file.isFile()) continue;
+                java.awt.image.BufferedImage src = javax.imageio.ImageIO.read(file);
+                if (src == null) continue;
+                System.out.println("[mtga] event art " + set + ": " + pc.getName());
+                return background ? backdrop(src, 1920, 1080) : cover(src, 640, 360, 0);
+            }
+        } catch (Exception e) {
+            System.err.println("[art] event art " + set + ": " + e);
+        }
+        return new byte[0];
+    }
+
+    /** Full-page background from a low-resolution art crop: the whole art stretched over the frame (cover), blurred and slightly darkened. */
+    private static byte[] backdrop(java.awt.image.BufferedImage src, int w, int h) throws java.io.IOException {
+        // blur: shrink, then stretch back to the full frame with smooth interpolation
+        int sw = 128, sh = Math.max(1, Math.round(sw * src.getHeight() / (float) src.getWidth()));
+        java.awt.image.BufferedImage small = new java.awt.image.BufferedImage(sw, sh, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D sg = small.createGraphics();
+        sg.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        sg.drawImage(src, 0, 0, sw, sh, null);
+        sg.dispose();
+        java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = out.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        double scale = Math.max(w / (double) sw, h / (double) sh);
+        int bw = (int) Math.ceil(sw * scale), bh = (int) Math.ceil(sh * scale);
+        g.drawImage(small, (w - bw) / 2, (h - bh) / 2, bw, bh, null);
+        g.setColor(new java.awt.Color(0, 0, 0, 70));
+        g.fillRect(0, 0, w, h);
+        g.dispose();
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(out, "jpg", bos);
+        return bos.toByteArray();
+    }
+
+    /** Scale to cover w x h and center-crop, as JPEG. */
+    private static byte[] cover(java.awt.image.BufferedImage src, int w, int h, double darken) throws java.io.IOException {
+        double scale = Math.max(w / (double) src.getWidth(), h / (double) src.getHeight());
+        int sw = (int) Math.ceil(src.getWidth() * scale), sh = (int) Math.ceil(src.getHeight() * scale);
+        java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = out.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        // large originals: halve in steps first so the final scale stays smooth
+        java.awt.image.BufferedImage from = src;
+        while (from.getWidth() / 2 >= sw && from.getHeight() / 2 >= sh) {
+            java.awt.image.BufferedImage half = new java.awt.image.BufferedImage(from.getWidth() / 2, from.getHeight() / 2, java.awt.image.BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D hg = half.createGraphics();
+            hg.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            hg.drawImage(from, 0, 0, half.getWidth(), half.getHeight(), null);
+            hg.dispose();
+            from = half;
+        }
+        g.drawImage(from, (w - sw) / 2, (h - sh) / 2, sw, sh, null);
+        if (darken > 0) {
+            g.setColor(new java.awt.Color(0, 0, 0, (int) Math.round(darken * 255)));
+            g.fillRect(0, 0, w, h);
+        }
+        g.dispose();
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(out, "jpg", bos);
+        return bos.toByteArray();
     }
 
     /** The exact printing the card DB row names (Forge set + collector number), else any printing of that set. */

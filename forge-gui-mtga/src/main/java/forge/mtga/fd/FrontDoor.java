@@ -42,6 +42,7 @@ public final class FrontDoor {
 
     private final CardDb db;
     private final DeckStore decks;
+    private final DraftEvents events;
     private final File prefsFile;
     private final Map<String, Handler> handlers = new HashMap<>();
     private final Map<String, String> prefs = new TreeMap<>();
@@ -52,6 +53,7 @@ public final class FrontDoor {
     public FrontDoor(CardDb db, File dataDir) {
         this.db = db;
         this.decks = new DeckStore(new File(dataDir, "decks"));
+        this.events = new DraftEvents(db, dataDir);
         this.prefsFile = new File(dataDir, "preferences.json");
         loadPrefs();
         seedStarterDecks(dataDir);
@@ -207,10 +209,20 @@ public final class FrontDoor {
             JsonArray bots = new JsonArray();
             bots.add(botEvent(BOT_EVENT, ForgeFormats.ANY, 100));
             bots.add(botEvent(BOT_EVENT + "_Rebalanced", "Alchemy", 99));
-            return obj("DynamicFilterTags", new JsonArray(), "CacheVersion", 1, "Events", new JsonArray(),
+            return obj("DynamicFilterTags", new JsonArray(), "CacheVersion", 1, "Events", events.eventInfos(),
                     "Challenges", null, "AiBotMatches", bots);
         });
-        on("EventGetCoursesV2", (s, r) -> obj("Courses", new JsonArray()));
+        on("EventGetCoursesV2", (s, r) -> obj("Courses", events.courseList()));
+
+        // ---- quick drafts: one event per Forge set, bot pod run by Forge (see DraftEvents) ----
+        on("EventJoin", (s, r) -> events.join(r.obj()));
+        on("BotDraftStartDraft", (s, r) -> events.startDraft(r.obj()));
+        on("BotDraftDraftStatus", (s, r) -> events.draftStatus(r.obj()));
+        on("BotDraftDraftPick", (s, r) -> events.draftPick(r.obj()));
+        on("EventSetDeckV3", (s, r) -> events.setDeck(r.obj()));
+        on("EventDrop", (s, r) -> events.drop(r.obj(), true));
+        on("EventResign", (s, r) -> events.drop(r.obj(), false));
+        on("EventEnterPairing", (s, r) -> startEventMatch(s, str(r.obj(), "EventName")));
         on("EventAiBotMatch", (s, r) -> startBotMatch(s, r.obj()));
         on("EventLeavePairing", (s, r) -> {      // the client left the "waiting for a match" screen
             Peer p = peer;
@@ -218,7 +230,7 @@ public final class FrontDoor {
             return GSON.toJson("Success");
         });
         // after a match: no rewards/rank/quests offline, just "found" so the end screen continues to the home page
-        on("EventGetMatchResultReport", (s, r) -> obj("CurrentModule", "Complete", "FoundMatch", true, "InventoryInfo", null,
+        on("EventGetMatchResultReport", (s, r) -> obj("CurrentModule", lastEvent != null ? events.module(lastEvent) : "Complete", "FoundMatch", true, "InventoryInfo", null,
                 "questUpdates", new JsonArray(), "rankUpdates", null, "mythicRatingUpdates", null, "periodicRewardsProgress", null));
 
         // ---- neutral answers so the home page has no errors (no store, quests, rank, rewards, social offline) ----
@@ -277,6 +289,8 @@ public final class FrontDoor {
         return t;
     });
     private int matchCounter;
+    /** Draft event of the last match started, for the end-of-match report. */
+    private volatile String lastEvent;
     /** Match Door endpoint announced in MatchCreated (the Java Match Door, same process). */
     private String matchHost = "127.0.0.1";
     private int matchPort = 30003;
@@ -301,12 +315,26 @@ public final class FrontDoor {
         String deckId = str(req, "deckId");
         JsonObject stored = deckId == null ? null : decks.get(deckId);
         if (stored == null) return new Err(7000, "deck " + deckId + " not found");
-        String deckName = str(stored.getAsJsonObject("Summary"), "Name");
+        return startMatch(s, stored.getAsJsonObject("Summary"), stored.getAsJsonObject("Deck"), null, BOT_EVENT);
+    }
+
+    /** EventEnterPairing for a draft event: play the course's deck against one of the bots' drafted decks. */
+    private Object startEventMatch(FdSession s, String eventName) {
+        JsonObject course = DraftEvents.isDraftEvent(eventName) ? events.course(eventName) : null;
+        if (course == null || !course.has("CourseDeck") || !course.get("CourseDeck").isJsonObject()) return new Err(7000, "no deck for event " + eventName);
+        Map<String, Integer> bot = events.botDeck(eventName);
+        forge.mtga.AiDecks.Choice ai = bot == null ? null : new forge.mtga.AiDecks.Choice("draft bot", bot);
+        return startMatch(s, course.getAsJsonObject("CourseDeckSummary"), course.getAsJsonObject("CourseDeck"), ai, eventName);
+    }
+
+    /** Match for a deck in client JSON: {@code aiOverride} null = AI deck chosen from the deck's format. */
+    private Object startMatch(FdSession s, JsonObject summary, JsonObject deck, forge.mtga.AiDecks.Choice aiOverride, String eventId) {
+        String deckName = str(summary, "Name");
 
         Map<String, Integer> human = new LinkedHashMap<>();
         Map<String, Integer> printing = new HashMap<>();
         java.util.List<String> unknown = new java.util.ArrayList<>();
-        JsonArray main = stored.getAsJsonObject("Deck").getAsJsonArray("MainDeck");
+        JsonArray main = deck.getAsJsonArray("MainDeck");
         if (main != null) {
             for (JsonElement e : main) {
                 JsonObject c = e.getAsJsonObject();
@@ -324,15 +352,18 @@ public final class FrontDoor {
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
 
         if (peer != null) return startPeerMatch(s, deckName, human, printing);
-        forge.mtga.AiDecks.Choice ai = aiDeck(deckFormat(stored.getAsJsonObject("Summary")));
+        forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(deckFormat(summary));
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
         String aiName = "Forge AI";
-        forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName));
+        boolean event = DraftEvents.isDraftEvent(eventId);
+        lastEvent = event ? eventId : null;
+        forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName, null,
+                event ? won -> events.recordResult(eventId, won) : null));
         int total = human.values().stream().mapToInt(Integer::intValue).sum();
-        System.out.println("[mtga] FD bot match " + matchId + ": '" + deckName + "' (" + total + " cards) vs AI precon '" + ai.name() + "'");
+        System.out.println("[mtga] FD bot match " + matchId + " (" + eventId + "): '" + deckName + "' (" + total + " cards) vs AI deck '" + ai.name() + "'");
         Capture.log("FD bot match " + matchId + " deck '" + deckName + "' vs '" + ai.name() + "'");
 
-        pushMatchCreated(s, matchId, aiName + " (" + ai.name() + ")");
+        pushMatchCreated(s, matchId, aiName + " (" + ai.name() + ")", eventId);
         return GSON.toJson(matchId);
     }
 
@@ -362,12 +393,14 @@ public final class FrontDoor {
     }
 
     /** MatchCreated for this client: it is seat 1 on the Match Door of this process, the opponent seat 2. */
-    private void pushMatchCreated(FdSession s, String matchId, String opponentLabel) {
+    private void pushMatchCreated(FdSession s, String matchId, String opponentLabel) { pushMatchCreated(s, matchId, opponentLabel, BOT_EVENT); }
+
+    private void pushMatchCreated(FdSession s, String matchId, String opponentLabel, String eventId) {
         JsonArray players = new JsonArray();
         players.add(obj("ScreenName", System.getProperty("mtga.name", "Forge Player"), "RankingClass", "Bronze", "RankingTier", 4, "SeatId", 1, "TeamId", 1, "IsWotc", false));
         players.add(obj("ScreenName", opponentLabel, "RankingClass", "Bronze", "RankingTier", 4, "SeatId", 2, "TeamId", 2, "IsWotc", false));
         JsonObject info = obj("MatchEndpointHost", matchHost, "MatchEndpointPort", matchPort, "MatchId", matchId,
-                "McFabricId", "fabric:/forge/" + matchId, "EventId", BOT_EVENT, "Battlefield", "", "MatchType", "Queue",
+                "McFabricId", "fabric:/forge/" + matchId, "EventId", eventId, "Battlefield", "", "MatchType", "Queue",
                 "YourSeat", 1, "ClientMetadata", obj(), "PlayerInfos", players);
         String push = obj("Type", "MatchCreated", "MatchInfoV4", info).toString();
         LATER.schedule(() -> {

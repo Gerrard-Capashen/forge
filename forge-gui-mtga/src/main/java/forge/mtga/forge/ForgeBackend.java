@@ -93,7 +93,11 @@ public final class ForgeBackend implements GameBackend {
         this(db, new ForgeMatch(db, setup.matchId() == null ? DEFAULT_MATCH_ID : setup.matchId()), 0,
                 new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides()));
         room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of()), setup.aiName() == null ? "Forge AI" : setup.aiName());
+        this.onResult = setup.onResult();
     }
+
+    /** Told once whether the human won the game (event matches count wins and losses). */
+    private java.util.function.Consumer<Boolean> onResult;
 
     /** One human seat of {@code room}; add the other seat (a second backend or {@link ForgeMatch#addAi}) before the clients connect. */
     public ForgeBackend(CardDb db, ForgeMatch room, int index, ForgeMatch.Seat seat) {
@@ -188,6 +192,9 @@ public final class ForgeBackend implements GameBackend {
         boolean draw = game.getOutcome().isDraw();
         boolean humanWon = !draw && game.getOutcome().getWinningLobbyPlayer() == human.getLobbyPlayer();
         sendMatchResult(draw ? 0 : humanWon ? StateSync.HUMAN_SEAT : StateSync.AI_SEAT, true);
+        java.util.function.Consumer<Boolean> cb = onResult;
+        onResult = null;
+        if (cb != null && !draw) cb.accept(humanWon);
     }
 
     /** The game thread died: when the opponent's client left, this seat wins by forfeit; otherwise nothing more can be sent. */

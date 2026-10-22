@@ -9,7 +9,14 @@ import java.util.Map;
  * when a match is created; the Match Door picks up the latest (rig/duel mode uses the hard-coded decks instead).
  */
 public record MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
-                         Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat) {
+                         Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
+                         java.util.function.Consumer<Boolean> onResult) {
+    /** Without a result callback. */
+    public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
+                      Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat) {
+        this(matchId, humanDeck, aiDeck, grpOverrides, aiName, seat, null);
+    }
+
     /** A match against Forge's AI: the Match Door builds the backend from these decks. */
     public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
                       Map<String, Integer> grpOverrides, String aiName) {
