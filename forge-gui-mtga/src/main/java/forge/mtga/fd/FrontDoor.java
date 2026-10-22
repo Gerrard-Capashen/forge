@@ -136,7 +136,7 @@ public final class FrontDoor {
                 "UnreleasedSets", new JsonArray()));
         on("GetKillSwitchData", (s, r) -> {
             JsonObject ks = new JsonObject();
-            for (String k : KILL_SWITCHES) ks.addProperty(k, true);
+            for (String k : KILL_SWITCHES) ks.addProperty(k, killSwitch(k));
             return obj("KillSwitches", ks, "UxKillSwitches", ks.deepCopy());
         });
         on("EventGetActiveMatches", (s, r) -> obj("MatchesV3", new JsonArray()));
@@ -797,8 +797,16 @@ public final class FrontDoor {
 
     private static Map<String, Boolean> killSwitchMap() {
         Map<String, Boolean> m = new LinkedHashMap<>();
-        for (String k : KILL_SWITCHES) m.put(k, true);
+        for (String k : KILL_SWITCHES) m.put(k, killSwitch(k));
         return m;
+    }
+
+    /** The client's friends / chat / challenge screens: on (switch false) only with -Dmtga.social=spike (stage 2 spike, docs/online-identity-friends.md). */
+    private static final java.util.Set<String> SOCIAL_SWITCHES = java.util.Set.of("HasbroGoAddRemoveFriends", "SocialBladeStatus",
+            "SocialChallengeStatus", "SocialGatheringStatus", "SocialChatStatus");   // SocialBladeV2Status stays off: the client then builds its classic SocialUI (V2 loads another scene)
+
+    private static boolean killSwitch(String name) {
+        return !("spike".equals(System.getProperty("mtga.social")) && SOCIAL_SWITCHES.contains(name));
     }
 
     // ---- StartHook ----------------------------------------------------------------------------------------------
