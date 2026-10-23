@@ -497,6 +497,16 @@ public final class ForgeBackend implements GameBackend {
         }
         for (Card c : new ArrayList<>(p.getCardsIn(ZoneType.Hand))) game.getAction().moveToLibrary(c, -1, null);
         String rig = System.getProperty("mtga.rig");
+        if ("color".equals(rig)) {      // Room of Refuge alone in hand: playing it asks for a color
+            for (Card c : p.getCardsIn(ZoneType.Library)) {
+                if (c.getName().equals("Room of Refuge")) {
+                    game.getAction().moveToHand(c, null);
+                    System.out.println("[mtga] rig: Room of Refuge instance " + iid(c));
+                    break;
+                }
+            }
+            return;
+        }
         if ("pt".equals(rig) || "ptk".equals(rig)) {      // playtest deck: Island + Mountain in play (ptk: 5 lands, kicker); shockland, Wilds, Brainstorm, Elves, Bonecrusher, Burst Lightning in hand
             List<String> names = new ArrayList<>(List.of("Island", "Mountain", "Breeding Pool", "Evolving Wilds", "Brainstorm", "Llanowar Elves", "Bonecrusher Giant", "Burst Lightning"));
             if ("ptk".equals(rig)) {
@@ -883,6 +893,45 @@ public final class ForgeBackend implements GameBackend {
             if (sub != null) out.add(sub);
         }
         return out;
+    }
+
+    /** The client's "Choose a color." prompt (Prompts table). */
+    private static final int PROMPT_CHOOSE_COLOR = 118;
+
+    /**
+     * "Choose a color" (Room of Refuge, Thriving lands, Painter's Servant...): the client's color picker, a SelectNReq over the
+     * static Colors list (always StaticSubset with the allowed CardColor values: plain Static shows Colorless as well), answered with CardColor values (Colorless 0,
+     * White 1 .. Green 5). Returns Forge color masks (MagicColor.WHITE..., COLORLESS); empty if cancelled.
+     */
+    List<Byte> askColors(Card source, forge.card.ColorSet options, boolean colorless, int min, int max) {
+        List<Byte> allowed = new ArrayList<>();
+        for (byte c : forge.card.MagicColor.WUBRG) if (options.hasAnyColor(c)) allowed.add(c);
+        if (colorless) allowed.add(forge.card.MagicColor.COLORLESS);
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(min).setMaxSel(max)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_StaticSubset)   // Static would offer Colorless too
+                .setStaticList(com.wizards.mtga.gre.StaticList.StaticList_Colors);
+        if (source != null) sn.setSourceId(iid(source));
+        for (byte c : allowed) sn.addIds(cardColor(c));
+        sn.getPromptBuilder().setPromptId(PROMPT_CHOOSE_COLOR);
+        req.getPromptBuilder().setPromptId(PROMPT_CHOOSE_COLOR);
+        System.out.println("[mtga] asking color " + min + ".." + max + " of " + sn.getIdsList() + " for " + source);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        List<Byte> out = new ArrayList<>();
+        if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp) return out;
+        for (int id : r.getSelectNResp().getIdsList()) {
+            for (byte c : allowed) if (cardColor(c) == id && !out.contains(c)) out.add(c);
+        }
+        System.out.println("[mtga] client chose color " + r.getSelectNResp().getIdsList());
+        return out;
+    }
+
+    /** GRE CardColor value of a Forge color mask (Colorless 0, White 1, Blue 2, Black 3, Red 4, Green 5). */
+    private static int cardColor(byte mask) {
+        for (int i = 0; i < forge.card.MagicColor.WUBRG.length; i++) if (forge.card.MagicColor.WUBRG[i] == mask) return i + 1;
+        return 0;
     }
 
     private static double textOverlap(String a, String b, String cardName) {
@@ -2007,6 +2056,30 @@ public final class ForgeBackend implements GameBackend {
             if (!live() || allowRepeat) return super.chooseModeForAbility(sa, possible, min, num, allowRepeat);
             List<AbilitySub> chosen = askModes(sa, possible, min, num);
             return chosen == null ? super.chooseModeForAbility(sa, possible, min, num, allowRepeat) : chosen;
+        }
+
+        @Override
+        public byte chooseColor(String message, SpellAbility sa, forge.card.ColorSet colors) {
+            if (!live() || colors.countColors() < 2) return super.chooseColor(message, sa, colors);
+            List<Byte> c = askColors(sa == null ? null : sa.getHostCard(), colors, false, 1, 1);
+            return c.isEmpty() ? super.chooseColor(message, sa, colors) : c.get(0);
+        }
+
+        @Override
+        public byte chooseColorAllowColorless(String message, Card card, forge.card.ColorSet colors) {
+            if (!live()) return super.chooseColorAllowColorless(message, card, colors);
+            List<Byte> c = askColors(card, colors, true, 1, 1);
+            return c.isEmpty() ? super.chooseColorAllowColorless(message, card, colors) : c.get(0);
+        }
+
+        @Override
+        public forge.card.ColorSet chooseColors(String message, SpellAbility sa, int min, int max, forge.card.ColorSet options) {
+            if (!live() || options.countColors() <= min) return super.chooseColors(message, sa, min, max, options);
+            List<Byte> c = askColors(sa == null ? null : sa.getHostCard(), options, false, min, Math.min(max, options.countColors()));
+            if (c.size() < min) return super.chooseColors(message, sa, min, max, options);
+            int mask = 0;
+            for (byte b : c) mask |= b;
+            return forge.card.ColorSet.fromMask(mask);
         }
 
         @Override

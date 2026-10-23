@@ -145,6 +145,13 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("color".equals(rig)) {      // test rig: "choose a color" as a land enters (Room of Refuge) vs a passive opponent
+            green.clear();
+            green.put("Room of Refuge", 10);
+            green.put("Forest", 30);
+            red.clear();
+            red.put("Mountain", 40);
+        }
 
         if ("playtest".equals(deck)) {      // solo sandbox: many card types, opponent only passes
             green.clear();

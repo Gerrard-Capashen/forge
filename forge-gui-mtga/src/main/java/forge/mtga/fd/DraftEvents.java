@@ -42,8 +42,8 @@ import static forge.mtga.fd.FrontDoor.str;
 final class DraftEvents {
     static final String PREFIX = "QuickDraft_";
     private static final int MATCH_DECK_MIN = 40;
-    /** Arena's quick draft: best-of-1 matches until 7 wins or 3 losses. */
-    static final int MAX_WINS = 7, MAX_LOSSES = 3;
+    /** Arena's quick draft: best-of-1 matches until 7 wins or 3 losses (-Dmtga.draft.maxWins / maxLosses for testing the event's end). */
+    static final int MAX_WINS = Integer.getInteger("mtga.draft.maxWins", 7), MAX_LOSSES = Integer.getInteger("mtga.draft.maxLosses", 3);
 
     /** A draftable Forge set. */
     record SetInfo(String code, String name, java.util.Date date, int cards, int mapped, List<Integer> grpIds) { }
