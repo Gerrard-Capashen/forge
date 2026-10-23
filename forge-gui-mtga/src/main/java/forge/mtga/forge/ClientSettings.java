@@ -68,6 +68,9 @@ public final class ClientSettings {
 
     public synchronized boolean autoPassUnlessOpponentAction() { return turnOption() == AutoPassOption.AutoPassOption_UnlessOpponentAction; }
 
+    /** The "auto-resolve" toggle: never stop to respond to anything on the stack (spells and abilities) (StackAutoPassOption_ResolveAll). */
+    public synchronized boolean autoResolveStack() { return stackAutoPass == AutoPassOption.AutoPassOption_ResolveAll; }
+
     public synchronized boolean manualMana() { return manaSelection == ManaSelectionType.ManaSelectionType_Manual || fullControl(); }
 
     /** Is there a stop on this phase/step for a turn owned by me (or the opponent)? */

@@ -933,6 +933,45 @@ public final class ForgeBackend implements GameBackend {
         return org.apache.commons.lang3.tuple.ImmutablePair.of(top, bottom);
     }
 
+    /** Surveil: GroupReq (Surveil context) with a Library/Top and a Graveyard group; the client answers [top, graveyard]. */
+    org.apache.commons.lang3.tuple.ImmutablePair<CardCollection, CardCollection> askSurveil(CardCollection topN) {
+        sync.reveal(topN);
+        Map<Integer, Card> byId = new LinkedHashMap<>();
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_GroupReq);
+        com.wizards.mtga.gre.GroupReq.Builder gr = req.getGroupReqBuilder().setGroupType(com.wizards.mtga.gre.GroupType.GroupType_Ordered)
+                .setContext(com.wizards.mtga.gre.GroupingContext.GroupingContext_Surveil);
+        for (Card c : topN) {
+            byId.put(iid(c), c);
+            gr.addInstanceIds(iid(c));
+        }
+        gr.addGroupSpecs(com.wizards.mtga.gre.GroupSpecification.newBuilder().setLowerBound(0).setUpperBound(topN.size())
+                .setZoneType(com.wizards.mtga.gre.ZoneType.ZoneType_Library).setSubZoneType(com.wizards.mtga.gre.SubZoneType.SubZoneType_Top));
+        gr.addGroupSpecs(com.wizards.mtga.gre.GroupSpecification.newBuilder().setLowerBound(0).setUpperBound(topN.size())
+                .setZoneType(com.wizards.mtga.gre.ZoneType.ZoneType_Graveyard).setSubZoneType(com.wizards.mtga.gre.SubZoneType.SubZoneType_None));
+        System.out.println("[mtga] asking surveil " + byId.keySet());
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_GroupResp));
+        System.out.println("[mtga] client surveil reply " + r.getGroupResp().toString().replace("\n", " "));
+        CardCollection top = new CardCollection(), grave = new CardCollection();
+        for (com.wizards.mtga.gre.Group g : r.getGroupResp().getGroupsList()) {
+            boolean toGrave = g.getZoneType() == com.wizards.mtga.gre.ZoneType.ZoneType_Graveyard;
+            for (int id : g.getIdsList()) {
+                Card c = byId.remove(id);
+                if (c != null) (toGrave ? grave : top).add(c);
+            }
+        }
+        top.addAll(byId.values());      // anything the client did not place stays on top
+        sync.clearRevealed();
+        return org.apache.commons.lang3.tuple.ImmutablePair.of(top, grave);
+    }
+
+    /**
+     * "Look at" effects (Mishra's Bauble, ...): the human sees hidden cards in a selection browser, nothing is chosen.
+     */
+    void askLookAt(List<Card> cards, Card source) {
+        askSelectCards(cards, 0, 1, com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution, 0, null, source);
+    }
+
     /**
      * Order cards (e.g. put back on top of the library in any order). The client answers nearest-the-end first (top first
      * for OrderingForTop); Forge moves the returned list in order, so the card that must end nearest the end goes last.
@@ -1038,6 +1077,7 @@ public final class ForgeBackend implements GameBackend {
         sendDiff(true, false);
         if (!full && settings.autoPassTurn()) return null;
         if (!full && settings.autoPassUnlessOpponentAction() && !respond) return null;
+        if (!full && respond && settings.autoResolveStack()) return null;
         if (!full && (playable.isEmpty() || !(stop || respond))) return null;
         if (offered.isEmpty() && !full) return null;      // nothing to do but pass: do not bother the client
         for (Card c : me.getCardsIn(ZoneType.Battlefield)) {      // tap for mana by hand (floating mana)
@@ -1967,6 +2007,21 @@ public final class ForgeBackend implements GameBackend {
             if (!live() || allowRepeat) return super.chooseModeForAbility(sa, possible, min, num, allowRepeat);
             List<AbilitySub> chosen = askModes(sa, possible, min, num);
             return chosen == null ? super.chooseModeForAbility(sa, possible, min, num, allowRepeat) : chosen;
+        }
+
+        @Override
+        public org.apache.commons.lang3.tuple.ImmutablePair<CardCollection, CardCollection> arrangeForSurveil(CardCollection topN) {
+            if (!live() || topN.isEmpty()) return super.arrangeForSurveil(topN);
+            return askSurveil(topN);
+        }
+
+        @Override
+        public void reveal(CardCollectionView cards, ZoneType zone, Player owner, String messagePrefix, boolean addSuffix) {
+            super.reveal(cards, zone, owner, messagePrefix, addSuffix);
+            if (!live() || cards.isEmpty()) return;
+            List<Card> hidden = new ArrayList<>();
+            for (Card c : cards) if (c.isInZone(ZoneType.Library) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
+            if (!hidden.isEmpty() && player == human) askLookAt(hidden, null);
         }
 
         @Override
