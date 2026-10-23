@@ -16,6 +16,8 @@ public final class CardDb {
     private final File file;
     private final Map<Integer, String> nameByGrp = new HashMap<>();
     private final Map<String, Integer> grpByName = new HashMap<>();
+    /** Names whose entry in {@link #grpByName} is a preferred printing: no other row may replace it. */
+    private final java.util.Set<String> preferredName = new java.util.HashSet<>();
     private final Map<Integer, Integer> titleByGrp = new HashMap<>();
     private final Map<Integer, String> abilityIdsByGrp = new HashMap<>();
     private final Map<Integer, List<Ability>> abilityCache = new HashMap<>();
@@ -93,8 +95,11 @@ public final class CardDb {
                     int title = rs.getInt(7);
                     if (good) primaryByTitle.merge(title, grp, Math::max);
                     else if (!primary && rs.getInt(4) == 0 && (faces == null || faces.isBlank())) alternateTitles.put(grp, rs.getInt(16) != 0 ? rs.getInt(16) : title);
-                    if (good) grpByName.merge(name, grp, Math::max);
-                    else grpByName.putIfAbsent(name, grp);
+                    // a fallback row seen first must never win over a preferred one (Endurance: non-primary MH3 92050 vs primary SPG 91168)
+                    if (good) {
+                        if (preferredName.add(name)) grpByName.put(name, grp);
+                        else grpByName.merge(name, grp, Math::max);
+                    } else grpByName.putIfAbsent(name, grp);
                 }
             }
             for (Map.Entry<Integer, Integer> e : alternateTitles.entrySet()) {
