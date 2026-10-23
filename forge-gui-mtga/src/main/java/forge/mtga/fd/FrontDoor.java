@@ -58,6 +58,16 @@ public final class FrontDoor {
         this.profile = profile;
         this.premier = new PremierDrafts(db, events, profile);
         seedStarterDecks(dataDir);
+        for (JsonObject d : decks.all()) {                     // decks copied from a draft event before the "Draft" format existed
+            JsonObject summary = d.getAsJsonObject("Summary");
+            if (summary != null && ownDeckFormat(summary)) {
+                try {
+                    decks.put(str(summary, "DeckId"), summary, d.getAsJsonObject("Deck"));
+                } catch (Exception e) {
+                    System.out.println("[mtga] FD: cannot update deck " + str(summary, "Name") + ": " + e);
+                }
+            }
+        }
         register();
         System.out.println("[mtga] FD data dir " + dataDir.getAbsolutePath() + " (" + decks.all().size() + " decks)");
     }
@@ -175,6 +185,7 @@ public final class FrontDoor {
             JsonObject deck = r.obj().getAsJsonObject("Deck");
             String id = str(summary, "DeckId");
             if (id == null || deck == null) return new Err(400, "bad upsert");
+            ownDeckFormat(summary);
             decks.put(id, summary, primaryPrintings(deck));
             System.out.println("[mtga] FD saved deck " + str(summary, "Name") + " (" + id + ")");
             return summary.toString();
@@ -463,6 +474,29 @@ public final class FrontDoor {
         Map<String, Integer> bot = events.botDeck(eventName);
         forge.mtga.AiDecks.Choice ai = bot == null ? null : new forge.mtga.AiDecks.Choice("draft bot", bot);
         return startMatch(s, course.getAsJsonObject("CourseDeckSummary"), course.getAsJsonObject("CourseDeck"), ai, eventName);
+    }
+
+    /**
+     * A deck saved to the player's decks never keeps a draft-type format (the event page's copy button saves it as "Limited"
+     * or its challenge alias "DirectGameLimited"): the client's deck builder crashes on a draft-type deck outside its event. It becomes
+     * "Draft" (constructed type, 40 cards). True if the summary changed.
+     */
+    static boolean ownDeckFormat(JsonObject summary) {
+        JsonElement attrs = summary.get("Attributes");
+        if (attrs == null || !attrs.isJsonArray()) return false;
+        boolean changed = false;
+        for (JsonElement a : attrs.getAsJsonArray()) {
+            JsonObject o = a.getAsJsonObject();
+            if ("Format".equals(str(o, "name")) && ForgeFormats.isDraftType(str(o, "value"))) {
+                o.addProperty("value", ForgeFormats.DRAFT_DECK);
+                changed = true;
+            }
+        }
+        if (summary.has("Format") && ForgeFormats.isDraftType(str(summary, "Format"))) {
+            summary.addProperty("Format", ForgeFormats.DRAFT_DECK);
+            changed = true;
+        }
+        return changed;
     }
 
     /** EventDrop / EventResign of a draft event (a premier draft's table closes too). */

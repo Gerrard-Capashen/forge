@@ -36,6 +36,19 @@ public final class ForgeFormats {
     /** Deck rules of the draft events (EventUXInfo.DeckSelectFormat): 40 cards from the pool; not a constructed format, so not in the format lists. */
     public static final String LIMITED = "Limited";
 
+    /**
+     * A drafted deck kept in the player's own decks (the event page's copy button): a CONSTRUCTED-type format, because the
+     * client's deck builder outside an event crashes on a draft-type deck (it reads the event the deck came from).
+     * 40 cards, every card allowed.
+     */
+    public static final String DRAFT_DECK = "Draft";
+
+    /** Draft-type client formats: Limited and its direct-challenge alias (the client may save a copied deck under either). */
+    public static boolean isDraftType(String format) {
+        if (LIMITED.equals(format)) return true;
+        return DIRECT_SLOTS.getOrDefault(LIMITED, List.of()).contains(format);
+    }
+
     /** Client format order (ConstructedSortOrder): the first one is the client's default format. */
     public static final List<Spec> SPECS = List.of(
             new Spec("Standard", "Standard", 60, 250, 15, 0, 0, false, false),
@@ -48,6 +61,7 @@ public final class ForgeFormats {
             new Spec("Historic", "Historic", 60, 250, 15, 0, 0, false, true),
             new Spec("Alchemy", null, 60, 250, 15, 0, 0, false, true),
             new Spec("Timeless", null, 60, 250, 15, 0, 0, false, false),
+            new Spec(DRAFT_DECK, null, 40, 250, 250, 0, 0, false, false),
             new Spec(LIMITED, null, 40, 250, 250, 0, 0, false, false));
 
     /** Format of the bot-match event: every deck is valid there, the AI deck follows the deck's own format. */
