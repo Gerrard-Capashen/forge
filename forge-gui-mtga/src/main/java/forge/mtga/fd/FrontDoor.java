@@ -233,6 +233,10 @@ public final class FrontDoor {
         on("BotDraftDraftStatus", (s, r) -> events.draftStatus(r.obj()));
         on("BotDraftDraftPick", (s, r) -> events.draftPick(r.obj()));
         on("EventSetDeckV3", (s, r) -> setEventDeck(r.obj()));
+        on("EventClaimPrize", (s, r) -> {
+            premier.dropped(str(r.obj(), "EventName"));
+            return events.claimPrize(r.obj());
+        });
         on("EventDrop", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), true) : dropDraft(r.obj(), true));
         on("EventResign", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), false) : dropDraft(r.obj(), false));
         // ---- premier drafts: table draft through the client's human-draft flow (see PremierDrafts) ----
@@ -280,7 +284,14 @@ public final class FrontDoor {
         on("PeriodicRewardsGetStatus", (s, r) -> obj("_dailyRewardSequenceId", 0, "_dailyRewardResetTimestamp", "2099-01-01T00:00:00Z",
                 "_weeklyRewardSequenceId", 0, "_weeklyRewardResetTimestamp", "2099-01-01T00:00:00Z",
                 "_dailyRewardChestDescriptions", obj(), "_weeklyRewardChestDescriptions", obj()));
-        on("CarouselGetCarouselItems", (s, r) -> "[]");
+        // home banners: AssetTreeItem picks the client's art, the text keys are ForgeBridge.FormatLoc's. Action types are
+        // ECarouselActionType numbers: 4 OpenPlayBlade (argument: a queue event's public name), 3 GoToExternalUrl.
+        on("CarouselGetCarouselItems", (s, r) -> {
+            JsonArray items = new JsonArray();
+            items.add(carouselItem("ForgeWelcome", "2026_61_30_HOB_Previews", 100, 4, PlayQueues.eventName(PlayQueues.Mode.BOT, "Standard")));
+            items.add(carouselItem("ForgeDiscord", "SocialMedia_Discord", 90, 3, "https://discord.gg/xQSgHsEnQ"));
+            return items.toString();
+        });
         // No store offline (MercGetStoreStatusV2 says StoreEnabled=false, which keeps the Store tab locked), but the client also builds
         // the cosmetic catalogues (profile pickers, deck cosmetics, emotes) from this call: answer it with every listing type EMPTY.
         on("MercGetSkusAndListings", (s, r) -> {
@@ -1093,6 +1104,16 @@ public final class FrontDoor {
         JsonObject m = new JsonObject();
         profile.profile().preferences.forEach(m::addProperty);
         return obj("Preferences", m).toString();
+    }
+
+    // ---- home carousel ------------------------------------------------------------------------------------------
+
+    private static JsonObject carouselItem(String name, String art, int priority, int actionType, String argument) {
+        JsonArray actions = new JsonArray();
+        actions.add(obj("Type", actionType, "Arguments", argument));
+        return obj("Name", name, "AssetTreeItem", art, "Priority", priority,
+                "TitleKey", "Forge/Carousel/" + name + "_Title", "DescriptionKey", "Forge/Carousel/" + name + "_Desc",
+                "Actions", actions, "HoverActions", new JsonArray());
     }
 
     // ---- json helpers -------------------------------------------------------------------------------------------

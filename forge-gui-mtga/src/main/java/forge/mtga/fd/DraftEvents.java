@@ -341,6 +341,18 @@ final class DraftEvents {
         return c;
     }
 
+    /**
+     * EventClaimPrize: the event is over (module ClaimPrize: the page shows the final record and the filled win track; the
+     * button says "Home" as no event has prizes offline). Claiming closes it: back to Join, so it can be played again.
+     */
+    Object claimPrize(JsonObject req) {
+        String name = str(req, "EventName");
+        JsonObject c = course(name);
+        if (c != null) System.out.println("[mtga] FD " + name + ": event closed at " + c.get("CurrentWins") + "-" + c.get("CurrentLosses"));
+        remove(name);
+        return obj("Course", newCourse(name, "Join"), "InventoryInfo", null);
+    }
+
     /** EventDrop / EventResign: leave the event, back to Join. */
     Object drop(JsonObject req, boolean wrapped) {
         String name = str(req, "EventName");
@@ -362,14 +374,14 @@ final class DraftEvents {
         return out;
     }
 
-    /** A finished event match: count it; 7 wins or 3 losses end the event (module Complete). */
+    /** A finished event match: count it; 7 wins or 3 losses end the event (module ClaimPrize, then {@link #claimPrize}). */
     synchronized void recordResult(String eventName, boolean won) {
         JsonObject c = course(eventName);
         if (c == null) return;
         String key = won ? "CurrentWins" : "CurrentLosses";
         c.addProperty(key, c.get(key).getAsInt() + 1);
         int w = c.get("CurrentWins").getAsInt(), l = c.get("CurrentLosses").getAsInt();
-        if (w >= MAX_WINS || l >= MAX_LOSSES) c.addProperty("CurrentModule", "Complete");
+        if (w >= MAX_WINS || l >= MAX_LOSSES) c.addProperty("CurrentModule", "ClaimPrize");      // Arena: the page keeps the result until claimed
         save(c);
         System.out.println("[mtga] FD " + eventName + ": " + (won ? "won" : "lost") + " -> " + w + "-" + l
                 + (w >= MAX_WINS || l >= MAX_LOSSES ? " (event over)" : ""));
