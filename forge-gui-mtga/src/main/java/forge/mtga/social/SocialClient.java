@@ -284,6 +284,17 @@ public final class SocialClient {
     public JsonObject block(String full, String playerId) throws IOException { return changed(call("POST", "/blocks", who(full, playerId))); }
     public void unblock(String playerId) throws IOException { changed(call("DELETE", "/blocks/" + playerId, null)); }
 
+    /** Whether the coordinator flags this player as a developer (orange name); false when unknown or the coordinator cannot be reached. */
+    public boolean isDev(String playerId) {
+        if (playerId == null || playerId.length() != 36) return false;          // not a registered player (the AI, an old peer)
+        try {
+            JsonObject o = call("GET", "/players/by-id?id=" + URLEncoder.encode(playerId, StandardCharsets.UTF_8), null);
+            return o.has("dev") && o.get("dev").getAsBoolean();
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+    }
+
     /** "Name#12345" -> the player (for challenges). */
     public JsonObject resolve(String full) throws IOException { return call("GET", "/players/by-name?full=" + URLEncoder.encode(full, StandardCharsets.UTF_8), null); }
 

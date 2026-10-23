@@ -256,7 +256,7 @@ final class ChallengeService {
             JsonObject cos = p.getAsJsonObject("cosmetics");
             PreferredCosmeticsOnDeck.Builder cb = PreferredCosmeticsOnDeck.newBuilder().setAvatar(s(cos, "avatar")).setSleeve(s(cos, "sleeve")).setPet(s(cos, "pet")).setTitle(s(cos, "title"));
             for (JsonElement em : cos.getAsJsonArray("emotes")) cb.addEmotes(em.getAsString());
-            b.addPlayers(ChallengePlayer.newBuilder().setPlayerId(s(p, "playerId")).setDisplayName(s(p, "fullName")).setReady(p.get("ready").getAsBoolean())
+            b.addPlayers(ChallengePlayer.newBuilder().setPlayerId(s(p, "playerId")).setDisplayName(s(p, "fullName")).setIsWotc(p.has("dev") && p.get("dev").getAsBoolean()).setReady(p.get("ready").getAsBoolean())
                     .setCosmetics(cb).setDeckArtId(p.get("artId").getAsInt()).setDeckTileId(p.get("tileId").getAsInt()).setTeamId(p.get("teamId").getAsInt()));
         }
         return b.build();
@@ -287,7 +287,7 @@ final class ChallengeService {
             co.add("Emotes", cos.getAsJsonArray("emotes").deepCopy());
             po.addProperty("PlayerId", s(p, "playerId"));
             po.addProperty("DisplayName", s(p, "fullName"));
-            po.addProperty("IsWotc", false);
+            po.addProperty("IsWotc", p.has("dev") && p.get("dev").getAsBoolean());
             po.addProperty("Ready", p.get("ready").getAsBoolean());
             po.addProperty("PresenceInternal", 0);
             po.add("Cosmetics", co);

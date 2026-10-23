@@ -65,6 +65,9 @@ public final class Profile {
     /** The five-digit tag the client shows after the name ({@code Name#00042}); stored so every reader (the client bridge too) sees the same one. */
     public String tag;
 
+    /** A developer: the client draws the name in orange. Copied from the coordinator at each start ({@code Accounts}); never trusted from a peer. */
+    public boolean wotc;
+
     /** Derived from the player id; {@link FileProfileStore} stores it on creation. */
     public String tag() {
         if (tag != null && !tag.isBlank()) return tag;

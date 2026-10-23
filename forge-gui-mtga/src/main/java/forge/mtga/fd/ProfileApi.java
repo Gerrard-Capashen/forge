@@ -49,6 +49,8 @@ public final class ProfileApi {
     public CosmeticCatalog catalog() { return catalog; }
     public Profile profile() { return store.load(); }
     public PublicProfile self() { return PublicProfile.of(store.load()); }
+    /** Developer flag (orange name), as the coordinator last said. */
+    public boolean isDev() { return store.load().wotc; }
     int inventorySeq() { return inventorySeq.incrementAndGet(); }
 
     // ---- ownership ----------------------------------------------------------------------------------------------

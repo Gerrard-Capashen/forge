@@ -324,7 +324,19 @@ public final class FrontDoor {
     private volatile ChallengeService challenges;
 
     /** Direct challenges need the coordinator's friends: set by the server main when online play is on. */
-    public void setSocial(forge.mtga.social.SocialClient social) { challenges = social == null ? null : new ChallengeService(this, social); }
+    public void setSocial(forge.mtga.social.SocialClient social) {
+        this.social = social;
+        challenges = social == null ? null : new ChallengeService(this, social);
+    }
+
+    private volatile forge.mtga.social.SocialClient social;
+
+    /** Orange name: this player from the profile (copied from the coordinator), an opponent asked of the coordinator (never taken from what a peer sends about itself). */
+    private boolean isDev(PublicProfile p) {
+        if (p.playerId().equals(profile.self().playerId())) return profile.isDev();
+        forge.mtga.social.SocialClient sc = social;
+        return sc != null && sc.isDev(p.playerId());
+    }
 
     FdSession session() { return current; }
 
@@ -590,7 +602,7 @@ public final class FrontDoor {
 
     private JsonObject playerInfo(PublicProfile p, int seat, int team) {
         return obj("ScreenName", p.name(), "RankingClass", p.rankClass(), "RankingTier", p.rankTier(), "SeatId", seat, "TeamId", team,
-                "IsWotc", false, "CosmeticsSelection", profile.selectionJson(p));
+                "IsWotc", isDev(p), "CosmeticsSelection", profile.selectionJson(p));
     }
 
     /** The deck's "Format" attribute (the deck builder's format dropdown), null if none. */

@@ -23,7 +23,7 @@ public final class Accounts {
     private static final Gson GSON = new Gson();
 
     /** What the coordinator knows about a player. */
-    public record Account(String playerId, String name, String tag) {
+    public record Account(String playerId, String name, String tag, boolean dev) {
         public String fullName() { return name + "#" + tag; }
     }
 
@@ -95,7 +95,10 @@ public final class Accounts {
 
     private String nonce() throws IOException { return call("POST", "/auth/challenge", null, null).get("nonce").getAsString(); }
 
-    private static Account account(JsonObject o) { return new Account(o.get("playerId").getAsString(), o.get("name").getAsString(), o.get("tag").getAsString()); }
+    private static Account account(JsonObject o) {
+        return new Account(o.get("playerId").getAsString(), o.get("name").getAsString(), o.get("tag").getAsString(),
+                o.has("dev") && o.get("dev").getAsBoolean());
+    }
 
     /** The coordinator's ws(s):// address of this server (for the session WebSocket). */
     public String wsBase() { return base.replaceFirst("^https://", "wss://").replaceFirst("^http://", "ws://"); }
@@ -147,6 +150,7 @@ public final class Accounts {
         Profile p = store.load();
         try {
             Account a = accounts.register(p);
+            if (a.dev() != p.wotc) store.update(q -> q.wotc = a.dev());
             if (!a.name().equals(p.displayName) || !a.tag().equals(p.tag)) {
                 String shown = a.name();
                 store.update(q -> { q.displayName = shown; q.tag = a.tag(); });
