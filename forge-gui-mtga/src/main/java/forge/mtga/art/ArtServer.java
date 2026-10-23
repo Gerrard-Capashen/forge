@@ -86,12 +86,16 @@ public final class ArtServer {
     }
 
     private final Map<String, byte[]> eventArt = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Event art key of the premier draft cube (PremierDraft_VCUBE). */
+    private static final String CUBE_EVENT = "VCUBE";
+    /** Its page background: mtgpics.com's Alpha illustration 261 (pics/art/alp/261.jpg), fetched once and cached. */
+    private static final String CUBE_BACKGROUND = "alp/261";
 
     /** {@code GET /event/<SET>}: a 640x360 JPEG crop of a showcase card (a mythic, else a rare) of a Forge set, for its quick draft event. */
     private void handleEvent(HttpExchange ex) {
         try (ex) {
             String set = ex.getRequestURI().getPath().substring("/event/".length());
-            byte[] bytes = set.matches("[A-Za-z0-9]{2,8}(-bg)?") ? eventArt.computeIfAbsent(set.toUpperCase(), this::buildEventArt) : null;
+            byte[] bytes = set.matches("[A-Za-z0-9]{2,8}(-p)?(-bg)?") ? eventArt.computeIfAbsent(set.toUpperCase(), this::buildEventArt) : null;
             if (bytes == null || bytes.length == 0) {
                 System.out.println("[mtga] event art " + set + " not available (404)");
                 ex.sendResponseHeaders(404, -1);
@@ -111,7 +115,22 @@ public final class ArtServer {
     private byte[] buildEventArt(String key) {
         boolean background = key.endsWith("-BG");
         String set = background ? key.substring(0, key.length() - 3) : key;
+        // "<SET>-P": a premier draft of the set; same page background, another showcase card on its tile
+        boolean premier = set.endsWith("-P");
+        if (premier) set = set.substring(0, set.length() - 2);
         try {
+            // the premier draft cube (PremierDraft_VCUBE) is no set: an Alpha illustration for its page, Black Lotus for its tile
+            if (set.equals(CUBE_EVENT) && background) {
+                java.awt.image.BufferedImage big = mtgpics.illustration("vcube", CUBE_BACKGROUND);
+                if (big != null) return cover(big, 1920, 1080, 0.18);
+            }
+            if (set.equals(CUBE_EVENT)) {
+                PaperCard lotus = StaticData.instance().getCommonCards().getUniqueByName("Black Lotus");
+                File file = lotus == null ? null : fetcher.artCrop(lotus, false).get(WAIT_SECONDS, TimeUnit.SECONDS);
+                java.awt.image.BufferedImage src = file == null || !file.isFile() ? null : javax.imageio.ImageIO.read(file);
+                if (src == null) return new byte[0];
+                return background ? backdrop(src, 1920, 1080) : cover(src, 640, 360, 0);
+            }
             // the page background: a large illustration from the mtgpics gallery (full-page quality); tiles use the Scryfall crop
             if (background) {
                 java.awt.image.BufferedImage big = mtgpics.image(set);
@@ -132,6 +151,7 @@ public final class ArtServer {
             if (pool.isEmpty()) return new byte[0];
             // stable choice per set, falling back through the list when a download fails
             int start = Math.floorMod(set.hashCode(), pool.size());
+            if (premier && pool.size() > 1) start = (start + 1 + Math.floorMod((set + "-premier").hashCode(), pool.size() - 1)) % pool.size();
             for (int i = 0; i < Math.min(pool.size(), 4); i++) {
                 PaperCard pc = pool.get((start + i) % pool.size());
                 File file;

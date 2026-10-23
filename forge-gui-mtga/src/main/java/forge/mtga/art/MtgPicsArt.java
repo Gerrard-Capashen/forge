@@ -63,6 +63,23 @@ final class MtgPicsArt {
         }
     }
 
+    /** A given gallery illustration ({@code pics/art/<path>.jpg}), cached under {@code key} like a set's, null if it cannot be fetched. */
+    synchronized BufferedImage illustration(String key, String path) {
+        File cached = new File(dir, key.toLowerCase() + ".jpg");
+        try {
+            if (!cached.isFile()) {
+                byte[] bytes = get(BASE + "pics/art/" + path + ".jpg", true);
+                if (bytes == null) return null;
+                Files.write(cached.toPath(), bytes);
+                System.out.println("[art] mtgpics: " + key + " -> " + path + " (" + bytes.length + " bytes)");
+            }
+            return ImageIO.read(cached);
+        } catch (Exception e) {
+            System.err.println("[art] mtgpics " + key + ": " + e);
+            return null;
+        }
+    }
+
     /** The gallery's code for a Forge set code: it names Magic 2011-2015 "11m".."15m", and has no Innistrad: Double Feature (its cards are those of the two Innistrad sets). */
     private String siteCode(String code) {
         if (code.matches("m1[1-5]")) return code.substring(1) + "m";

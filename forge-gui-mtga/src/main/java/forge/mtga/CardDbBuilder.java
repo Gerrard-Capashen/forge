@@ -68,7 +68,10 @@ import java.util.zip.GZIPInputStream;
  * <p>{@code --carddata <dir>} holds {@code pristine/} and {@code state.json} (default {@code <client>/../data/carddb}; the
  * patcher passes one per target so two client versions never share a pristine snapshot).
  *
- * <p>Args: forgeGuiDir clientDir [--source dir] [--carddata dir] [--formats Standard,Pioneer,Modern] [--limit n] [--names "A;B"] [--dry-run]
+ * <p>{@code --cubes "A;B"}: also every card of these Forge cubes (default: the premier draft cube, see {@link forge.mtga.draft.Cubes}),
+ * after the format cards. {@code --cubes ""} adds none.
+ *
+ * <p>Args: forgeGuiDir clientDir [--source dir] [--carddata dir] [--formats Standard,Pioneer,Modern] [--limit n] [--names "A;B"] [--cubes "A;B"] [--dry-run]
  */
 public final class CardDbBuilder {
     public static final int GRP_BASE = 9_000_000;
@@ -110,6 +113,16 @@ public final class CardDbBuilder {
             Builder b = new Builder(c);
             List<PaperCard> cards = b.candidates(List.of(opt.getOrDefault("formats", "Standard,Pioneer,Modern").split(",")),
                     Integer.parseInt(opt.getOrDefault("limit", "0")), opt.containsKey("names") ? List.of(opt.get("names").split(";")) : List.of());
+            // cube cards go last, so adding a cube never moves the GrpIds the format cards already have
+            String cubes = opt.containsKey("cubes") ? opt.get("cubes") : forge.mtga.draft.Cubes.premierCube();
+            int before = cards.size();
+            for (String cube : cubes == null || cubes.isBlank() ? new String[0] : cubes.split(";")) {
+                for (PaperCard pc : forge.mtga.draft.Cubes.cards(cube.trim())) {
+                    PaperCard first = Builder.firstPrinting(pc);
+                    if (b.supported(first) && cards.stream().noneMatch(x -> x.getName().equals(first.getName()))) cards.add(first);
+                }
+            }
+            System.out.println("[carddb] cubes " + cubes + ": " + (cards.size() - before) + " more cards");
             for (PaperCard pc : cards) b.add(pc);
             c.commit();
             added = cards.size();

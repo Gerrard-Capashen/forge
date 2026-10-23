@@ -43,6 +43,7 @@ public final class FrontDoor {
     private final CardDb db;
     private final DeckStore decks;
     private final DraftEvents events;
+    private final PremierDrafts premier;
     private final PlayQueues queues = new PlayQueues();
     private final ProfileApi profile;
     private final Map<String, Handler> handlers = new HashMap<>();
@@ -55,6 +56,7 @@ public final class FrontDoor {
         this.decks = new DeckStore(new File(dataDir, "decks"));
         this.events = new DraftEvents(db, dataDir);
         this.profile = profile;
+        this.premier = new PremierDrafts(db, events, profile);
         seedStarterDecks(dataDir);
         register();
         System.out.println("[mtga] FD data dir " + dataDir.getAbsolutePath() + " (" + decks.all().size() + " decks)");
@@ -214,13 +216,25 @@ public final class FrontDoor {
         on("EventGetCoursesV2", (s, r) -> obj("Courses", events.courseList()));
 
         // ---- quick drafts: one event per Forge set, bot pod run by Forge (see DraftEvents) ----
-        on("EventJoin", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.join(str(r.obj(), "EventName")) : events.join(r.obj()));
+        on("EventJoin", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.join(str(r.obj(), "EventName"))
+                : PremierDrafts.isPremier(str(r.obj(), "EventName")) ? premier.join(r.obj()) : events.join(r.obj()));
         on("BotDraftStartDraft", (s, r) -> events.startDraft(r.obj()));
         on("BotDraftDraftStatus", (s, r) -> events.draftStatus(r.obj()));
         on("BotDraftDraftPick", (s, r) -> events.draftPick(r.obj()));
         on("EventSetDeckV3", (s, r) -> setEventDeck(r.obj()));
-        on("EventDrop", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), true) : events.drop(r.obj(), true));
-        on("EventResign", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), false) : events.drop(r.obj(), false));
+        on("EventDrop", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), true) : dropDraft(r.obj(), true));
+        on("EventResign", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), false) : dropDraft(r.obj(), false));
+        // ---- premier drafts: table draft through the client's human-draft flow (see PremierDrafts) ----
+        on("EventJoinDraftQueue", (s, r) -> premier.joinQueue(s::push, r.obj()));
+        on("EventLeaveDraftQueue", (s, r) -> premier.leaveQueue());
+        on("EventPlayerDraftReadyPlayer", (s, r) -> premier.ready(r.obj()));
+        on("EventJoinDraft", (s, r) -> premier.rejoin(r.obj()));
+        on("EventPlayerDraftMakePick", (s, r) -> premier.pick(r.obj()));
+        on("EventPlayerDraftReserveCard", (s, r) -> premier.reserve(r.obj(), false));
+        on("EventPlayerDraftClearReservedCard", (s, r) -> premier.reserve(r.obj(), true));
+        on("EventPlayerDraftGetTablePacks", (s, r) -> premier.tablePacks(r.obj()));
+        on("DraftCompleteDraft", (s, r) -> premier.complete(r.obj()));
+        on("EventPlayerDraftConfirmCardPoolGrant", (s, r) -> premier.confirmPool(r.obj()));
         on("EventEnterPairing", (s, r) -> startEventMatch(s, str(r.obj(), "EventName")));
         on("EventAiBotMatch", (s, r) -> startBotMatch(s, r.obj()));
         on("EventLeavePairing", (s, r) -> {      // the client left the "waiting for a match" screen
@@ -352,7 +366,12 @@ public final class FrontDoor {
     /** What a seat of this online match tells when it ends: the result goes to the coordinator (nothing without an account). */
     private java.util.function.Consumer<String> outcomeReport(forge.mtga.peer.Coordinator.Paired paired, String pool) {
         forge.mtga.social.ResultReporter r = results;
-        return r == null ? null : outcome -> r.report(paired, pool, outcome);
+        boolean event = DraftEvents.isDraftEvent(pool);
+        if (r == null && !event) return null;
+        return outcome -> {
+            if (event && ("win".equals(outcome) || "loss".equals(outcome))) events.recordResult(pool, "win".equals(outcome));
+            if (r != null) r.report(paired, pool, outcome);
+        };
     }
 
     private static JsonObject botEvent(String internalName, String format, int priority) {
@@ -371,6 +390,7 @@ public final class FrontDoor {
 
     private JsonArray allEvents() {
         JsonArray all = queues.eventInfos();
+        all.addAll(premier.eventInfos());
         all.addAll(events.eventInfos());
         return all;
     }
@@ -432,9 +452,23 @@ public final class FrontDoor {
         }
         JsonObject course = DraftEvents.isDraftEvent(eventName) ? events.course(eventName) : null;
         if (course == null || !course.has("CourseDeck") || !course.get("CourseDeck").isJsonObject()) return new Err(7000, "no deck for event " + eventName);
+        Peer p = peer;
+        if (PremierDrafts.isPremier(eventName) && p != null && p.coordinator() != null) {
+            Cards cards = cardsOf(course.getAsJsonObject("CourseDeck"));
+            if (cards.human().isEmpty()) return new Err(7000, "no deck for event " + eventName);
+            lastEvent = eventName;
+            return startOnlineMatch(s, str(course.getAsJsonObject("CourseDeckSummary"), "Name"), cards.human(), cards.printing(),
+                    profile.forDeck(course.getAsJsonObject("CourseDeckSummary")), eventName, p);
+        }
         Map<String, Integer> bot = events.botDeck(eventName);
         forge.mtga.AiDecks.Choice ai = bot == null ? null : new forge.mtga.AiDecks.Choice("draft bot", bot);
         return startMatch(s, course.getAsJsonObject("CourseDeckSummary"), course.getAsJsonObject("CourseDeck"), ai, eventName);
+    }
+
+    /** EventDrop / EventResign of a draft event (a premier draft's table closes too). */
+    private Object dropDraft(JsonObject req, boolean wrapped) {
+        premier.dropped(str(req, "EventName"));
+        return events.drop(req, wrapped);
     }
 
     /** Match for a deck in client JSON: {@code aiOverride} null = AI deck chosen from the deck's format. */

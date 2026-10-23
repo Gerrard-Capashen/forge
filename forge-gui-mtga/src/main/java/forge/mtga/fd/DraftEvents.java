@@ -64,6 +64,7 @@ final class DraftEvents {
             for (File f : files) {
                 try {
                     JsonObject c = JsonParser.parseString(Files.readString(f.toPath(), StandardCharsets.UTF_8)).getAsJsonObject();
+                    primaryPool(c, db);
                     courses.put(str(c, "InternalEventName"), c);
                 } catch (Exception e) {
                     System.out.println("[mtga] FD: unreadable event file " + f + ": " + e);
@@ -72,7 +73,23 @@ final class DraftEvents {
         }
     }
 
-    static boolean isDraftEvent(String eventName) { return eventName != null && eventName.startsWith(PREFIX); }
+    /**
+     * The client only counts primary rows as owned: a pool saved with a non-primary printing (an older server picked
+     * Endurance's MH3 row 92050 over its primary SPG row) made the deck builder refuse the deck ("cards not in your
+     * collection"). Pools are mapped to primary printings when loaded.
+     */
+    private static void primaryPool(JsonObject course, CardDb db) {
+        JsonElement pool = course.get("CardPool");
+        if (pool == null || !pool.isJsonArray()) return;
+        JsonArray fixed = new JsonArray();
+        for (JsonElement g : pool.getAsJsonArray()) fixed.add(db.primaryPrinting(g.getAsInt()));
+        course.add("CardPool", fixed);
+    }
+
+    /** A limited event whose course this class keeps: a quick draft or a premier draft ({@link PremierDrafts}). */
+    static boolean isDraftEvent(String eventName) { return eventName != null && (eventName.startsWith(PREFIX) || PremierDrafts.isPremier(eventName)); }
+
+    static boolean isQuickDraft(String eventName) { return eventName != null && eventName.startsWith(PREFIX); }
 
     // ---- catalog ------------------------------------------------------------------------------------------------
 
@@ -130,7 +147,8 @@ final class DraftEvents {
                     "ResignWidget", obj(),
                     "LossDetailsDisplay", obj("Games", MAX_LOSSES, "LossDetailsType", "LossSlots"),
                     "MainButtonWidget", obj(),
-                    "SelectedDeckWidget", obj("DeckButtonBehavior", "Editable", "ShowCopyDeckButton", false),
+                    "SelectedDeckWidget", obj("DeckButtonBehavior", "Editable", "ShowCopyDeckButton", true),
+                    "ByCourseObjectiveTrack", DraftEvents.winTrack(),
                     "ViewCardPoolWidget", obj("CardPool", grpArray(s.grpIds())));
             JsonObject ux = obj("PublicEventName", name, "DisplayPriority", priority++, "PrioritizeBannerIfPlayerHasToken", false,
                     "Parameters", obj(), "Group", "", "EventBladeBehavior", "EventPage", "DynamicFilterTagIds", new JsonArray(),
@@ -144,7 +162,22 @@ final class DraftEvents {
         return out;
     }
 
-    private static JsonArray grpArray(List<Integer> ids) {
+    /**
+     * The win track of the event page (Arena's reward bubbles): one bubble per win up to {@link #MAX_WINS}, with no reward
+     * (everything is unlocked offline), labelled through the bridge's loc keys Events/Forge_Wins_&lt;n&gt;.
+     */
+    static JsonObject winTrack() {
+        JsonArray chests = new JsonArray();
+        for (int w = 1; w <= MAX_WINS; w++) {
+            JsonObject chest = obj("image1", null, "image2", null, "image3", null, "prefab", null, "referenceId", null,
+                    "headerLocKey", "Events/Forge_Wins_" + w, "descriptionLocKey", "Events/Forge_Wins_Desc_" + w, "quantity", "",
+                    "locParams", new JsonObject(), "availableDate", "2020-01-01T00:00:00Z");
+            chests.add(obj("ChestDescription", chest, "Wins", w));
+        }
+        return obj("ChestDescriptions", chests);
+    }
+
+    static JsonArray grpArray(List<Integer> ids) {
         JsonArray a = new JsonArray();
         for (int g : ids) a.add(g);
         return a;
@@ -158,7 +191,7 @@ final class DraftEvents {
         return out;
     }
 
-    private JsonObject newCourse(String eventName, String module) {
+    JsonObject newCourse(String eventName, String module) {
         return obj("CourseId", UUID.randomUUID().toString(), "InternalEventName", eventName, "CurrentModule", module,
                 "ModulePayload", "", "CourseDeckSummary", emptySummary(), "CourseDeck", emptyDeck(), "CurrentWins", 0, "CurrentLosses", 0,
                 "CardPool", new JsonArray(), "CardPoolByCollation", null, "CardStyles", new JsonArray(),
@@ -184,7 +217,7 @@ final class DraftEvents {
         return a;
     }
 
-    private void save(JsonObject course) {
+    void save(JsonObject course) {
         String name = str(course, "InternalEventName");
         synchronized (courses) {
             courses.put(name, course);
@@ -211,7 +244,7 @@ final class DraftEvents {
     /** EventJoin: enter the event (free), landing in the bot draft. */
     Object join(JsonObject req) {
         String name = str(req, "EventName");
-        if (!isDraftEvent(name) || set(name) == null) return new FrontDoor.Err(7000, "unknown event " + name);
+        if (!isQuickDraft(name) || set(name) == null) return new FrontDoor.Err(7000, "unknown event " + name);
         JsonObject c = course(name);
         if (c == null) { c = newCourse(name, "BotDraft"); save(c); }
         return obj("Course", c, "InventoryInfo", null);
@@ -220,7 +253,7 @@ final class DraftEvents {
     /** BotDraft_StartDraft: build the pod (resuming a draft already in memory). */
     Object startDraft(JsonObject req) {
         String name = str(req, "EventName");
-        SetInfo set = isDraftEvent(name) ? set(name) : null;
+        SetInfo set = isQuickDraft(name) ? set(name) : null;
         if (set == null) return moduleReply(name, "Error_DraftDefinitionNotFound");
         synchronized (this) {
             if (!drafts.containsKey(name)) {
@@ -353,6 +386,22 @@ final class DraftEvents {
         return null;
     }
 
+    /** Bot decks as [{cardName: quantity}] (cards the client lacks left out; decks too small to play dropped), for {@link #botDeck}. */
+    static JsonArray decksJson(List<Deck> decks, CardDb db) {
+        JsonArray out = new JsonArray();
+        for (Deck d : decks) {
+            JsonObject o = new JsonObject();
+            int total = 0;
+            for (Map.Entry<PaperCard, Integer> e : d.getMain()) {
+                if (db.grpId(e.getKey().getName()) == 0) continue;
+                o.addProperty(e.getKey().getName(), e.getValue());
+                total += e.getValue();
+            }
+            if (total >= MATCH_DECK_MIN) out.add(o);
+        }
+        return out;
+    }
+
     // ---- one draft pod ------------------------------------------------------------------------------------------
 
     /** Forge pod: seat 0 is the player, the other seven are AI. Only cards with a client GrpId are shown or kept. */
@@ -442,22 +491,12 @@ final class DraftEvents {
 
         /** The seven bots' built decks as [{cardName: quantity}]. */
         JsonArray botDecks() {
-            JsonArray out = new JsonArray();
             try {
-                for (Deck d : pod.getComputerDecks()) {
-                    JsonObject o = new JsonObject();
-                    int total = 0;
-                    for (Map.Entry<PaperCard, Integer> e : d.getMain()) {
-                        if (db.grpId(e.getKey().getName()) == 0) continue;
-                        o.addProperty(e.getKey().getName(), e.getValue());
-                        total += e.getValue();
-                    }
-                    if (total >= MATCH_DECK_MIN) out.add(o);
-                }
+                return decksJson(List.of(pod.getComputerDecks()), db);
             } catch (Exception e) {
                 System.out.println("[mtga] FD quick draft: cannot build the bots' decks: " + e);
+                return new JsonArray();
             }
-            return out;
         }
     }
 }
