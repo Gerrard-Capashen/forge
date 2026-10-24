@@ -56,7 +56,11 @@ public final class FrontDoor {
         this.decks = new DeckStore(new File(dataDir, "decks"));
         this.events = new DraftEvents(db, dataDir);
         this.profile = profile;
-        this.premier = new PremierDrafts(db, events, profile);
+        this.premier = new PremierDrafts(db, events, profile, () -> {
+            Peer p = peer;                                     // premier tables are online when online matches are (-Dmtga.premier.online=false: bots only)
+            return p == null || p.coordinator() == null || !Boolean.parseBoolean(System.getProperty("mtga.premier.online", "true")) ? null
+                    : new PremierDrafts.Online(p.coordinator(), p.fingerprint(), p.friendCode());
+        });
         seedStarterDecks(dataDir);
         for (JsonObject d : decks.all()) {                     // decks copied from a draft event before the "Draft" format existed
             JsonObject summary = d.getAsJsonObject("Summary");
@@ -243,7 +247,7 @@ public final class FrontDoor {
         on("EventJoinDraftQueue", (s, r) -> premier.joinQueue(s::push, r.obj()));
         on("EventLeaveDraftQueue", (s, r) -> premier.leaveQueue());
         on("EventPlayerDraftReadyPlayer", (s, r) -> premier.ready(r.obj()));
-        on("EventJoinDraft", (s, r) -> premier.rejoin(r.obj()));
+        on("EventJoinDraft", (s, r) -> premier.rejoin(s::push, r.obj()));
         on("EventPlayerDraftMakePick", (s, r) -> premier.pick(r.obj()));
         on("EventPlayerDraftReserveCard", (s, r) -> premier.reserve(r.obj(), false));
         on("EventPlayerDraftClearReservedCard", (s, r) -> premier.reserve(r.obj(), true));
@@ -379,6 +383,9 @@ public final class FrontDoor {
     Peer peer() { return peer; }
 
     public void setPeer(Peer p) { peer = p; }
+
+    /** People at a premier table this server hosts who have not finished drafting (the bridge warns before the client quits). */
+    public int premierOthersDrafting() { return premier.othersStillDrafting(); }
 
     private volatile forge.mtga.social.ResultReporter results;
 

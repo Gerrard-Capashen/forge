@@ -1,5 +1,7 @@
 package forge.mtga.draft;
 
+import forge.card.ColorSet;
+import forge.card.MagicColor;
 import forge.deck.Deck;
 import forge.deck.DeckSection;
 import forge.gamemodes.limited.DraftPack;
@@ -59,8 +61,12 @@ public final class DraftTable {
     private final int[] picksThisRound;
     private final boolean[] inFlight, finished;
     private final PaperCard[] reserved;
-    /** Bot seats with a pick scheduled (see {@link #setBotPace}). */
+    /** Bot seats (and away people) with a pick scheduled (see {@link #setBotPace}). */
     private final boolean[] botPending;
+    /** People who are gone for now: their seat picks like a bot until they are back ({@link #setAway}). */
+    private final boolean[] away;
+    /** Seconds a seat's pick timer runs longer than it is told (relay latency of a remote seat). */
+    private final int[] grace;
     private final java.util.Random rnd = new java.util.Random();
     private int botMinMs, botMaxMs;
     private final Map<Integer, ScheduledFuture<?>> timers = new HashMap<>();
@@ -90,6 +96,8 @@ public final class DraftTable {
         this.finished = new boolean[podSize];
         this.reserved = new PaperCard[podSize];
         this.botPending = new boolean[podSize];
+        this.away = new boolean[podSize];
+        this.grace = new int[podSize];
         this.round = draft.getRound();
         this.lastRound = draft.getNumRounds();
         this.packSize = headSize();
@@ -114,6 +122,31 @@ public final class DraftTable {
         botMinMs = Math.max(0, minMs);
         botMaxMs = Math.max(botMinMs, maxMs);
     }
+
+    /** The seat's pick timer runs {@code seconds} longer than the time it is told (a seat on another machine). */
+    public synchronized void setGrace(int seat, int seconds) {
+        if (seat >= 0 && seat < podSize) grace[seat] = Math.max(0, seconds);
+    }
+
+    /**
+     * A person left ({@code true}): their seat picks like a bot (at the bots' pace) until they are back ({@code false}),
+     * when the head of their queue is offered to them again with a fresh timer. Their picks so far stay theirs.
+     */
+    public void setAway(int seat, boolean gone) {
+        List<Runnable> out = new ArrayList<>();
+        synchronized (this) {
+            if (over || !people.containsKey(seat) || finished[seat] || away[seat] == gone) return;
+            away[seat] = gone;
+            cancelTimer(seat);
+            inFlight[seat] = false;
+            reserved[seat] = null;
+            System.out.println("[mtga] draft table: seat " + seat + (gone ? " is away, picking for it" : " is back"));
+            advance(out);
+        }
+        run(out);
+    }
+
+    public synchronized boolean isAway(int seat) { return seat >= 0 && seat < podSize && away[seat]; }
 
     /** Deal the first packs. */
     public void start() {
@@ -239,7 +272,8 @@ public final class DraftTable {
                 LimitedPlayer p = players.get(i);
                 DraftPack head = p.nextChoice();
                 if (head == null || head.isEmpty()) continue;
-                if (p instanceof LimitedPlayerAI && botMaxMs > 0) {
+                boolean stands = p instanceof LimitedPlayerAI || away[i] && people.containsKey(i) && !finished[i];
+                if (stands && botMaxMs > 0) {
                     if (!botPending[i]) {
                         botPending[i] = true;
                         int seat = i;
@@ -257,6 +291,9 @@ public final class DraftTable {
                         take(p, i, c, out);
                     }
                     progressed = true;
+                } else if (stands) {
+                    awayPick(p, i, head, out);
+                    progressed = true;
                 } else if (offered(head).isEmpty() && !inFlight[i]) {
                     PaperCard c = head.get(0);
                     take(p, i, c, out);
@@ -268,13 +305,13 @@ public final class DraftTable {
             if (progressed) continue;
             for (Map.Entry<Integer, Seat> e : people.entrySet()) {
                 int seat = e.getKey();
-                if (inFlight[seat] || finished[seat]) continue;
+                if (inFlight[seat] || finished[seat] || away[seat]) continue;
                 DraftPack head = players.get(seat).nextChoice();
                 if (head == null || head.isEmpty()) continue;
                 List<PaperCard> cards = offered(head);
                 int packNo = round, pickNo = picksThisRound[seat] + 1, secs = pickSeconds(head.size());
                 inFlight[seat] = true;
-                startTimer(seat, secs);
+                startTimer(seat, secs + grace[seat]);
                 Seat s = e.getValue();
                 out.add(() -> s.pack(this, cards, packNo, pickNo, secs));
             }
@@ -298,10 +335,50 @@ public final class DraftTable {
                     PaperCard c = ai.chooseCard();
                     if (c != null) take(p, seat, c, out);
                 }
+            } else if (head != null && !head.isEmpty() && away[seat] && people.containsKey(seat) && !finished[seat]) {
+                awayPick(p, seat, head, out);
             }
             advance(out);
         }
         run(out);
+    }
+
+    /** An away person's pick: what a bot with their picks so far would take (Forge's draft ranking). */
+    private void awayPick(LimitedPlayer p, int seat, DraftPack head, List<Runnable> out) {
+        List<PaperCard> cards = offered(head);
+        PaperCard c;
+        if (cards.isEmpty()) {
+            c = head.get(0);
+        } else {
+            try {
+                ColorSet colors = colorsOf(picks.get(seat));
+                c = forge.gamemodes.limited.CardRanker.rankCardsInPack(cards, picks.get(seat), colors, colors.countColors() < 2).get(0);
+            } catch (Exception e) {
+                c = cards.get(0);
+            }
+        }
+        take(p, seat, c, out);
+        Seat s = people.get(seat);
+        PaperCard picked = c;
+        out.add(() -> s.autoPicked(this, picked));
+    }
+
+    /** The two colours a bot would have settled on with these picks (Forge's DeckColors rule, replayed). */
+    private static ColorSet colorsOf(List<PaperCard> picks) {
+        int mask = 0, count = 0;
+        for (PaperCard pc : picks) {
+            if (count >= 2) break;
+            ColorSet add = ColorSet.fromMask(mask).inverse().getSharedColors(pc.getRules().getDeckbuildingColors());
+            if (add.isColorless()) continue;
+            for (byte color : MagicColor.WUBRG) {
+                if (add.hasAnyColor(color)) {
+                    mask |= color;
+                    count++;
+                }
+                if (count >= 2) break;
+            }
+        }
+        return ColorSet.fromMask(mask);
     }
 
     private void finish(List<Runnable> out) {

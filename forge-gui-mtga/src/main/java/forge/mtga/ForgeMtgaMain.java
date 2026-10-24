@@ -70,8 +70,9 @@ public final class ForgeMtgaMain {
 
         // Front Door (menus, collection, decks, events) for the client's normal UI; -Dmtga.fdport=0 disables it.
         int fdPort = Integer.getInteger("mtga.fdport", 30010);
+        forge.mtga.fd.FrontDoor fd = null;
         if (fdPort > 0) {
-            forge.mtga.fd.FrontDoor fd = new forge.mtga.fd.FrontDoor(db, dataDir, profileApi);
+            fd = new forge.mtga.fd.FrontDoor(db, dataDir, profileApi);
             fd.setMatchDoor("127.0.0.1", port);
             fd.setPeer(peerConfig(db, clientDir));
             fd.setSocial(social);
@@ -86,6 +87,14 @@ public final class ForgeMtgaMain {
         if (artPort > 0) {
             forge.mtga.art.ArtServer art = new forge.mtga.art.ArtServer(db, artPort);
             if (social != null) art.addContext("/social/", new forge.mtga.social.SocialEndpoints(social));
+            forge.mtga.fd.FrontDoor frontDoor = fd;
+            // the bridge asks before the client quits: people at a draft table this server hosts would lose their draft
+            if (frontDoor != null) art.addContext("/premier/host", ex -> {
+                byte[] body = ("{\"othersDrafting\":" + frontDoor.premierOthersDrafting() + "}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                ex.getResponseHeaders().set("Content-Type", "application/json");
+                ex.sendResponseHeaders(200, body.length);
+                try (var out = ex.getResponseBody()) { out.write(body); }
+            });
             art.start();
         }
         else System.out.println("[mtga] Art server disabled (artport=0)");

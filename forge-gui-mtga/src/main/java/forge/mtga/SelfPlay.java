@@ -115,6 +115,19 @@ public final class SelfPlay {
                 be[1].onDisconnect(fc[1]);
                 continue;
             }
+            if (Boolean.getBoolean("selfplay.pvp.concede")) {    // Bob concedes while the game waits for Alice: it must end at once
+                long end = System.currentTimeMillis() + limit * 1000;
+                while (fc[0].states < 150 && fc[1].done.getCount() > 0 && System.currentTimeMillis() < end) Thread.sleep(50);
+                fc[0].hold = true;
+                Thread.sleep(1500);                              // the game thread is now waiting for Alice's answer
+                be[1].onClientMessage(fc[1], ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConcedeReq).build());
+                boolean got = fc[0].done.await(5, TimeUnit.SECONDS) && fc[1].done.await(5, TimeUnit.SECONDS);
+                boolean right = fc[0].result.endsWith("team 1") && fc[1].result.endsWith("team 2");
+                System.out.println("=== pvp concede game " + (g + 1) + ": " + (got ? "ended within 5 s" : "DID NOT END") + ", Alice " + fc[0].result + ", Bob " + fc[1].result + (right ? "" : " (WRONG)"));
+                if (!got || !right) failed++;
+                for (int i = 0; i < 2; i++) be[i].onDisconnect(fc[i]);
+                continue;
+            }
             if (!emoteExchange(fc, be, "pvp")) failed++;
             if (!awaitAndCheck(fc, g, "pvp", limit)) failed++;
             for (int i = 0; i < 2; i++) be[i].onDisconnect(fc[i]);
@@ -371,7 +384,10 @@ public final class SelfPlay {
             }
         }
 
-        private void reply(ClientToGREMessage.Builder b) { backend.onClientMessage(this, b.build()); }
+        /** This client stops answering (it "thinks"): the game thread waits for it. */
+        volatile boolean hold;
+
+        private void reply(ClientToGREMessage.Builder b) { if (!hold) backend.onClientMessage(this, b.build()); }
 
         private static ClientToGREMessage.Builder msg(ClientMessageType t) { return ClientToGREMessage.newBuilder().setType(t); }
 
