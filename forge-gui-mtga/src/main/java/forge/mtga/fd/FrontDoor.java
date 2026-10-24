@@ -991,6 +991,11 @@ public final class FrontDoor {
             }
         }
         b.setDeckSummariesCacheVersion(1).setDecksCacheVersion(1);
+        // the draft events' prize for winning out (an Event-type token: the rewards panel shows it with the EventToken model)
+        b.setTokenDefinitionsCacheVersion(1).addTokenDefinitions(TokenDefinition.newBuilder().setTokenId(DraftEvents.PRIZE_TOKEN)
+                .setExpirationDateInternal(Timestamp.newBuilder().setSeconds(4070908800L))   // 2099: the client hides expired tokens
+                .setTokenTypeInternal(1).setPrefabName("EventToken")
+                .setHeaderLocKey("Forge/Token/EventChampion").setDescriptionLocKey("Forge/Token/EventChampion_Desc"));
         System.out.println("[mtga] FD StartHook: " + n + " decks");
         return b.build();
     }

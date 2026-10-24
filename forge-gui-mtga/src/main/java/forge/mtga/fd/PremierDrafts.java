@@ -157,7 +157,7 @@ final class PremierDrafts {
                     "ViewCardPoolWidget", obj("CardPool", DraftEvents.grpArray(s.poolGrpIds())));
             JsonObject ux = obj("PublicEventName", name, "DisplayPriority", priority++, "PrioritizeBannerIfPlayerHasToken", false,
                     "Parameters", obj(), "Group", "", "EventBladeBehavior", "EventPage", "DynamicFilterTagIds", new JsonArray(),
-                    "DeckSelectFormat", ForgeFormats.LIMITED, "FactionSealedUXInfo", new JsonArray(), "Prizes", obj(),
+                    "DeckSelectFormat", ForgeFormats.LIMITED, "FactionSealedUXInfo", new JsonArray(), "Prizes", DraftEvents.prizes(),
                     "EventComponentData", data, "Joinability", "Open");
             out.add(obj("InternalEventName", name, "EventState", "Active", "FormatType", "Draft",
                     "StartTime", "2020-01-01T00:00:00Z", "LockedTime", "2099-01-01T00:00:00Z", "ClosedTime", "2099-01-01T00:00:00Z",

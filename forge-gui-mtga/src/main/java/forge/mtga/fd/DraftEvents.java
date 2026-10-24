@@ -44,6 +44,14 @@ final class DraftEvents {
     private static final int MATCH_DECK_MIN = 40;
     /** Arena's quick draft: best-of-1 matches until 7 wins or 3 losses (-Dmtga.draft.maxWins / maxLosses for testing the event's end). */
     static final int MAX_WINS = Integer.getInteger("mtga.draft.maxWins", 7), MAX_LOSSES = Integer.getInteger("mtga.draft.maxLosses", 3);
+    /**
+     * The prize for winning out: nothing but an appreciation token (Event Champion, defined in StartHook), shown on the
+     * last bubble of the win track (client ServerRewards icon, and the 3D model of its hover popup) and in the client's
+     * rewards panel when claimed. PRIZE_ID is its entry in EventUXInfo.Prizes.
+     */
+    static final String PRIZE_TOKEN = "Forge_EventChampion";
+    private static final String PRIZE_ICON = "ObjectiveEventIcon_TokenQualifier", PRIZE_POPUP = "RewardPopup3DIcon_TokenQualifier",
+            PRIZE_ID = "f0f0f0f0-0000-4000-8000-000000000007", PRIZE_ID_0 = "f0f0f0f0-0000-4000-8000-000000000000";
 
     /** A draftable Forge set. */
     record SetInfo(String code, String name, java.util.Date date, int cards, int mapped, List<Integer> grpIds) { }
@@ -152,7 +160,7 @@ final class DraftEvents {
                     "ViewCardPoolWidget", obj("CardPool", grpArray(s.grpIds())));
             JsonObject ux = obj("PublicEventName", name, "DisplayPriority", priority++, "PrioritizeBannerIfPlayerHasToken", false,
                     "Parameters", obj(), "Group", "", "EventBladeBehavior", "EventPage", "DynamicFilterTagIds", new JsonArray(),
-                    "DeckSelectFormat", ForgeFormats.LIMITED, "FactionSealedUXInfo", new JsonArray(), "Prizes", obj(),
+                    "DeckSelectFormat", ForgeFormats.LIMITED, "FactionSealedUXInfo", new JsonArray(), "Prizes", prizes(),
                     "EventComponentData", data, "Joinability", "Open");
             out.add(obj("InternalEventName", name, "EventState", "Active", "FormatType", "Draft",
                     "StartTime", "2020-01-01T00:00:00Z", "LockedTime", "2099-01-01T00:00:00Z", "ClosedTime", "2099-01-01T00:00:00Z",
@@ -168,13 +176,23 @@ final class DraftEvents {
      */
     static JsonObject winTrack() {
         JsonArray chests = new JsonArray();
-        for (int w = 1; w <= MAX_WINS; w++) {
-            JsonObject chest = obj("image1", null, "image2", null, "image3", null, "prefab", null, "referenceId", null,
-                    "headerLocKey", "Events/Forge_Wins_" + w, "descriptionLocKey", "Events/Forge_Wins_Desc_" + w, "quantity", "",
+        for (int w = 0; w <= MAX_WINS; w++) {   // bubble i is i wins: the client indexes the track by the win count
+            boolean last = w == MAX_WINS;
+            JsonObject chest = obj("image1", last ? PRIZE_ICON : null, "image2", null, "image3", null, "prefab", last ? PRIZE_POPUP : null, "referenceId", null,
+                    "headerLocKey", "Events/Forge_Wins_" + w, "descriptionLocKey", (last ? "Events/Forge_Wins_Final_" : "Events/Forge_Wins_Desc_") + w, "quantity", "",
                     "locParams", new JsonObject(), "availableDate", "2020-01-01T00:00:00Z");
             chests.add(obj("ChestDescription", chest, "Wins", w));
         }
         return obj("ChestDescriptions", chests);
+    }
+
+    /**
+     * EventUXInfo.Prizes: the token for winning out, so the button there says "Claim Prize" ("Home" at 3 losses), plus an
+     * empty one at 0 wins as every Arena event has: after the claim the client looks for a prize at the course's new win
+     * count (0, the course is closed) and only then opens the rewards panel instead of going home.
+     */
+    static JsonObject prizes() {
+        return obj("0", PRIZE_ID_0, Integer.toString(MAX_WINS), PRIZE_ID);
     }
 
     static JsonArray grpArray(List<Integer> ids) {
@@ -343,14 +361,31 @@ final class DraftEvents {
 
     /**
      * EventClaimPrize: the event is over (module ClaimPrize: the page shows the final record and the filled win track; the
-     * button says "Home" as no event has prizes offline). Claiming closes it: back to Join, so it can be played again.
+     * button says "Claim Prize" after winning out, else "Home"). Claiming closes it: back to Join, so it can be played again.
+     * Winning out shows the client's rewards panel with the Event Champion token, sent with SeqId 0 so the client applies
+     * only the change and keeps its wallet and cosmetics.
      */
     Object claimPrize(JsonObject req) {
         String name = str(req, "EventName");
         JsonObject c = course(name);
-        if (c != null) System.out.println("[mtga] FD " + name + ": event closed at " + c.get("CurrentWins") + "-" + c.get("CurrentLosses"));
+        JsonObject inventory = null;
+        if (c != null) {
+            System.out.println("[mtga] FD " + name + ": event closed at " + c.get("CurrentWins") + "-" + c.get("CurrentLosses"));
+            if (c.has("CurrentWins") && c.get("CurrentWins").getAsInt() >= MAX_WINS) {
+                JsonArray changes = new JsonArray();
+                // every field: the client's converter nulls the missing ones and then reads some unchecked (DecksV3)
+                JsonObject change = obj("Source", "EventReward", "SourceId", name, "InventoryGold", 0, "InventoryGems", 0,
+                        "InventoryCustomTokens", obj(PRIZE_TOKEN, 1), "DeckCards", obj(), "Vouchers", obj(), "VouchersV2", obj(),
+                        "WildCardTrackUnCommons", 0, "WildCardTrackRares", 0, "WildCardTrackMythics", 0, "SetMasteryProgress", 0,
+                        "WildCardCommons", 0, "WildCardUnCommons", 0, "WildCardRares", 0, "WildCardMythics", 0);
+                for (String list : List.of("ArtStyles", "Avatars", "Sleeves", "Pets", "Emotes", "Titles", "Decks", "DecksV2", "DecksV3",
+                        "Boosters", "GrantedCards", "NewLetters", "PrizeWallsUnlocked")) change.add(list, new JsonArray());
+                changes.add(change);
+                inventory = obj("SeqId", 0, "Changes", changes);
+            }
+        }
         remove(name);
-        return obj("Course", newCourse(name, "Join"), "InventoryInfo", null);
+        return obj("Course", newCourse(name, "Join"), "InventoryInfo", inventory);
     }
 
     /** EventDrop / EventResign: leave the event, back to Join. */
