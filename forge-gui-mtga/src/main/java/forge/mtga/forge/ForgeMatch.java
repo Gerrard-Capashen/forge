@@ -31,6 +31,7 @@ public final class ForgeMatch {
     private String aiName = "Forge AI";
     private int ready;
     private Thread thread;
+    private volatile Game game;
 
     public ForgeMatch(CardDb db, String matchId) {
         this.db = db;
@@ -66,6 +67,35 @@ public final class ForgeMatch {
         thread = new Thread(this::run, "forge-game");
         thread.setDaemon(true);
         thread.start();
+    }
+
+    /** Unwinds the game thread out of a pending decision once a concession has ended the game ({@link #run} sends the result). */
+    static final class Conceded extends RuntimeException {
+        Conceded() { super("a player conceded", null, false, false); }
+    }
+
+    /**
+     * A client conceded: the game ends now, not when that player is next asked something. The other human seats' pending
+     * decisions wake up and apply it on the game thread ({@link #applyConcessions}); with the AI the next game event does.
+     */
+    void conceded(ForgeBackend b) {
+        System.out.println("[mtga] seat " + indexOf(b) + " concedes");
+        for (ForgeBackend o : humans) if (o != null && o != b) o.wakeConcede();
+    }
+
+    /** Game thread: every seat that asked to concede loses now. True if that ended something just now. */
+    boolean applyConcessions() {
+        Game g = game;
+        if (g == null || g.isGameOver()) return false;
+        boolean any = false;
+        for (ForgeBackend b : humans) {
+            if (b != null && b.concedeAsked() && b.player() != null && !b.player().conceded()) {
+                b.player().concede();
+                any = true;
+            }
+        }
+        if (any) g.getAction().checkGameOverCondition();
+        return any;
     }
 
     /** A client left: wake every other human seat's pending decision so the game ends instead of waiting for them. */
@@ -111,6 +141,7 @@ public final class ForgeMatch {
 
             Match match = new Match(rules, players, "MTGA");
             Game game = match.createGame();
+            this.game = game;
             for (int i = 0; i < 2; i++) {
                 if (humans[i] == null) continue;
                 // the printings the viewer chose win over the opponent's for a card both play
@@ -126,6 +157,12 @@ public final class ForgeMatch {
             for (ForgeBackend b : humans) if (b != null) b.sendGameOver();
         } catch (Throwable t) {
             if (t instanceof InterruptedException || t.getCause() instanceof InterruptedException) return;
+            Game g = game;
+            if (g != null && g.isGameOver()) {               // a concession ended the game while someone was being asked
+                System.out.println("[mtga] game over (conceded)");
+                for (ForgeBackend b : humans) if (b != null) b.sendGameOver();
+                return;
+            }
             System.out.println("[mtga] game thread died: " + t);
             t.printStackTrace(System.out);
             for (ForgeBackend b : humans) if (b != null) b.matchAborted();

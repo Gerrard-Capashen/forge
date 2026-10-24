@@ -83,6 +83,9 @@ public final class ForgeBackend implements GameBackend {
     /** Cards castable from exile/graveyard (instance id -> actions), shown next to the hand via GameStateMessage.actions. */
     private final Map<Integer, List<Action>> otherZoneActions = new LinkedHashMap<>();
     private static final ClientToGREMessage POISON = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_None).build();
+    private static final ClientToGREMessage CONCEDE_WAKE = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_None).build();
+    /** This seat's client sent ConcedeReq (read by the game thread, see ForgeMatch.applyConcessions). */
+    private volatile boolean concedeAsked;
 
     public ForgeBackend(CardDb db, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck) {
         this(db, new forge.mtga.MatchSetup(DEFAULT_MATCH_ID, humanDeck, aiDeck, Map.of(), "Forge AI"));
@@ -137,7 +140,12 @@ public final class ForgeBackend implements GameBackend {
     public void onClientMessage(MatchSession s, ClientToGREMessage msg) {
         forge.mtga.net.Capture.log("CLIENT -> " + forge.mtga.net.Capture.flat(msg, 1200));
         switch (msg.getType()) {
-            case ClientMessageType_MulliganResp, ClientMessageType_PerformActionResp, ClientMessageType_ConcedeReq,
+            case ClientMessageType_ConcedeReq -> {
+                concedeAsked = true;            // at once, whoever the game waits for (see ForgeMatch.conceded)
+                inbox.add(msg);
+                room.conceded(this);
+            }
+            case ClientMessageType_MulliganResp, ClientMessageType_PerformActionResp,
                  ClientMessageType_DeclareAttackersResp, ClientMessageType_SubmitAttackersReq,
                  ClientMessageType_DeclareBlockersResp, ClientMessageType_SubmitBlockersReq,
                  ClientMessageType_SelectTargetsResp, ClientMessageType_SubmitTargetsReq, ClientMessageType_CancelActionReq,
@@ -166,6 +174,13 @@ public final class ForgeBackend implements GameBackend {
 
     /** The other seat's client left: a pending decision here must end too. */
     void wake() { inbox.add(POISON); }
+
+    /** The other seat conceded: a pending decision here ends the game now (the concession is applied on the game thread). */
+    void wakeConcede() { inbox.add(CONCEDE_WAKE); }
+
+    boolean concedeAsked() { return concedeAsked; }
+
+    Player player() { return human; }
 
     /** An emote (or pet gesture) the opponent's client sent, passed on to this seat's client; it draws it on the opponent's side. */
     void deliverUi(com.wizards.mtga.gre.UIMessage ui) {
@@ -254,6 +269,7 @@ public final class ForgeBackend implements GameBackend {
     }
 
     private void onGameEvent(GameEvent ev) {
+        room.applyConcessions();       // game thread: a concession while nobody is asked (the AI's turn) ends the game here
         if (!introSent) return;
         sync.onEvent(ev);
         if (ev instanceof forge.game.event.GameEventTurnBegan || ev instanceof forge.game.event.GameEventTurnPhase) batching = false;
@@ -323,9 +339,17 @@ public final class ForgeBackend implements GameBackend {
             while (true) {
                 ClientToGREMessage m = inbox.take();
                 if (m == POISON) throw new IllegalStateException("client disconnected");
+                if (m == CONCEDE_WAKE) {
+                    if (!room.applyConcessions()) continue;     // already applied (a stale wake-up)
+                    throw new ForgeMatch.Conceded();
+                }
                 if (want.test(m)) {
                     decided();
                     return m;
+                }
+                if (m.getType() == ClientMessageType.ClientMessageType_ConcedeReq) {   // conceded while asked something else
+                    room.applyConcessions();
+                    throw new ForgeMatch.Conceded();
                 }
                 System.out.println("[mtga] ignoring out-of-turn client message " + m.getType());
             }
