@@ -32,6 +32,8 @@ import static forge.mtga.fd.FrontDoor.obj;
  */
 public final class PremierOnlineCheck {
     private static final AtomicInteger failed = new AtomicInteger();
+    /** Longest wait for a table to form (the deployed coordinator: 60 s + 30 s per player who joins). */
+    private static final long FORM_WAIT_MS = 200_000;
 
     private static void check(boolean ok, String what) {
         System.out.println((ok ? "  ok   " : "  FAIL ") + what);
@@ -104,10 +106,10 @@ public final class PremierOnlineCheck {
         for (Player p : all) {
             p.premier.join(obj("EventName", event));
             p.premier.joinQueue(p::push, obj("EventName", event));
-            Thread.sleep(300);                                  // arrival order = slot order: Alice hosts
+            awaitQueued(p);                                     // arrival order = slot order: Alice hosts
         }
         for (Player p : all) {
-            JsonObject req = p.next(20_000, "ReadyReq");
+            JsonObject req = p.next(FORM_WAIT_MS, "ReadyReq");
             p.draftId = req == null ? null : req.get("DraftId").getAsString();
         }
         check(all.stream().allMatch(p -> p.draftId != null), "all three seated: ready check on every client");
@@ -160,10 +162,10 @@ public final class PremierOnlineCheck {
         for (Player p : List.of(d, e)) {
             p.premier.join(obj("EventName", event));
             p.premier.joinQueue(p::push, obj("EventName", event));
-            Thread.sleep(300);
+            awaitQueued(p);
         }
         for (Player p : List.of(d, e)) {
-            JsonObject req = p.next(20_000, "ReadyReq");
+            JsonObject req = p.next(FORM_WAIT_MS, "ReadyReq");
             p.draftId = req == null ? null : req.get("DraftId").getAsString();
         }
         d.premier.ready(obj("EventName", event, "DraftId", d.draftId));
@@ -175,6 +177,16 @@ public final class PremierOnlineCheck {
 
         System.out.println(failed.get() == 0 ? "PREMIER ONLINE CHECK OK" : "PREMIER ONLINE CHECK FAILED (" + failed.get() + ")");
         System.exit(failed.get() == 0 ? 0 : 1);
+    }
+
+    /** Waits until the coordinator counted this player in the table queue (its first PodNotification), so the next one arrives after it. */
+    private static void awaitQueued(Player p) throws InterruptedException {
+        long end = System.currentTimeMillis() + 15_000;
+        while (System.currentTimeMillis() < end) {
+            JsonObject n = p.pushes.poll(500, TimeUnit.MILLISECONDS);
+            if (n != null && "PodNotification".equals(n.get("Type").getAsString())) return;
+        }
+        check(false, p.name + " was never counted in the table queue");
     }
 
     /** As the client's draft scene: pick the first card of every pack until {@code stopAfter} picks or the last pick. */

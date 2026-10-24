@@ -132,7 +132,7 @@ public final class SelfPlay {
             if (!awaitAndCheck(fc, g, "pvp", limit)) failed++;
             for (int i = 0; i < 2; i++) be[i].onDisconnect(fc[i]);
         }
-        System.out.println("opponent hand cards visible to a client (reveals): " + OPP_HAND_VISIBLE.get());
+        System.out.println("opponent hand cards visible to a client (reveals): " + OPP_HAND_VISIBLE.get() + ", opponent library cards shown by look-at browsers: " + OPP_LIBRARY_SHOWN.get());
         System.out.println(failed == 0 ? "SELFPLAY PVP OK" : "SELFPLAY PVP FAILED games=" + failed);
         return failed == 0 ? 0 : 1;
     }
@@ -336,6 +336,8 @@ public final class SelfPlay {
     static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger ATTACH_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger OPP_HAND_VISIBLE = new java.util.concurrent.atomic.AtomicInteger();
+    /** Opponent library cards a look-at browser showed (allowed: the rules show them to this player). */
+    static final java.util.concurrent.atomic.AtomicInteger OPP_LIBRARY_SHOWN = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger FACEDOWN_SEEN = new java.util.concurrent.atomic.AtomicInteger();
 
     static final class FakeClient extends MatchSession {
@@ -488,6 +490,7 @@ public final class SelfPlay {
                 case GREMessageType_SelectNReq -> {
                     requests++;
                     SelectNReq sn = g.getSelectNReq();
+                    if (sn.getIdType() == IdType.IdType_InstanceId) offered.addAll(sn.getIdsList());
                     if (!g.hasPrompt()) problem("SelectNReq without prompt (the client NREs in SelectNWorkflowTranslation)");
                     List<Integer> ids = new ArrayList<>(sn.getIdsList());
                     if (sn.getIdType() == IdType.IdType_InstanceId) {
@@ -507,6 +510,7 @@ public final class SelfPlay {
                 case GREMessageType_GroupReq -> {
                     requests++;
                     GroupReq gr = g.getGroupReq();
+                    offered.addAll(gr.getInstanceIdsList());
                     List<Integer> ids = new ArrayList<>(gr.getInstanceIdsList());
                     for (int id : ids) {
                         GameObjectInfo o = objs.get(id);
@@ -614,6 +618,21 @@ public final class SelfPlay {
 
         private ZoneInfo zone(int id) { return zones.getOrDefault(id, ZoneInfo.getDefaultInstance()); }
 
+        /** Opponent library cards the last state showed this client, and every instance id a browser request (SelectN/Group) offered. */
+        private final Set<Integer> libSeen = new HashSet<>(), offered = new HashSet<>();
+
+        /**
+         * An opponent's library card may reach this client only when the rules show it to this player: a look-at / reveal browser
+         * lists it in the request that follows its state. Any other one is a leak.
+         */
+        private void checkLibReveals() {
+            for (int id : libSeen) {
+                if (offered.contains(id)) OPP_LIBRARY_SHOWN.incrementAndGet();
+                else problem("opponent library card visible to the client");
+            }
+            libSeen.clear();
+        }
+
         private void state(GameStateMessage gs) {
             states++;
             Map<Integer, GameObjectInfo> oldObjs = new HashMap<>(objs);
@@ -644,6 +663,7 @@ public final class SelfPlay {
             if (gs.hasTurnInfo()) turn = gs.getTurnInfo();
             if (turn != null) turnNo = turn.getTurnNumber();
 
+            checkLibReveals();
             // structural consistency
             Map<Integer, Integer> seen = new HashMap<>();
             for (ZoneInfo z : zones.values()) {
@@ -655,7 +675,7 @@ public final class SelfPlay {
                     if (o != null && o.getZoneId() != z.getZoneId()) problem("object zoneId differs from listing zone");
                     // player vs player: what the opponent holds must not reach this client (a revealed hand card is allowed, counted)
                     if (o != null && z.getOwnerSeatId() == 2 && o.getGrpId() != 0) {
-                        if (z.getType() == ZoneType.ZoneType_Library) problem("opponent library card visible to the client");
+                        if (z.getType() == ZoneType.ZoneType_Library) libSeen.add(id);     // judged by checkLibReveals (a look-at browser may show it)
                         else if (z.getType() == ZoneType.ZoneType_Hand) OPP_HAND_VISIBLE.incrementAndGet();
                     }
                 }
