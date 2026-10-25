@@ -37,7 +37,7 @@ public final class QueueCheck {
         PlayQueues q = new PlayQueues();
 
         JsonArray cfg = q.queueConfig(), events = q.eventInfos();
-        int queues = 2 * PlayQueues.FORMATS.size();
+        int queues = PlayQueues.Mode.values().length * PlayQueues.FORMATS.size();
         check(cfg.size() == queues && events.size() == queues, queues + " queues and " + queues + " events");
         for (int i = 0; i < cfg.size(); i++) {
             JsonObject c = cfg.get(i).getAsJsonObject(), e = events.get(i).getAsJsonObject();
@@ -46,9 +46,11 @@ public final class QueueCheck {
             String format = e.getAsJsonObject("EventUXInfo").get("DeckSelectFormat").getAsString();
             check(format.equals(PlayQueues.formatOf(name)) && PlayQueues.FORMATS.contains(format), name + " deck picker format " + format);
             check("Queue".equals(e.getAsJsonObject("EventUXInfo").get("EventBladeBehavior").getAsString()), name + " is a queue event");
+            boolean ranked = PlayQueues.isRanked(name), flagged = e.getAsJsonArray("Flags").toString().contains("\"Ranked\"");
+            check(ranked == "Ranked".equals(c.get("QueueType").getAsString()) && ranked == flagged, name + (ranked ? " is in the Ranked list with the Ranked flag" : " is unranked"));
         }
         check(PlayQueues.modeOf("BotPlay_Modern") == PlayQueues.Mode.BOT && PlayQueues.modeOf("CasualPlay_Pioneer") == PlayQueues.Mode.CASUAL
-                && PlayQueues.modeOf("BotPlay_Pauper") == PlayQueues.Mode.BOT && PlayQueues.modeOf("BotPlay_Brawl") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
+                && PlayQueues.modeOf("BotPlay_Pauper") == PlayQueues.Mode.BOT && PlayQueues.modeOf("RankedPlay_Vintage") == PlayQueues.Mode.RANKED && PlayQueues.modeOf("BotPlay_Brawl") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
                 "event names parse");
 
         Map<String, Integer> bolt = deck("Lightning Bolt", 4, "Mountain", 56);

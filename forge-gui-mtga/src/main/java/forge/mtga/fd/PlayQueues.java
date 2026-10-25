@@ -17,20 +17,31 @@ import static forge.mtga.fd.FrontDoor.obj;
  * the queue's format, so the client's deck picker only offers decks that are valid there; the server checks the submitted deck
  * again ({@link ForgeFormats#problem}). They are not "AIBotMatch" events, so the client runs the normal ladder flow
  * (EventJoin, EventSetDeckV3, EventEnterPairing) and the server starts the match on EventEnterPairing.
- * Casual Play is the entry point for the online matchmaking later: its event name is what a queue service would key on.
+ * Casual Play and Ranked pair two players through the coordinator, which keys its queues on the event name. Ranked events carry the
+ * "Ranked" flag (the client animates pips on the end screen only for those) and sit in the blade's Ranked list; every ranked format
+ * moves the same Constructed rank (the client shows one), see docs/results-rank-mastery.md.
  */
 final class PlayQueues {
     enum Mode {
-        BOT("BotPlay"), CASUAL("CasualPlay");
-        final String prefix;
-        Mode(String prefix) { this.prefix = prefix; }
+        BOT("BotPlay", "bot-", "Unranked", "Bot Play"), CASUAL("CasualPlay", "casual-", "Unranked", "Casual Play"),
+        RANKED("RankedPlay", "ranked-", "Ranked", "Ranked");
+        final String prefix, idPrefix, queueType, label;
+        Mode(String prefix, String idPrefix, String queueType, String label) {
+            this.prefix = prefix;
+            this.idPrefix = idPrefix;
+            this.queueType = queueType;
+            this.label = label;
+        }
     }
 
     /** Formats offered by every mode (client format names, see {@link ForgeFormats#SPECS}). */
     static final List<String> FORMATS = List.of("Standard", "Pioneer", "Modern", "Legacy", "Vintage", "Pauper");
 
     /** Play-blade queue id of a mode and format, e.g. "bot-standard". */
-    static String queueId(Mode mode, String format) { return (mode == Mode.BOT ? "bot-" : "casual-") + format.toLowerCase(); }
+    static String queueId(Mode mode, String format) { return mode.idPrefix + format.toLowerCase(); }
+
+    /** Ranked queues: online only, the match moves the player's Constructed rank. */
+    static boolean isRanked(String eventName) { return modeOf(eventName) == Mode.RANKED; }
 
     static String eventName(Mode mode, String format) { return mode.prefix + "_" + format; }
 
@@ -51,13 +62,13 @@ final class PlayQueues {
         return m == null ? null : eventName.substring(m.prefix.length() + 1);
     }
 
-    /** GetPlayBladeQueueConfig: the "Unranked" list, Bot Play first. */
+    /** GetPlayBladeQueueConfig: the "Ranked" list and the "Unranked" one (Bot Play first). */
     JsonArray queueConfig() {
         JsonArray q = new JsonArray();
         for (Mode m : Mode.values()) {
             for (String f : FORMATS) {
                 String ev = eventName(m, f);
-                q.add(obj("Id", queueId(m, f), "QueueType", "Unranked", "LocTitle", "Events/Event_Title_" + ev,
+                q.add(obj("Id", queueId(m, f), "QueueType", m.queueType, "LocTitle", "Events/Event_Title_" + ev,
                         "EventNameBO1", ev, "EventNameBO3", null, "DeckSizeBO1", null, "DeckSizeBO3", null,
                         "SideBoardBO1", null, "SideBoardBO3", null, "Tags", new JsonArray()));
             }
@@ -83,11 +94,17 @@ final class PlayQueues {
                         "EventComponentData", data, "Joinability", "Open");
                 out.add(obj("InternalEventName", name, "EventState", "Active", "FormatType", "Constructed",
                         "StartTime", "2020-01-01T00:00:00Z", "LockedTime", "2099-01-01T00:00:00Z", "ClosedTime", "2099-01-01T00:00:00Z",
-                        "Flags", new JsonArray(), "PastEntries", obj(), "EntryFees", new JsonArray(), "EventTags", new JsonArray(),
+                        "Flags", flags(m), "PastEntries", obj(), "EntryFees", new JsonArray(), "EventTags", new JsonArray(),
                         "EventUXInfo", ux, "WinCondition", "SingleElimination"));
             }
         }
         return out;
+    }
+
+    private static JsonArray flags(Mode m) {
+        JsonArray a = new JsonArray();
+        if (m == Mode.RANKED) a.add("Ranked");
+        return a;
     }
 
     // ---- courses (in memory: a queue has no progress to keep) ---------------------------------------------------
@@ -137,7 +154,7 @@ final class PlayQueues {
 
     static String queueLabel(String eventName) {
         Mode m = modeOf(eventName);
-        return m == null ? eventName : (m == Mode.BOT ? "Bot Play" : "Casual Play") + ": " + formatOf(eventName);
+        return m == null ? eventName : m.label + ": " + formatOf(eventName);
     }
 
     private static JsonElement get(JsonObject o, String key) {

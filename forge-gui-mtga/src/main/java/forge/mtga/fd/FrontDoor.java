@@ -262,20 +262,14 @@ public final class FrontDoor {
             leaveOnlineQueue();
             return GSON.toJson("Success");
         });
-        // after a match: no rewards/rank/quests offline, just "found" so the end screen continues to the home page
-        on("EventGetMatchResultReport", (s, r) -> obj("CurrentModule", lastEvent != null ? events.module(lastEvent) : "Complete", "FoundMatch", true, "InventoryInfo", null,
-                "questUpdates", new JsonArray(), "rankUpdates", null, "mythicRatingUpdates", null, "periodicRewardsProgress", null));
+        // after a match: no rewards/quests, just "found" so the end screen continues to the home page; a ranked match carries its pips
+        on("EventGetMatchResultReport", (s, r) -> matchResultReport(str(r.obj(), "MatchId")));
 
         // ---- neutral answers so the home page has no errors (no store, quests, rank, rewards, social offline) ----
         on("StaticContent", (s, r) -> profile.staticContent());
-        on("RankGetCombinedRankInfo", (s, r) -> obj("constructedSeasonOrdinal", 1, "constructedClass", "Bronze", "constructedLevel", 4,
-                "constructedStep", 0, "constructedMatchesWon", 0, "constructedMatchesLost", 0, "constructedMatchesDrawn", 0,
-                "limitedSeasonOrdinal", 1, "limitedClass", "Bronze", "limitedLevel", 4, "limitedStep", 0, "limitedMatchesWon", 0,
-                "limitedMatchesLost", 0, "limitedMatchesDrawn", 0, "constructedPercentile", 0, "constructedLeaderboardPlace", 0,
-                "limitedPercentile", 0, "limitedLeaderboardPlace", 0));
-        on("RankGetSeasonAndRankDetails", (s, r) -> obj("currentSeason", obj("seasonOrdinal", 1, "seasonStartTime", "2020-01-01T00:00:00Z",
-                "seasonEndTime", "2099-01-01T00:00:00Z", "seasonLimitedRewards", obj(), "seasonConstructedRewards", obj(), "minMatches", 0),
-                "limitedRankInfo", new JsonArray(), "constructedRankInfo", new JsonArray()));
+        // rank: from the coordinator (cached; Bronze 4 offline), see forge.mtga.social.RankService
+        on("RankGetCombinedRankInfo", (s, r) -> rank.combinedRankInfo());
+        on("RankGetSeasonAndRankDetails", (s, r) -> rank.seasonAndRankDetails());
         on("RenewalGetCurrentRenewal", (s, r) -> obj("currentId", null, "definitionId", null, "initialPayoutsStartTime", "2099-01-01T00:00:00Z",
                 "initialPayoutsEndTime", "2099-01-01T00:00:00Z", "rotatingSets", new JsonArray(), "ready", false));
         on("DeckGetAllPreconDecksV3", (s, r) -> obj("CacheVersion", 1, "PreconDecks", new JsonArray()));
@@ -388,6 +382,52 @@ public final class FrontDoor {
     public int premierOthersDrafting() { return premier.othersStillDrafting(); }
 
     private volatile forge.mtga.social.ResultReporter results;
+    private volatile forge.mtga.social.RankService rank = new forge.mtga.social.RankService(null, null, null);
+
+    /** The player's rank from the coordinator (set by the server main when online play is on; otherwise the starting rank). */
+    public void setRank(forge.mtga.social.RankService r) { rank = r; }
+
+    /** Online ranked matches of this run (match id -> event) and the wait for each one's rank change (started by the first report request). */
+    private final Map<String, String> rankedMatches = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, java.util.concurrent.CompletableFuture<JsonObject>> rankWaits = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * EventGetMatchResultReport. For a ranked match the coordinator's verdict may still be pending (the other seat reports a moment
+     * later): the rank change is fetched in the background and the client is told FoundMatch=false meanwhile, which makes it ask again
+     * (it retries for 8 s; RankService gives up after 6 s and the end screen then shows no pips). Handlers run on the network thread,
+     * so nothing here may block.
+     */
+    private Object matchResultReport(String matchId) {
+        JsonObject report = obj("CurrentModule", lastEvent != null ? events.module(lastEvent) : "Complete", "FoundMatch", true, "InventoryInfo", null,
+                "questUpdates", new JsonArray(), "rankUpdates", null, "mythicRatingUpdates", null, "periodicRewardsProgress", null);
+        if (matchId == null || !rankedMatches.containsKey(matchId)) return report;
+        forge.mtga.social.RankService rs = rank;
+        java.util.concurrent.CompletableFuture<JsonObject> wait = rankWaits.computeIfAbsent(matchId, id -> {
+            double before = rs.percentile("constructed");
+            return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                JsonObject change = rs.awaitMatch(id, 6_000);
+                if (change != null) change.addProperty("oldPercentile", before);
+                return change;
+            });
+        });
+        if (!wait.isDone()) {
+            report.addProperty("FoundMatch", false);
+            return report;
+        }
+        JsonObject change = wait.getNow(null);
+        if (change != null) {
+            report.add("rankUpdates", forge.mtga.social.RankService.progress(change));
+            JsonObject mythic = forge.mtga.social.RankService.mythic(change, change.has("oldPercentile") ? change.get("oldPercentile").getAsDouble() : 0);
+            if (mythic != null) report.add("mythicRatingUpdates", mythic);
+            System.out.println("[mtga] FD rank: match " + matchId + " " + change.get("result").getAsString() + " (" + change.get("reason").getAsString() + "): "
+                    + flatPips(change.getAsJsonObject("old")) + " -> " + flatPips(change.getAsJsonObject("new")));
+        } else {
+            System.out.println("[mtga] FD rank: no rank change for match " + matchId + " (yet)");
+        }
+        return report;
+    }
+
+    private static String flatPips(JsonObject p) { return str(p, "class") + " " + p.get("level").getAsInt() + " step " + p.get("step").getAsInt(); }
 
     /** Online matches report how they ended to the coordinator (set by the server main when online play is on). */
     public void setResults(forge.mtga.social.ResultReporter r) { results = r; }
@@ -487,7 +527,7 @@ public final class FrontDoor {
             if (cards.human().isEmpty()) return new Err(7000, "no deck for event " + eventName);
             lastEvent = eventName;
             return startOnlineMatch(s, str(course.getAsJsonObject("CourseDeckSummary"), "Name"), cards.human(), cards.printing(),
-                    profile.forDeck(course.getAsJsonObject("CourseDeckSummary")), eventName, p);
+                    profile.forDeck(course.getAsJsonObject("CourseDeckSummary")), eventName, p, null);
         }
         Map<String, Integer> bot = events.botDeck(eventName);
         forge.mtga.AiDecks.Choice ai = bot == null ? null : new forge.mtga.AiDecks.Choice("draft bot", bot);
@@ -558,6 +598,20 @@ public final class FrontDoor {
             if (peer == null) return new Err(7000, "Casual Play needs online matchmaking, which is switched off in this start (-Dmtga.p2p=off)");
             return startPeerMatch(s, deckName, human, printing, me, eventId);
         }
+        if (mode == PlayQueues.Mode.RANKED) {
+            Peer p = peer;
+            if (p == null || p.coordinator() == null || !rank.online()) {
+                return new Err(7000, "Ranked needs online play with an account, which is switched off in this start (-Dmtga.p2p=off or a direct host/join)");
+            }
+            String session;
+            try {
+                session = rank.session();
+            } catch (java.io.IOException e) {
+                System.out.println("[mtga] FD ranked: cannot sign in (" + e.getMessage() + ")");
+                return new Err(7000, "Can't sign in to the matchmaking server, so Ranked is not available right now. Check your internet connection and try again.");
+            }
+            return startOnlineMatch(s, deckName, human, printing, me, eventId, p, session);
+        }
         forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(mode == PlayQueues.Mode.BOT ? queueFormat : deckFormat(summary));
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
         String aiName = "Forge AI";
@@ -581,7 +635,7 @@ public final class FrontDoor {
      */
     private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId) {
         Peer p = peer;
-        if (p.coordinator() != null) return startOnlineMatch(s, deckName, human, printing, me, eventId, p);
+        if (p.coordinator() != null) return startOnlineMatch(s, deckName, human, printing, me, eventId, p, null);
         if (p.host() != null) {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
             forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
@@ -612,10 +666,10 @@ public final class FrontDoor {
      * queue (event) and card database. The one who waited longest hosts: its engine runs the game and the other server joins
      * through the coordinator's relay room instead of a TCP connection; from there it is the same as a P2P match.
      */
-    private Object startOnlineMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
+    private Object startOnlineMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p, String session) {
         leaveOnlineQueue();
         forge.mtga.peer.Coordinator.Ticket ticket = forge.mtga.peer.Coordinator.queue(p.coordinator(), eventId, p.fingerprint(),
-                forge.mtga.peer.PeerGuest.VERSION, me.playerId(), me.name(), p.friendCode());
+                forge.mtga.peer.PeerGuest.VERSION, me.playerId(), me.name(), p.friendCode(), session);
         onlineTicket = ticket;
         try {
             ticket.opened().get(8, java.util.concurrent.TimeUnit.SECONDS);      // fail now, not after a silent wait
@@ -641,6 +695,7 @@ public final class FrontDoor {
     void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
         String matchId = paired.match();
         System.out.println("[mtga] FD online: paired with " + paired.opponent() + " as " + paired.role() + ", match " + matchId);
+        if (PlayQueues.isRanked(eventId)) rankedMatches.put(matchId, eventId);
         forge.mtga.peer.PeerLink link = null;
         try {
             if (paired.host()) {
@@ -660,6 +715,7 @@ public final class FrontDoor {
                 return;
             }
             j.backend().setOutcomeListener(outcomeReport(paired, eventId));
+            if (PlayQueues.isRanked(eventId)) rankedMatches.put(j.matchId(), eventId);
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
             pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), eventId);
         } catch (Exception e) {

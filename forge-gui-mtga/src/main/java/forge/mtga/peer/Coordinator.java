@@ -62,11 +62,20 @@ public final class Coordinator {
 
     /** {@code base} is the coordinator's ws(s):// address; {@code code} (may be empty) restricts the pairing to players using the same friend code. */
     public static Ticket queue(String base, String queue, String fingerprint, int protocol, String playerId, String name, String code) {
+        return queue(base, queue, fingerprint, protocol, playerId, name, code, null);
+    }
+
+    /**
+     * {@code session} (may be null) = the coordinator session token, sent as an Authorization header (never in the URL): ranked
+     * queues need it, the coordinator then pairs the account rather than the {@code playerId} the URL claims.
+     */
+    public static Ticket queue(String base, String queue, String fingerprint, int protocol, String playerId, String name, String code, String session) {
         Ticket t = new Ticket();
         String url = trim(base) + "/queue?q=" + enc(queue) + "&fp=" + enc(fingerprint) + "&v=" + protocol
                 + "&id=" + enc(playerId) + "&name=" + enc(name) + (code == null || code.isBlank() ? "" : "&code=" + enc(code));
-        HttpClient.newHttpClient().newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10))
-                .buildAsync(URI.create(url), new WebSocket.Listener() {
+        WebSocket.Builder builder = HttpClient.newHttpClient().newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10));
+        if (session != null) builder.header("Authorization", "Bearer " + session);
+        builder.buildAsync(URI.create(url), new WebSocket.Listener() {
                     private final StringBuilder text = new StringBuilder();
 
                     @Override

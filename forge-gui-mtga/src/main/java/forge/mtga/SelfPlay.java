@@ -254,9 +254,11 @@ public final class SelfPlay {
      */
     static int online(CardDb db, Map<String, Integer>[] decks, int games, long seed, String url) throws Exception {
         int failed = 0;
-        String queue = "CasualPlay_Modern", fp = "selfplay-db-" + System.nanoTime();     // own card DB name: never meets another test's queue
         // -Dselfplay.results=true: two real accounts (zztest...) report the outcomes and the coordinator must verify the match
-        boolean results = Boolean.getBoolean("selfplay.results");
+        // -Dselfplay.ranked=true: the same in RankedPlay_Standard (signed-in queue tickets), and both players' rank changes are checked
+        boolean ranked = Boolean.getBoolean("selfplay.ranked"), results = ranked || Boolean.getBoolean("selfplay.results");
+        String queue = ranked ? "RankedPlay_Standard" : "CasualPlay_Modern", fp = "selfplay-db-" + System.nanoTime();     // own card DB name: never meets another test's queue
+        forge.mtga.social.RankService rankA = null, rankB = null;
         forge.mtga.social.Accounts accA = null, accB = null;
         forge.mtga.profile.FileProfileStore storeA = null, storeB = null;
         String idA = "id-alice", idB = "id-bob";
@@ -273,13 +275,17 @@ public final class SelfPlay {
             forge.mtga.social.Accounts.sync(storeB, accB);
             idA = storeA.load().playerId;
             idB = storeB.load().playerId;
+            if (ranked) {
+                rankA = new forge.mtga.social.RankService(accA, storeA, da);
+                rankB = new forge.mtga.social.RankService(accB, storeB, db2);
+            }
         }
         for (int g = 0; g < games; g++) {
             PublicProfile alice = new PublicProfile("id-alice", "Alice", "Avatar_Basic_JaceBeleren", "CardBack_Default", "", "", List.of(), "Gold", 2);
             PublicProfile bob = new PublicProfile("id-bob", "Bob", "Avatar_Basic_LilianaVess", "CardBack_Basic_Streamer", "", "", List.of(), "Mythic", 1);
-            forge.mtga.peer.Coordinator.Ticket ta = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, idA, "Alice", "");
+            forge.mtga.peer.Coordinator.Ticket ta = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, idA, "Alice", "", ranked ? rankA.session() : null);
             Thread.sleep(500);                                           // Alice waits longest: she hosts
-            forge.mtga.peer.Coordinator.Ticket tb = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, idB, "Bob", "");
+            forge.mtga.peer.Coordinator.Ticket tb = forge.mtga.peer.Coordinator.queue(url, queue, fp, forge.mtga.peer.PeerGuest.VERSION, idB, "Bob", "", ranked ? rankB.session() : null);
             forge.mtga.peer.Coordinator.Paired pa = ta.result().get(15, TimeUnit.SECONDS), pb = tb.result().get(15, TimeUnit.SECONDS);
             System.out.println("=== online paired: Alice " + pa.role() + " (sees " + pa.opponent() + "), Bob " + pb.role() + " (sees " + pb.opponent() + "), match " + pa.match());
             if (!pa.host() || pb.host() || !pa.match().equals(pb.match())) { System.out.println("  PROBLEM: wrong pairing"); failed++; continue; }
@@ -330,6 +336,7 @@ public final class SelfPlay {
                 System.out.println("  coordinator verdict: " + status + (status.equals("verified") ? "" : "  (WRONG)"));
                 if (!status.equals("verified")) failed++;
             }
+            if (ranked && !checkRank(pa.match(), rankA, storeA, outA.get(), "Alice") | !checkRank(pb.match(), rankB, storeB, outB.get(), "Bob")) failed++;
             j.backend().onDisconnect(fc[1]);
             mine.onDisconnect(fc[0]);
         }
@@ -339,6 +346,36 @@ public final class SelfPlay {
         lone.cancel();
         System.out.println(failed == 0 ? "SELFPLAY ONLINE OK" : "SELFPLAY ONLINE FAILED games=" + failed);
         return failed == 0 ? 0 : 1;
+    }
+
+    /** A ranked player's view after a match: the rank change matches the outcome, and the client's answers and profile.json follow it. */
+    private static boolean checkRank(String match, forge.mtga.social.RankService rank, forge.mtga.profile.FileProfileStore store, String outcome, String who) {
+        com.google.gson.JsonObject change = rank.awaitMatch(match, 6_000);
+        if (change == null) { System.out.println("  PROBLEM: " + who + " got no rank change"); return false; }
+        com.google.gson.JsonObject progress = forge.mtga.social.RankService.progress(change), from = change.getAsJsonObject("old"), to = change.getAsJsonObject("new");
+        String reason = change.get("reason").getAsString();
+        System.out.println("  rank " + who + ": " + outcome + " (" + reason + ") " + progress);
+        boolean ok = outcome.equals(change.get("result").getAsString()) && "Constructed".equals(progress.get("rankUpdateType").getAsString())
+                && progress.get("seasonOrdinal").getAsInt() > 0;
+        int oldPos = pos(from), newPos = pos(to);
+        if ("applied".equals(reason)) {
+            ok &= outcome.equals("win") ? newPos > oldPos : outcome.equals("loss") ? newPos <= oldPos : newPos == oldPos;
+        } else {
+            ok &= newPos == oldPos;
+        }
+        com.google.gson.JsonObject combined = rank.combinedRankInfo();
+        ok &= combined.get("constructedClass").getAsString().equals(to.get("class").getAsString()) && combined.get("constructedStep").getAsInt() == to.get("step").getAsInt();
+        forge.mtga.profile.Profile p = store.load();
+        ok &= p.rank.rankClass.equals(to.get("class").getAsString()) && p.rank.tier == to.get("level").getAsInt();
+        ok &= rank.seasonAndRankDetails().getAsJsonArray("constructedRankInfo").size() == 21;
+        if (!ok) System.out.println("  PROBLEM: " + who + "'s rank change, combined rank " + combined + " or profile rank " + p.rank.rankClass + " " + p.rank.tier + " is wrong");
+        return ok;
+    }
+
+    /** Pips as one number along the ladder (class, then level 4 -> 1, then step). */
+    private static int pos(com.google.gson.JsonObject pips) {
+        List<String> classes = List.of("Bronze", "Silver", "Gold", "Platinum", "Diamond", "Mythic");
+        return classes.indexOf(pips.get("class").getAsString()) * 100 + (4 - pips.get("level").getAsInt()) * 10 + pips.get("step").getAsInt();
     }
 
     private static PublicProfile eve() { return new PublicProfile("id-eve", "Eve", "", "", "", "", null, "", 4); }
