@@ -52,6 +52,10 @@ public final class SelfPlay {
                 System.out.println("[selfplay] deck " + i + ": " + c.name() + " (" + added + " cards added by CardDbBuilder) " + c.cards());
             }
         }
+        // -Dselfplay.builtin=Legacy: the format's built-in decks (DefaultDecks), two per game in list order: game g plays decks 2g and 2g+1
+        String builtinFormat = System.getProperty("selfplay.builtin");
+        java.util.List<DefaultDecks.Entry> builtin = builtinFormat == null ? null : DefaultDecks.of(builtinFormat);
+        if (builtin != null && builtin.isEmpty()) throw new IllegalArgumentException("no built-in decks for " + builtinFormat);
         if (Boolean.getBoolean("selfplay.pvp")) System.exit(pvp(db, decks, games, seed));
         if (Boolean.getBoolean("selfplay.peer")) System.exit(peer(db, decks, games, seed));
         if (System.getProperty("selfplay.online") != null) System.exit(online(db, decks, games, seed, System.getProperty("selfplay.online")));
@@ -59,7 +63,14 @@ public final class SelfPlay {
         Map<String, Integer> totals = new TreeMap<>();
         for (int g = 0; g < games; g++) {
             FakeClient fc = new FakeClient(new Random(seed + g));
-            ForgeBackend backend = new ForgeBackend(db, decks[0], decks[1]);
+            Map<String, Integer> d0 = decks[0], d1 = decks[1];
+            if (builtin != null) {
+                DefaultDecks.Entry a = builtin.get(2 * g % builtin.size()), b = builtin.get((2 * g + 1) % builtin.size());
+                d0 = a.main();
+                d1 = b.main();
+                System.out.println("[selfplay] game " + (g + 1) + ": " + a.format() + " / " + a.name() + " vs " + b.format() + " / " + b.name());
+            }
+            ForgeBackend backend = new ForgeBackend(db, d0, d1);
             fc.backend = backend;
             ClientToGREMessage.Builder connect = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConnectReq);
             connect.getConnectReqBuilder().getDefaultSettingsBuilder();

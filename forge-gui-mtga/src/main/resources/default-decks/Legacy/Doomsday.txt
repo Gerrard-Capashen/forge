@@ -1,0 +1,34 @@
+1 Bloodstained Mire <retro> [MH3] (F)
+4 Brainstorm <019daeec-7d1e-708f-9f9d-d36d09ca7034> [SOS] (F)
+1 Cavern of Souls <prerelease> [LCI] (F)
+1 Consider <promo pack> [MID] (F)
+4 Dark Ritual [STA] (FE)
+3 Daze <019db241-b010-77d9-8377-3304a31c1b3d> [SOA] (F)
+4 Doomsday [A25] (F)
+1 Duress <beginner box> [FDN]
+2 Edge of Autumn [FUT] (F)
+1 Flooded Strand <retro> [MH3] (F)
+4 Force of Will <019db241-e1c2-7c8f-bdd3-d055d4eab4ba> [SOA] (F)
+1 Island <251> [THB]
+1 Jace, Wielder of Mysteries <planeswalker stamp> [WAR] (F)
+1 Lion's Eye Diamond [VMA] (F)
+3 Lotus Petal [MB1]
+2 Misdirection [MB1]
+1 Misty Rainforest <TDM Special Guest - dragonscale foil> [SPG] (F)
+3 Personal Tutor [ME2] (F)
+4 Polluted Delta <retro> [MH3] (F)
+4 Ponder [MAR] (F)
+1 Scalding Tarn <TDM Special Guest - dragonscale foil> [SPG] (F)
+3 Street Wraith [MB1]
+1 Swamp <252> [THB]
+1 Thassa's Oracle <planeswalker stamp> [THB] (F)
+3 Thoughtseize <showcase> [OTP]
+1 Undercity Sewers <prerelease> [MKM] (F)
+4 Underground Sea [ME4] (F)
+
+4 Barrowgoyf
+3 Dauthi Voidwalker
+3 Fatal Push <masterpiece> [KLR]
+2 Force of Negation [MH1] (F)
+1 Island <251> [THB]
+2 Murktide Regent

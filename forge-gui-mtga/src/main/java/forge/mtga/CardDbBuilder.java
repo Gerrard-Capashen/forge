@@ -71,7 +71,15 @@ import java.util.zip.GZIPInputStream;
  * <p>{@code --cubes "A;B"}: also every card of these Forge cubes (default: the premier draft cube, see {@link forge.mtga.draft.Cubes}),
  * after the format cards. {@code --cubes ""} adds none.
  *
- * <p>Args: forgeGuiDir clientDir [--source dir] [--carddata dir] [--formats Standard,Pioneer,Modern] [--limit n] [--names "A;B"] [--cubes "A;B"] [--dry-run]
+ * <p>{@code --more-formats Legacy,Vintage,Pauper} (the default): the cards of these formats that are still missing, after the
+ * cube cards. Formats added later go at the end like this, so the GrpIds of the cards built before them never move (saved decks
+ * keep pointing at the same cards). {@code --more-formats ""} adds none.
+ *
+ * <p>Last, the cards of all those formats that the client has only as non-primary rows (Urza's Mine, Serum Visions: Alchemy
+ * bonus-sheet printings). The client's formats and deck validator ignore such rows, so they get a primary row of their own.
+ * Then non-primary rows for game pieces Forge puts in the command zone that the client lacks (The Initiative, Undercity).
+ *
+ * <p>Args: forgeGuiDir clientDir [--source dir] [--carddata dir] [--formats Standard,Pioneer,Modern] [--limit n] [--names "A;B"] [--cubes "A;B"] [--more-formats L,V,P] [--dry-run]
  */
 public final class CardDbBuilder {
     public static final int GRP_BASE = 9_000_000;
@@ -123,7 +131,25 @@ public final class CardDbBuilder {
                 }
             }
             System.out.println("[carddb] cubes " + cubes + ": " + (cards.size() - before) + " more cards");
+            String more = opt.containsKey("more-formats") ? opt.get("more-formats") : "Legacy,Vintage,Pauper";
+            if (more != null && !more.isBlank()) {
+                before = cards.size();
+                java.util.Set<String> have = new java.util.HashSet<>();
+                for (PaperCard pc : cards) have.add(pc.getName());
+                for (PaperCard pc : b.candidates(List.of(more.split(",")), 0, List.of())) if (have.add(pc.getName())) cards.add(pc);
+                System.out.println("[carddb] more formats " + more + ": " + (cards.size() - before) + " more cards");
+            }
+            before = cards.size();
+            java.util.Set<String> have = new java.util.HashSet<>();
+            for (PaperCard pc : cards) have.add(pc.getName());
+            List<String> all = new ArrayList<>(List.of(opt.getOrDefault("formats", "Standard,Pioneer,Modern").split(",")));
+            if (more != null && !more.isBlank()) all.addAll(List.of(more.split(",")));
+            b.nonPrimaryOnly = true;
+            for (PaperCard pc : b.candidates(all, 0, List.of())) if (have.add(pc.getName())) cards.add(pc);
+            System.out.println("[carddb] cards the client has only as non-primary rows: " + (cards.size() - before) + " more cards");
             for (PaperCard pc : cards) b.add(pc);
+            int pieces = b.addGamePieces();
+            System.out.println("[carddb] command zone pieces: " + pieces);
             c.commit();
             added = cards.size();
             System.out.println("[carddb] added " + added + " cards, " + b.newAbilities + " new abilities, " + b.reusedAbilities
@@ -256,6 +282,10 @@ public final class CardDbBuilder {
     static final class Builder {
         final Connection c;
         final Set<String> existingNames = new HashSet<>();
+        /** Names with a primary, non-token row: what the client's formats and collection know. */
+        final Set<String> primaryNames = new HashSet<>();
+        /** Candidates are the cards that exist only as non-primary rows (instead of the cards the client lacks). */
+        boolean nonPrimaryOnly;
         final Map<String, Integer> cardTypes = new HashMap<>(), superTypes = new HashMap<>(), subTypes = new HashMap<>();
         final Map<String, Integer> locByText = new HashMap<>();
         final Map<String, Integer> abilityByText = new HashMap<>();
@@ -272,9 +302,14 @@ public final class CardDbBuilder {
         Builder(Connection c) throws Exception {
             this.c = c;
             try (Statement st = c.createStatement()) {
-                try (ResultSet rs = st.executeQuery("select coalesce(p.Loc, f.Loc) from Cards c left join Localizations_enUS p on p.LocId = c.TitleId and p.Formatted = 0 "
+                try (ResultSet rs = st.executeQuery("select coalesce(p.Loc, f.Loc), c.IsPrimaryCard, c.IsToken from Cards c left join Localizations_enUS p on p.LocId = c.TitleId and p.Formatted = 0 "
                         + "left join Localizations_enUS f on f.LocId = c.TitleId and f.Formatted = 1")) {
-                    while (rs.next()) if (rs.getString(1) != null) existingNames.add(CardDb.plainTitle(rs.getString(1)));
+                    while (rs.next()) {
+                        if (rs.getString(1) == null) continue;
+                        String name = CardDb.plainTitle(rs.getString(1));
+                        existingNames.add(name);
+                        if (rs.getInt(2) == 1 && rs.getInt(3) == 0) primaryNames.add(name);
+                    }
                 }
                 try (ResultSet rs = st.executeQuery("select e.Type, e.Value, l.Loc from Enums e join Localizations_enUS l on l.LocId = e.LocId and l.Formatted = 1")) {
                     while (rs.next()) {
@@ -386,9 +421,33 @@ public final class CardDbBuilder {
         private boolean supported(PaperCard pc) {
             CardRules r = pc.getRules();
             CardType t = r.getType();
-            return !existingNames.contains(pc.getName()) && (r.getSplitType() == CardSplitType.None || LINKS.containsKey(r.getSplitType()))
+            boolean wanted = nonPrimaryOnly ? existingNames.contains(pc.getName()) && !primaryNames.contains(pc.getName()) : !existingNames.contains(pc.getName());
+            return wanted && (r.getSplitType() == CardSplitType.None || LINKS.containsKey(r.getSplitType()))
                     && !t.isBasicLand() && !t.isPlane() && !t.isPhenomenon() && !t.isScheme() && !t.isVanguard() && !t.isConspiracy()
                     && !t.isDungeon() && !pc.getName().startsWith("A-");
+        }
+
+        /**
+         * Rows for what Forge shows in the command zone without a card behind it, when the client has no row of that name (it
+         * has The Monarch and the AFR dungeons): the Initiative designation and Undercity, its dungeon (Vintage's Initiative
+         * decks). Not primary: never in the collection or a deck. Returns the number of rows added.
+         */
+        int addGamePieces() throws Exception {
+            List<CardRules> pieces = new ArrayList<>();
+            pieces.add(CardRules.fromScript(List.of("Name:The Initiative", "ManaCost:no cost", "Types:",
+                    "Oracle:Whenever one or more creatures a player controls deal combat damage to you, that player takes the initiative.\n"
+                            + "Whenever you take the initiative and at the beginning of your upkeep, venture into Undercity. (If you're in a dungeon, "
+                            + "advance to the next room. If not, enter Undercity. You can take the initiative even if you already have it.)")));
+            forge.item.PaperToken undercity = StaticData.instance().getAllTokens().getToken("undercity");
+            if (undercity != null) pieces.add(undercity.getRules());
+            int n = 0;
+            for (CardRules r : pieces) {
+                if (existingNames.contains(r.getName())) continue;
+                PaperCard pc = new PaperCard(r, "CLB", forge.card.CardRarity.Special);
+                insert(face(pc, r.getMainPart(), r.getName(), nextGrp++, nextArt++, false));
+                n++;
+            }
+            return n;
         }
 
         void add(PaperCard pc) throws Exception {

@@ -1,0 +1,44 @@
+1 Ancestral Recall <019daeeb-d045-7e75-adcd-d3a1a98a42bb> [SOS]
+4 Ancient Tomb [PRM-UMA]
+1 Black Lotus [1E] (F)
+4 Coveted Jewel [MB1]
+4 Force of Will <019db241-e1c2-7c8f-bdd3-d055d4eab4ba> [SOA] (F)
+2 Grim Monolith <400641> [PRM]
+1 Karn, the Great Creator <planeswalker stamp> [WAR] (F)
+1 Lodestone Golem <schematics> [BRR] (F)
+1 Mana Crypt <borderless> [2XM]
+1 Mana Vault [PRM-UMA]
+1 Manifold Key [M20] (F)
+4 Mishra's Workshop [ME4] (F)
+1 Mox Emerald [1E] (F)
+1 Mox Jet [1E] (F)
+2 Mox Opal [PRM-JUD] (F)
+1 Mox Pearl [1E] (F)
+1 Mox Ruby [1E] (F)
+1 Mox Sapphire [1E] (F)
+1 Otawara, Soaring City <prerelease> [NEO] (F)
+4 Paradoxical Outcome [KLR]
+4 Phyrexian Metamorph [NPH]
+3 Sink into Stupor [MH3] (F)
+1 Sol Ring [LCC]
+2 Talon Gates of Madara
+1 Tezzeret, Cruel Captain <borderless - triumph> [EOE] (F)
+1 The Fantasticar
+4 The One Ring <019de565-fb5d-760e-beb8-841fc7f23b27> [HOC]
+1 Time Vault [ME4] (F)
+1 Time Walk [1E] (F)
+1 Tinker [MB1]
+1 Tolarian Academy [VMA] (F)
+1 Trinisphere [MS2]
+1 Urza's Saga
+1 Vexing Bauble [MH3] (F)
+
+2 Argentum Masticore <prerelease> [ONE] (F)
+2 Defense Grid <schematics> [BRR] (F)
+2 Force of Negation [MH1] (F)
+1 Grafdigger's Cage <prerelease> [M20] (F)
+2 Hullbreacher
+2 Kappa Cannoneer <borderless> [MH3] (F)
+1 Mycosynth Lattice [BBD] (F)
+1 Pithing Needle <prerelease> [MID] (F)
+2 Wurmcoil Engine <schematics> [BRR] (F)

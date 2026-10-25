@@ -536,7 +536,8 @@ public final class StateSync {
             usedIids.add(id);
             s.binds.put(key, new int[] {id, zid});
             s.newForge.put(id, c.getId());
-            if (c.isToken() && zid == Z_BF && gsId > 0) s.createdTokens.add(id);
+            // a dungeon appears in the command zone out of nowhere, like a token on the battlefield (no DungeonStatus room tracker yet)
+            if (gsId > 0 && (c.isToken() && zid == Z_BF || c.getType().isDungeon() && zid == Z_COMMAND)) s.createdTokens.add(id);
             return id;
         }
         int was = zoneByKey.getOrDefault(key, -1);

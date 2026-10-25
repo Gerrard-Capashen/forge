@@ -1,0 +1,35 @@
+2 Bilbo, Thief in the Night <019de565-8579-75ac-8bc2-26a2b92ccdc8> [HOB] (F)
+1 Bloodstained Mire <retro> [MH3] (F)
+4 Brainstorm <019daeec-7d1e-708f-9f9d-d36d09ca7034> [SOS] (F)
+1 Brazen Borrower <planeswalker stamp> [ELD] (F)
+3 Daze <019db241-b010-77d9-8377-3304a31c1b3d> [SOA] (F)
+4 Fatal Push <masterpiece> [KLR]
+1 Flooded Strand <retro> [MH3] (F)
+4 Force of Will <019db241-e1c2-7c8f-bdd3-d055d4eab4ba> [SOA] (F)
+1 Island <251> [THB]
+2 Kaito, Bane of Nightmares <double exposure> [DSK] (F)
+1 Marsh Flats <TDM Special Guest - dragonscale foil> [SPG] (F)
+4 Mishra's Bauble <schematics> [BRR] (F)
+1 Misty Rainforest <TDM Special Guest - dragonscale foil> [SPG] (F)
+4 Moonshadow [ECL] (F)
+4 Nethergoyf [MH3] (F)
+2 Orcish Bowmasters <019f7ff7-c8ac-7e80-b94a-62c647c08eb3> [HOC] (F)
+4 Polluted Delta <retro> [MH3] (F)
+2 Ponder [MAR] (F)
+1 Scalding Tarn <TDM Special Guest - dragonscale foil> [SPG] (F)
+1 Snuff Out [DDD]
+1 Swamp <252> [THB]
+4 Thoughtseize <showcase> [OTP]
+1 Undercity Sewers <prerelease> [MKM] (F)
+3 Underground Sea [ME4] (F)
+4 Wasteland [PRM-MPR] (F)
+
+2 Barrowgoyf
+2 Consign to Memory [MH3] (F)
+2 Dauthi Voidwalker
+2 Force of Negation [MH1] (F)
+2 Hydroblast <406827> [PRM]
+1 Karakas [PRM-UMA]
+2 Massacre [NE] (F)
+1 Nihil Spellbomb [A25] (F)
+1 Null Rod [VMA] (F)

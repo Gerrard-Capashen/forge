@@ -1,0 +1,48 @@
+1 Ancestral Recall <019daeeb-d045-7e75-adcd-d3a1a98a42bb> [SOS]
+3 Bilbo, Thief in the Night <019de565-8579-75ac-8bc2-26a2b92ccdc8> [HOB] (F)
+1 Black Lotus [1E] (F)
+1 Brainstorm <019daeec-7d1e-708f-9f9d-d36d09ca7034> [SOS] (F)
+1 Demonic Tutor <019daeeb-e7f3-73f5-9d27-77a953db7a7b> [SOS]
+1 Flooded Strand <retro> [MH3] (F)
+3 Flow State <019d6da1-11c3-7f84-b203-0d74eace402b> [SOS] (F)
+1 Flusterstorm <019db241-dc30-7bee-a268-40abf24a8af0> [SOA] (F)
+3 Force of Negation [MH1] (F)
+4 Force of Will <019db241-e1c2-7c8f-bdd3-d055d4eab4ba> [SOA] (F)
+1 Gitaxian Probe [PRM-FNM] (F)
+1 Island <251> [THB]
+1 Karakas [PRM-UMA]
+3 Lorien Revealed <019fd5cc-83ab-7418-80e4-4bf7e6972fa5> [HOC] (F)
+1 Mental Misstep [NPH] (F)
+1 Misty Rainforest <TDM Special Guest - dragonscale foil> [SPG] (F)
+1 Mox Jet [1E] (F)
+1 Mox Pearl [1E] (F)
+1 Mox Sapphire [1E] (F)
+1 Nihil Spellbomb [A25] (F)
+1 Null Rod [VMA] (F)
+1 Orcish Bowmasters <019f7ff7-c8ac-7e80-b94a-62c647c08eb3> [HOC] (F)
+1 Polluted Delta <retro> [MH3] (F)
+1 Prismatic Ending <019db242-2988-77f4-9f1b-8206b709e4a1> [SOA] (F)
+4 Psychic Frog <retro> [MH3] (F)
+1 Scalding Tarn <TDM Special Guest - dragonscale foil> [SPG] (F)
+1 Spell Pierce <019db242-6b96-774d-8e15-7440ff7d99f8> [SOA] (F)
+1 Strip Mine <Uneven Horizon> [ATQ]
+3 Swords to Plowshares <019daeeb-dd3c-7e72-b6af-38f9be8751d1> [SOS]
+1 Thoughtseize <showcase> [OTP]
+1 Time Walk [1E] (F)
+1 Treasure Cruise [KTK]
+3 Tundra [ME2] (F)
+1 Undercity Sewers <prerelease> [MKM] (F)
+2 Underground Sea [ME4] (F)
+1 Urza's Saga
+1 Vexing Bauble [MH3] (F)
+4 Wasteland [PRM-MPR] (F)
+
+2 Consign to Memory [MH3] (F)
+4 Containment Priest <prerelease> [M21] (F)
+2 Fatal Push <masterpiece> [KLR]
+1 Lurrus of the Dream-Den <halo foil> [MUL] (F)
+2 Mystical Dispute [ELD] (F)
+1 Null Rod [VMA] (F)
+1 Stony Silence [MM3] (F)
+1 Swords to Plowshares <019daeeb-dd3c-7e72-b6af-38f9be8751d1> [SOS]
+1 The Tabernacle at Pendrell Vale <156399> [PRM]

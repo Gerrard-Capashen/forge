@@ -215,9 +215,20 @@ public final class ForgeFormats {
             boolean unlimited = pc != null && (pc.getRules().getType().isBasicLand()
                     || pc.getRules().getOracleText().contains("A deck can have any number of cards named"));
             if (!unlimited && e.getValue() > 4) return "more than 4 copies of " + e.getKey();
+            if (e.getValue() > 1 && restricted(spec).contains(e.getKey())) return e.getKey() + " is restricted in " + spec.name() + " (one copy)";
         }
         if (total < spec.mainMin()) return "a " + spec.name() + " deck needs at least " + spec.mainMin() + " cards (this one has " + total + ")";
         return null;
+    }
+
+    private final Map<String, Set<String>> restrictedByFormat = new HashMap<>();
+
+    /** Forge's restricted list of a format (Vintage): one copy each. */
+    private Set<String> restricted(Spec spec) {
+        return restrictedByFormat.computeIfAbsent(spec.name(), k -> {
+            GameFormat gf = spec.forgeFormat() == null ? null : FModel.getFormats().getFormat(spec.forgeFormat());
+            return gf == null ? Set.of() : new java.util.HashSet<>(gf.getRestrictedCards());
+        });
     }
 
     /** Title ids legal in a client format (after {@link #response()}), null if unknown. */

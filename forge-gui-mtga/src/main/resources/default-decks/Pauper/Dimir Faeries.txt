@@ -1,0 +1,29 @@
+1 Agony Warp [MB1]
+2 Augur of Bolas [WAR] (F)
+4 Baleful Strix [MB1]
+1 Bojuka Bog [LCC]
+4 Brainstorm <019daeec-7d1e-708f-9f9d-d36d09ca7034> [SOS] (F)
+2 Cast Down [DOM] (F)
+4 Counterspell <019e89e2-6a0b-75ac-b9ba-5a93bc5e4fa9> [MAR]
+2 Dispel [BFZ]
+1 Extract a Confession [MKM]
+3 Faerie Seer [MH1]
+4 Ice Tunnel [KHM] (F)
+10 Island <251> [THB]
+4 Lorien Revealed <019fd5cc-83ab-7418-80e4-4bf7e6972fa5> [HOC] (F)
+1 Moon-Circuit Hacker <showcase> [NEO] (F)
+1 Mukotai Ambusher <showcase> [NEO] (F)
+2 Ninja of the Deep Hours [J21]
+2 Seething Landscape [MH3] (F)
+4 Snuff Out [DDD]
+4 Spellstutter Sprite [PRM-FNM] (F)
+1 Suffocating Fumes [IKO] (F)
+1 Swamp <252> [THB]
+2 Thorn of the Black Rose [MB1]
+
+4 Annul <promo pack> [EOE] (F)
+2 Arms of Hadar
+2 Blue Elemental Blast [MB1]
+1 Campfire
+4 Hydroblast <406827> [PRM]
+2 Relic of Progenitus [ALA]

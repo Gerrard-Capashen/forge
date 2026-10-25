@@ -1,0 +1,22 @@
+4 Avenging Hunter
+2 Elvish Mystic <019fd5cc-5995-7388-a95a-fb91d4387348> [HOC] (F)
+10 Forest <254> [THB]
+3 Fyndhorn Elves <magic 30> [DMU]
+4 Generous Ent <showcase - Scroll> [LTR] (F)
+1 Gingerbread Cabin [ELD] (F)
+2 Land Grant [MM] (F)
+4 Lead the Stampede [IKO] (F)
+3 Llanowar Elves <showcase japan - fracture foil> [FDN] (F)
+4 Masked Vandal <promo pack> [KHM] (F)
+4 Nyxborn Hydra [MH3] (F)
+4 Priest of Titania <borderless> [MH3] (F)
+4 Quirion Ranger [PRM-FNM] (F)
+3 Sagu Wildling <showcase> [TDM]
+4 Timberwatch Elf [MB1]
+4 Winding Way [MH1]
+
+3 Faerie Macabre [DD3_GVL]
+4 Monstrous Emergence [DSK]
+2 Pulse of Murasa [M20] (F)
+3 Spinewoods Paladin [OTJ] (F)
+3 Vitu-Ghazi Inspector [MKM] (F)

@@ -19,6 +19,16 @@ final class AbilityMap {
 
     /** Client ability id for sa on a card with the given grpId; 0 if nothing plausible. */
     int abilityId(SpellAbility sa, int cardGrp) {
+        int id = match(sa, cardGrp);
+        if (id != 0 || sa == null) return id;
+        // an ability granted by another card (Black Mage's Rod: "equipped creature has 'Whenever you cast...'" on its Hero
+        // token) is printed on the granting card, not on its holder
+        Card host = sa.getHostCard(), from = sa.getOriginalHost();
+        if (from == null && sa.isTrigger() && sa.getTrigger() != null) from = sa.getTrigger().getOriginalHost();
+        return from == null || from == host ? 0 : match(sa, db.grpId(from.getName()));
+    }
+
+    private int match(SpellAbility sa, int cardGrp) {
         if (sa == null || cardGrp == 0) return 0;
         List<CardDb.Ability> abs = db.abilities(cardGrp);
         if (abs.isEmpty()) return sa.isManaAbility() ? basicManaAbility(sa) : 0;

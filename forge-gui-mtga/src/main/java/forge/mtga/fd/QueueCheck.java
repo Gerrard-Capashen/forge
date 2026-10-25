@@ -11,7 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Headless check of the play queues (Bot Play / Casual Play x Standard, Pioneer, Modern): the queue config and event list the
+ * Headless check of the play queues (Bot Play / Casual Play x every queue format): the queue config and event list the
  * client sees, and the server's deck-format enforcement.
  * {@code java forge.mtga.fd.QueueCheck <client folder>} from forge-gui; prints QUEUE CHECK OK / FAILED.
  */
@@ -37,7 +37,8 @@ public final class QueueCheck {
         PlayQueues q = new PlayQueues();
 
         JsonArray cfg = q.queueConfig(), events = q.eventInfos();
-        check(cfg.size() == 6 && events.size() == 6, "6 queues and 6 events");
+        int queues = 2 * PlayQueues.FORMATS.size();
+        check(cfg.size() == queues && events.size() == queues, queues + " queues and " + queues + " events");
         for (int i = 0; i < cfg.size(); i++) {
             JsonObject c = cfg.get(i).getAsJsonObject(), e = events.get(i).getAsJsonObject();
             String name = e.get("InternalEventName").getAsString();
@@ -47,7 +48,7 @@ public final class QueueCheck {
             check("Queue".equals(e.getAsJsonObject("EventUXInfo").get("EventBladeBehavior").getAsString()), name + " is a queue event");
         }
         check(PlayQueues.modeOf("BotPlay_Modern") == PlayQueues.Mode.BOT && PlayQueues.modeOf("CasualPlay_Pioneer") == PlayQueues.Mode.CASUAL
-                && PlayQueues.modeOf("BotPlay_Legacy") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
+                && PlayQueues.modeOf("BotPlay_Pauper") == PlayQueues.Mode.BOT && PlayQueues.modeOf("BotPlay_Brawl") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
                 "event names parse");
 
         Map<String, Integer> bolt = deck("Lightning Bolt", 4, "Mountain", 56);
@@ -59,7 +60,12 @@ public final class QueueCheck {
         check(formats.problem("Modern", deck("Lightning Bolt", 5, "Mountain", 55), 0) != null, "Modern refuses 5 Bolts");
         check(formats.problem("Modern", bolt, 1) != null, "a card Forge does not know is refused");
         check(formats.problem("Modern", deck("Relentless Rats", 30, "Mountain", 30), 0) == null, "any number of Relentless Rats is fine");
-        check(formats.problem("Legacy", bolt, 0) == null, "(other formats still checked: Legacy accepts Bolt)");
+        check(formats.problem("Legacy", bolt, 0) == null, "Legacy accepts Bolt + Mountain");
+        check(formats.problem("Pauper", bolt, 0) == null, "Pauper accepts Bolt + Mountain");
+        check(formats.problem("Legacy", deck("Black Lotus", 1, "Mountain", 59), 0) != null, "Legacy refuses Black Lotus");
+        check(formats.problem("Vintage", deck("Black Lotus", 1, "Mountain", 59), 0) == null, "Vintage accepts one Black Lotus");
+        check(formats.problem("Vintage", deck("Brainstorm", 2, "Mountain", 58), 0) != null, "Vintage refuses 2 Brainstorm (restricted): " + formats.problem("Vintage", deck("Brainstorm", 2, "Mountain", 58), 0));
+        check(formats.problem("Pauper", deck("Thoughtseize", 4, "Swamp", 56), 0) != null, "Pauper refuses Thoughtseize: " + formats.problem("Pauper", deck("Thoughtseize", 4, "Swamp", 56), 0));
 
         // built-in decks: every list must be playable in its own format, with every card on the client
         for (forge.mtga.DefaultDecks.Entry d : forge.mtga.DefaultDecks.all()) {
@@ -87,7 +93,7 @@ public final class QueueCheck {
             check(names.stream().noneMatch(n -> n.startsWith("Forge: ")), "old untouched starter decks removed");
             check(names.contains("Izzet Prowess") && names.contains("Dimir Midrange"), "the player's own decks are kept");
             long seeded = forge.mtga.DefaultDecks.all().stream().filter(d -> names.contains(d.name() + " (" + d.format() + ")")).count();
-            check(seeded >= 16, "built-in decks seeded: " + seeded);
+            check(seeded >= forge.mtga.DefaultDecks.all().size() - 2, "built-in decks seeded: " + seeded + " of " + forge.mtga.DefaultDecks.all().size());
             for (String f : PlayQueues.FORMATS) {
                 forge.mtga.AiDecks.Choice c = forge.mtga.AiDecks.fromDefaults(f, d -> formats.problem(d.format(), d.main(), 0) == null && d.main().keySet().stream().allMatch(n -> db.grpId(n) != 0));
                 check(c != null && formats.problem(f, c.cards(), 0) == null, "bot deck for " + f + ": " + (c == null ? null : c.name()));

@@ -1,0 +1,20 @@
+3 Faithless Looting [LCC]
+4 Fiery Temper [SIR]
+3 Fireblast [VMA]
+4 Grab the Prize [DSK]
+3 Guttersnipe <019fd5cc-758e-7898-a839-c142b54e4609> [HOC] (F)
+4 Highway Robbery [OTJ] (F)
+4 Kessig Flamebreather [VOW] (F)
+4 Lava Dart [MH1] (F)
+4 Lightning Bolt <019daeeb-bcf9-7344-bdbf-d6f685616bc2> [SOS]
+1 Melded Moxite [EOE] (F)
+19 Mountain <253> [THB]
+4 Sneaky Snacker [MH3]
+3 Voldaren Epicure <showcase> [VOW] (F)
+
+2 Campfire
+2 Cast into the Fire <showcase - Scroll> [LTR] (F)
+4 Cleansing Wildfire [ZNR] (F)
+1 End the Festivities [VOW] (F)
+4 Pyroblast [SS3] (F)
+2 Relic of Progenitus [ALA]

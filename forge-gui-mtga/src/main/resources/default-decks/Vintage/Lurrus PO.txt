@@ -1,0 +1,47 @@
+1 Ancestral Recall <019daeeb-d045-7e75-adcd-d3a1a98a42bb> [SOS]
+1 Black Lotus [1E] (F)
+1 Dress Down [MH2]
+3 Flame of Anor <019f7ff7-d8bc-7358-a12d-5fdc3c20237a> [HOC] (F)
+1 Flooded Strand <retro> [MH3] (F)
+2 Flow State <019d6da1-11c3-7f84-b203-0d74eace402b> [SOS] (F)
+3 Force of Negation [MH1] (F)
+4 Force of Will <019db241-e1c2-7c8f-bdd3-d055d4eab4ba> [SOA] (F)
+1 Forth Eorlingas!
+1 Gitaxian Probe [PRM-FNM] (F)
+1 Island <251> [THB]
+3 Lorien Revealed <019fd5cc-83ab-7418-80e4-4bf7e6972fa5> [HOC] (F)
+1 Mana Crypt <borderless> [2XM]
+1 Mental Misstep [NPH] (F)
+1 Meticulous Archive <prerelease> [MKM] (F)
+1 Mox Emerald [1E] (F)
+1 Mox Jet [1E] (F)
+1 Mox Pearl [1E] (F)
+1 Mox Ruby [1E] (F)
+1 Mox Sapphire [1E] (F)
+2 Paradoxical Outcome [KLR]
+1 Pithing Needle <prerelease> [MID] (F)
+2 Polluted Delta <retro> [MH3] (F)
+1 Portable Hole [AFR] (F)
+1 Pyroblast [SS3] (F)
+1 Scalding Tarn <TDM Special Guest - dragonscale foil> [SPG] (F)
+1 Snapcaster Mage <bonus sheet> [SIR]
+1 Sol Ring [LCC]
+4 Stock Up <019db242-750d-7047-b079-f153a84b4fe1> [SOA] (F)
+1 Suplex [FIN] (F)
+2 Swords to Plowshares <019daeeb-dd3c-7e72-b6af-38f9be8751d1> [SOS]
+4 Thundertrap Trainer <showcase> [BLB]
+1 Time Walk [1E] (F)
+1 Tolarian Academy [VMA] (F)
+3 Tundra [ME2] (F)
+1 Urza's Saga
+3 Volcanic Island <125> [PRM]
+
+2 Containment Priest <prerelease> [M21] (F)
+1 Lurrus of the Dream-Den <halo foil> [MUL] (F)
+2 Null Rod [VMA] (F)
+1 Overencumbered
+1 Pithing Needle <prerelease> [MID] (F)
+3 Pyroblast [SS3] (F)
+1 Seal of Cleansing [MB1]
+2 Soul-Guide Lantern <beginner box> [FDN]
+2 Swords to Plowshares <019daeeb-dd3c-7e72-b6af-38f9be8751d1> [SOS]

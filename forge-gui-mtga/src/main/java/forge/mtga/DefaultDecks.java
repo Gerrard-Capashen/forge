@@ -69,10 +69,20 @@ public final class DefaultDecks {
         return c;
     }
 
-    /** Forge's spelling: split cards "A // B" (also written "A/B"), double-faced cards and rooms are known by their front face "A" only. */
+    /**
+     * Forge's spelling: accents as Forge writes them ("Lorien Revealed" is "Lórien Revealed"); split cards "A // B" (also written
+     * "A/B"), double-faced cards and rooms are known by their front face "A" only.
+     */
     private static String forgeName(String name) {
         int slash = name.indexOf('/');
-        if (slash <= 0) return name;
+        if (slash <= 0) {
+            try {
+                var pc = StaticData.instance().getCommonCards().getUniqueByName(name);
+                return pc == null ? name : pc.getName();
+            } catch (RuntimeException e) {
+                return name;   // card database not loaded
+            }
+        }
         String front = name.substring(0, slash).trim(), back = name.substring(name.lastIndexOf('/') + 1).trim();
         try {
             var cards = StaticData.instance().getCommonCards();

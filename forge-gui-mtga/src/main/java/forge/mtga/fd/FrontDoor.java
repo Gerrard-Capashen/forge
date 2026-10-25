@@ -218,7 +218,7 @@ public final class FrontDoor {
             return obj("GraphStates", states, "InventoryInfo", null);
         });
 
-        // ---- play: Bot Play (vs the Forge AI) and Casual Play (vs another player) in Standard, Pioneer and Modern, see PlayQueues ----
+        // ---- play: Bot Play (vs the Forge AI) and Casual Play (vs another player) per format, see PlayQueues ----
         on("GetPlayBladeQueueConfig", (s, r) -> queues.queueConfig().toString());
         on("EventGetActiveEventsV2", (s, r) -> {
             JsonArray bots = new JsonArray();
@@ -822,7 +822,7 @@ public final class FrontDoor {
     // ---- starter decks ------------------------------------------------------------------------------------------
 
     /** Marker of the built-in deck set; a new set (new name) is seeded once on the next start. */
-    private static final String SEED_MARKER = ".seeded-defaults-v3";
+    private static final String SEED_MARKER = ".seeded-defaults-v4";
 
     /** Can the built-in deck be played as its own format: every card on the client and legal in the format? Reason in the log. */
     private boolean playable(forge.mtga.DefaultDecks.Entry d) {
@@ -835,8 +835,8 @@ public final class FrontDoor {
     }
 
     /**
-     * First start with this deck set (marker file data/.seeded-defaults-v3): the player gets the built-in Standard, Pioneer and
-     * Modern decks (DefaultDecks). The earlier starter decks ("Forge: <precon>", Timeless) are removed if the player never
+     * First start with this deck set (marker file data/.seeded-defaults-v4): the player gets the built-in decks of every
+     * queue format (DefaultDecks); decks of an earlier set keep their names and are not seeded twice. The earlier starter decks ("Forge: <precon>", Timeless) are removed if the player never
      * changed them. Delete the marker to seed again.
      */
     private void seedStarterDecks(File dataDir) {

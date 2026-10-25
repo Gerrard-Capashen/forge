@@ -1,9 +1,21 @@
+Legacy/Boros Energy.txt
+Legacy/Dimir Tempo.txt
+Legacy/Doomsday.txt
+Legacy/Eldrazi.txt
+Legacy/Izzet Delver.txt
+Legacy/Lands.txt
 Modern/Boros Energy.txt
 Modern/Broodscale Combo.txt
 Modern/Esper.txt
 Modern/Izzet Affinity.txt
 Modern/Izzet Prowess.txt
 Modern/W-U-R-G Domain Zoo.txt
+Pauper/Bant Tron.txt
+Pauper/Dimir Faeries.txt
+Pauper/Grixis Affinity.txt
+Pauper/Mono-Blue Terror.txt
+Pauper/Mono-Green Elves.txt
+Pauper/Mono-Red Madness Burn.txt
 Pioneer/Dimir Aggro.txt
 Pioneer/Golgari Midrange.txt
 Pioneer/Izzet Prowess.txt
@@ -16,3 +28,9 @@ Standard/Dimir Midrange.txt
 Standard/Izzet Spellementals.txt
 Standard/Mono-Green Landfall.txt
 Standard/Orzhov Life Gain.txt
+Vintage/Esper Lurrus Control.txt
+Vintage/Jewel Shops.txt
+Vintage/Lurrus PO.txt
+Vintage/Mono-White Initiative.txt
+Vintage/Oath of Druids.txt
+Vintage/Raker Shops.txt
