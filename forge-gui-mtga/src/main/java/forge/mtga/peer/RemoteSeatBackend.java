@@ -18,6 +18,11 @@ public final class RemoteSeatBackend implements GameBackend {
     private volatile boolean resultSeen;
     private volatile java.util.function.Consumer<String> outcomeListener;
 
+    private volatile java.util.function.Consumer<com.google.gson.JsonObject> metricsListener;
+
+    /** This seat's quest counters, as the host's engine counted them (frame METRICS; never called with an older host). */
+    public void setMetricsListener(java.util.function.Consumer<com.google.gson.JsonObject> l) { metricsListener = l; }
+
     /** Told once how the match ended for this seat ("win" | "loss" | "draw"): the host says so, or "win" when the host vanished without a word. */
     public void setOutcomeListener(java.util.function.Consumer<String> l) { outcomeListener = l; }
 
@@ -70,6 +75,13 @@ public final class RemoteSeatBackend implements GameBackend {
                     MatchServiceToClientMessage.Builder b = MatchServiceToClientMessage.parseFrom(f.body()).toBuilder();
                     MatchSession s = session;
                     if (s != null) s.send(b, b.getRequestId());
+                } else if (f.type() == PeerLink.METRICS) {
+                    java.util.function.Consumer<com.google.gson.JsonObject> ml = metricsListener;
+                    try {
+                        if (ml != null) ml.accept(com.google.gson.JsonParser.parseString(f.text()).getAsJsonObject());
+                    } catch (RuntimeException e) {
+                        System.out.println("[mtga] peer: bad quest counters from the host: " + e.getMessage());
+                    }
                 } else if (f.type() == PeerLink.RESULT) {
                     tellOutcome(f.text());
                 } else if (f.type() == PeerLink.BYE) {

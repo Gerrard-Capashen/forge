@@ -63,9 +63,13 @@ final class PlayQueues {
     }
 
     /** GetPlayBladeQueueConfig: the "Ranked" list and the "Unranked" one (Bot Play first). */
-    JsonArray queueConfig() {
+    JsonArray queueConfig() { return queueConfig(java.util.EnumSet.allOf(Mode.class)); }
+
+    /** The same for the modes this start can play (offline: Bot Play only; the others need the matchmaking server). */
+    JsonArray queueConfig(java.util.Set<Mode> modes) {
         JsonArray q = new JsonArray();
         for (Mode m : Mode.values()) {
+            if (!modes.contains(m)) continue;
             for (String f : FORMATS) {
                 String ev = eventName(m, f);
                 q.add(obj("Id", queueId(m, f), "QueueType", m.queueType, "LocTitle", "Events/Event_Title_" + ev,
@@ -77,10 +81,13 @@ final class PlayQueues {
     }
 
     /** EventInfoV3 entries for EventGetActiveEventsV2.Events. */
-    JsonArray eventInfos() {
+    JsonArray eventInfos() { return eventInfos(java.util.EnumSet.allOf(Mode.class)); }
+
+    JsonArray eventInfos(java.util.Set<Mode> modes) {
         JsonArray out = new JsonArray();
         int priority = 200;
         for (Mode m : Mode.values()) {
+            if (!modes.contains(m)) continue;
             for (String f : FORMATS) {
                 String name = eventName(m, f);
                 JsonObject data = obj(

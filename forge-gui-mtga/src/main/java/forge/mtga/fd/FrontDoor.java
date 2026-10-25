@@ -226,7 +226,7 @@ public final class FrontDoor {
         });
 
         // ---- play: Bot Play (vs the Forge AI) and Casual Play (vs another player) per format, see PlayQueues ----
-        on("GetPlayBladeQueueConfig", (s, r) -> queues.queueConfig().toString());
+        on("GetPlayBladeQueueConfig", (s, r) -> queues.queueConfig(playableModes()).toString());
         on("EventGetActiveEventsV2", (s, r) -> {
             JsonArray bots = new JsonArray();
             bots.add(botEvent(BOT_EVENT, ForgeFormats.ANY, 100));
@@ -235,7 +235,11 @@ public final class FrontDoor {
                     "Challenges", challenges != null ? new JsonArray() : null,     // non-null makes the client build its private game event (the challenge screen's deck selector needs it)
                     "AiBotMatches", bots);
         });
-        on("EventGetCoursesV2", (s, r) -> obj("Courses", events.courseList()));
+        on("EventGetCoursesV2", (s, r) -> {
+            JsonArray courses = new JsonArray();     // no course of a hidden event (the client fails on a course without its event)
+            for (JsonElement c : events.courseList()) if (premierShown() || !PremierDrafts.isPremier(str(c.getAsJsonObject(), "InternalEventName"))) courses.add(c);
+            return obj("Courses", courses);
+        });
 
         // ---- quick drafts: one event per Forge set, bot pod run by Forge (see DraftEvents) ----
         on("EventJoin", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.join(str(r.obj(), "EventName"))
@@ -285,7 +289,9 @@ public final class FrontDoor {
         on("GetAllPreferredPrintings", (s, r) -> "{}");
         on("MercGetStoreStatusV2", (s, r) -> obj("DisabledTags", new JsonArray(), "DisabledListings", new JsonArray(),
                 "CodeRedemptionEnabled", false, "StoreEnabled", false));
-        on("QuestGetQuests", (s, r) -> obj("canSwap", false, "newQuests", 0, "quests", new JsonArray()));
+        // daily quests from the coordinator (DailyQuests, QuestService); offline: none
+        on("QuestGetQuests", (s, r) -> quests.enabled() ? quests.collection() : obj("canSwap", false, "newQuests", 0, "quests", new JsonArray()));
+        on("QuestSwapQuest", (s, r) -> quests.enabled() ? quests.swap(str(r.obj(), "QuestId")) : new Err(ERR_NOT_IMPLEMENTED, "no quests offline"));
         on("PeriodicRewardsGetStatus", (s, r) -> obj("_dailyRewardSequenceId", 0, "_dailyRewardResetTimestamp", "2099-01-01T00:00:00Z",
                 "_weeklyRewardSequenceId", 0, "_weeklyRewardResetTimestamp", "2099-01-01T00:00:00Z",
                 "_dailyRewardChestDescriptions", obj(), "_weeklyRewardChestDescriptions", obj()));
@@ -403,6 +409,14 @@ public final class FrontDoor {
         masteryTrack = new MasteryTrack(m);
     }
 
+    private volatile DailyQuests quests = new DailyQuests(new forge.mtga.social.QuestService(null));
+
+    /** The daily quests from the coordinator (set by the server main when online play is on; offline: none). */
+    public void setQuests(forge.mtga.social.QuestService q) { quests = new DailyQuests(q); }
+
+    /** Local bot matches of this run: match id -> event (the quests count the format of the queue). */
+    private final Map<String, String> botMatches = new java.util.concurrent.ConcurrentHashMap<>();
+
     /** Online matches of this run (match id -> event) and, per finished match, the wait for what it earned (started by the first report request). */
     private final Map<String, String> onlineMatches = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, java.util.concurrent.CompletableFuture<JsonObject>> rewardWaits = new java.util.concurrent.ConcurrentHashMap<>();
@@ -421,6 +435,8 @@ public final class FrontDoor {
         boolean online = onlineMatches.containsKey(matchId), bot = matchId.startsWith("forge-");
         forge.mtga.social.MasteryService ms = mastery;
         forge.mtga.social.RankService rs = rank;
+        DailyQuests qs = quests;
+        String event = online ? onlineMatches.get(matchId) : botMatches.get(matchId);
         if (!(online || bot) || !ms.online()) return report;
         java.util.concurrent.CompletableFuture<JsonObject> wait = rewardWaits.computeIfAbsent(matchId, id -> {
             double before = rs.percentile("constructed");
@@ -428,16 +444,24 @@ public final class FrontDoor {
                 JsonObject earned = new JsonObject();
                 if (bot) {
                     earned.addProperty("xp", ms.botMatch(id));
-                    return earned;
+                } else {
+                    JsonObject verdict = ms.awaitVerdict(id, 5_000);
+                    if (verdict != null) {
+                        if (verdict.has("mastery")) earned.addProperty("xp", verdict.getAsJsonObject("mastery").get("xp").getAsInt());
+                        if (verdict.has("rank")) {
+                            JsonObject change = verdict.getAsJsonObject("rank");
+                            change.addProperty("oldPercentile", before);
+                            rs.onMatch(change);
+                            earned.add("rank", change);
+                        }
+                    }
                 }
-                JsonObject verdict = ms.awaitVerdict(id, 6_000);
-                if (verdict == null) return earned;
-                if (verdict.has("mastery")) earned.addProperty("xp", verdict.getAsJsonObject("mastery").get("xp").getAsInt());
-                if (verdict.has("rank")) {
-                    JsonObject change = verdict.getAsJsonObject("rank");
-                    change.addProperty("oldPercentile", before);
-                    rs.onMatch(change);
-                    earned.add("rank", change);
+                if (qs.enabled()) {
+                    JsonArray moved = qs.afterMatch(id, questMetrics(id, event));
+                    earned.add("quests", moved);
+                    if (moved.toString().contains("\"inventoryUpdate\":{")) {
+                        try { ms.refresh(); } catch (java.io.IOException ignored) { }      // a finished quest paid XP: the track's state moved
+                    }
                 }
                 return earned;
             });
@@ -447,6 +471,7 @@ public final class FrontDoor {
             return report;
         }
         JsonObject earned = wait.getNow(new JsonObject());
+        if (earned.has("quests")) report.add("questUpdates", earned.getAsJsonArray("quests"));
         int xp = earned.has("xp") ? earned.get("xp").getAsInt() : 0;
         if (xp > 0) report.add("InventoryInfo", MasteryTrack.xpChange(xp));
         JsonObject change = earned.has("rank") ? earned.getAsJsonObject("rank") : null;
@@ -462,6 +487,23 @@ public final class FrontDoor {
         System.out.println("[mtga] FD mastery: match " + matchId + " +" + xp + " XP (level " + ms.level() + ", " + ms.xp() % forge.mtga.profile.Mastery.LEVEL_XP + "/"
                 + forge.mtga.profile.Mastery.LEVEL_XP + ")");
         return report;
+    }
+
+    /**
+     * This player's quest counters of a finished match: what the engine counted for the seat (QuestMetrics: MatchPlayed, MatchWon and the
+     * gameplay counters) plus the match's kind from its event: MatchPlayed_<Format> / MatchWon_<Format> for a queue, RankedPlayed, DraftPlayed.
+     * Null when the engine's counters never arrived (an older host), so nothing is posted.
+     */
+    private static JsonObject questMetrics(String matchId, String event) {
+        JsonObject m = forge.mtga.forge.QuestMetrics.take(matchId);
+        if (m == null) return null;
+        boolean played = m.has("MatchPlayed"), won = m.has("MatchWon");
+        String format = event == null ? null : PlayQueues.formatOf(event);
+        if (format != null && played) m.addProperty("MatchPlayed_" + format, 1);
+        if (format != null && won) m.addProperty("MatchWon_" + format, 1);
+        if (event != null && played && PlayQueues.isRanked(event)) m.addProperty("RankedPlayed", 1);
+        if (event != null && played && (DraftEvents.isDraftEvent(event) || PremierDrafts.isPremier(event))) m.addProperty("DraftPlayed", 1);
+        return m;
     }
 
     private static String flatPips(JsonObject p) { return str(p, "class") + " " + p.get("level").getAsInt() + " step " + p.get("step").getAsInt(); }
@@ -494,9 +536,27 @@ public final class FrontDoor {
         return startMatch(s, stored.getAsJsonObject("Summary"), stored.getAsJsonObject("Deck"), null, BOT_EVENT);
     }
 
+    /**
+     * What this start can play: Bot Play always; Casual Play with online play (or a direct host/join); Ranked with the matchmaking server and
+     * an account. Offline (-Dmtga.p2p=off, launcher -Offline) the blade shows Bot Play only.
+     */
+    private java.util.Set<PlayQueues.Mode> playableModes() {
+        java.util.Set<PlayQueues.Mode> modes = java.util.EnumSet.of(PlayQueues.Mode.BOT);
+        Peer p = peer;
+        if (p != null) modes.add(PlayQueues.Mode.CASUAL);
+        if (p != null && p.coordinator() != null && rank.online()) modes.add(PlayQueues.Mode.RANKED);
+        return modes;
+    }
+
+    /** Premier drafts are tables of players formed by the matchmaking server: offline they are hidden (quick drafts stay). */
+    private boolean premierShown() {
+        Peer p = peer;
+        return p != null && p.coordinator() != null;
+    }
+
     private JsonArray allEvents() {
-        JsonArray all = queues.eventInfos();
-        all.addAll(premier.eventInfos());
+        JsonArray all = queues.eventInfos(playableModes());
+        if (premierShown()) all.addAll(premier.eventInfos());
         all.addAll(events.eventInfos());
         return all;
     }
@@ -657,6 +717,7 @@ public final class FrontDoor {
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName, null,
                 event ? won -> events.recordResult(eventId, won) : null));
         int total = human.values().stream().mapToInt(Integer::intValue).sum();
+        botMatches.put(matchId, eventId);
         System.out.println("[mtga] FD bot match " + matchId + " (" + eventId + "): '" + deckName + "' (" + total + " cards) vs AI deck '" + ai.name() + "'");
         Capture.log("FD bot match " + matchId + " deck '" + deckName + "' vs '" + ai.name() + "'");
 
@@ -752,6 +813,7 @@ public final class FrontDoor {
                 return;
             }
             j.backend().setOutcomeListener(outcomeReport(paired, eventId));
+            j.backend().setMetricsListener(m -> forge.mtga.forge.QuestMetrics.publish(j.matchId(), m));
             onlineMatches.put(j.matchId(), eventId);
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
             pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), eventId);

@@ -260,6 +260,7 @@ public final class SelfPlay {
         String queue = ranked ? "RankedPlay_Standard" : "CasualPlay_Modern", fp = "selfplay-db-" + System.nanoTime();     // own card DB name: never meets another test's queue
         forge.mtga.social.RankService rankA = null, rankB = null;
         forge.mtga.social.MasteryService masteryA = null, masteryB = null;
+        forge.mtga.social.QuestService questsA = null, questsB = null;
         forge.mtga.social.Accounts accA = null, accB = null;
         forge.mtga.profile.FileProfileStore storeA = null, storeB = null;
         String idA = "id-alice", idB = "id-bob";
@@ -283,6 +284,10 @@ public final class SelfPlay {
                 masteryB = new forge.mtga.social.MasteryService(new forge.mtga.social.CoordinatorSession(accB, storeB), storeB, db2);
                 masteryA.sync();
                 masteryB.sync();
+                questsA = new forge.mtga.social.QuestService(new forge.mtga.social.CoordinatorSession(accA, storeA));
+                questsB = new forge.mtga.social.QuestService(new forge.mtga.social.CoordinatorSession(accB, storeB));
+                questsA.refresh();
+                questsB.refresh();
             }
         }
         for (int g = 0; g < games; g++) {
@@ -322,6 +327,8 @@ public final class SelfPlay {
             final forge.mtga.peer.Coordinator.Paired fpa = pa, fpb = pb;
             mine.setOutcomeListener(o -> { outA.set(o); if (repA != null) repA.report(fpa, queue, o); });
             j.backend().setOutcomeListener(o -> { outB.set(o); if (repB != null) repB.report(fpb, queue, o); });
+            java.util.concurrent.atomic.AtomicReference<com.google.gson.JsonObject> metricsB = new java.util.concurrent.atomic.AtomicReference<>();
+            j.backend().setMetricsListener(metricsB::set);     // the guest's counters, as the host's engine sent them (frame METRICS)
             ClientToGREMessage.Builder connect = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConnectReq);
             connect.getConnectReqBuilder().getDefaultSettingsBuilder();
             mine.onConnect(fc[0], connect.build());
@@ -343,6 +350,8 @@ public final class SelfPlay {
             }
             if (ranked && !checkRank(pa.match(), rankA, storeA, outA.get(), "Alice") | !checkRank(pb.match(), rankB, storeB, outB.get(), "Bob")) failed++;
             if (ranked && !checkMastery(pa.match(), masteryA, storeA, outA.get(), "Alice") | !checkMastery(pb.match(), masteryB, storeB, outB.get(), "Bob")) failed++;
+            if (ranked && !checkQuests(pa.match(), forge.mtga.forge.QuestMetrics.take(pa.match()), questsA, outA.get(), "Alice")
+                    | !checkQuests(pb.match(), metricsB.get(), questsB, outB.get(), "Bob")) failed++;
             j.backend().onDisconnect(fc[1]);
             mine.onDisconnect(fc[0]);
         }
@@ -397,6 +406,35 @@ public final class SelfPlay {
         System.out.println("  mastery " + who + ": " + outcome + " +" + paid + " XP, total " + mastery.xp() + ", level " + mastery.level() + ", owned " + owned.size());
         boolean ok = paid == expected && mastery.xp() == before + paid && !p.owned.all && grantsOk && track.size() > 2000;
         if (!ok) System.out.println("  PROBLEM: " + who + "'s mastery: paid " + paid + " (expected " + expected + "), xp " + before + " -> " + mastery.xp() + ", owned.all " + p.owned.all + ", grants " + grantsOk);
+        return ok;
+    }
+
+    /**
+     * A player's quest counters of an online match (the host's engine counted both seats; the guest's came as frame METRICS) and their effect:
+     * MatchPlayed, MatchWon as the outcome, some gameplay counted; posted to the coordinator, the quests whose counter is there move, the others not.
+     */
+    private static boolean checkQuests(String match, com.google.gson.JsonObject metrics, forge.mtga.social.QuestService quests, String outcome, String who) {
+        System.out.println("  quests " + who + ": counters " + metrics);
+        if (metrics == null) { System.out.println("  PROBLEM: " + who + " got no quest counters"); return false; }
+        boolean ok = metrics.has("MatchPlayed") && metrics.has("MatchWon") == "win".equals(outcome)
+                && (metrics.has("LandsPlayed") || metrics.has("SpellsCast"));
+        com.google.gson.JsonArray before = quests.quests().deepCopy();
+        metrics.addProperty("RankedPlayed", 1);
+        com.google.gson.JsonArray moved = quests.progress(match, metrics);
+        java.util.Map<String, String> metricOf = java.util.Map.ofEntries(java.util.Map.entry("PlayRanked", "RankedPlayed"), java.util.Map.entry("AttackCreatures", "CreaturesAttacked"),
+                java.util.Map.entry("CastWhiteSpells", "WhiteSpellsCast"), java.util.Map.entry("CastBlueSpells", "BlueSpellsCast"), java.util.Map.entry("CastBlackSpells", "BlackSpellsCast"),
+                java.util.Map.entry("CastRedSpells", "RedSpellsCast"), java.util.Map.entry("CastGreenSpells", "GreenSpellsCast"), java.util.Map.entry("CastInstantsSorceries", "InstantsAndSorceriesCast"),
+                java.util.Map.entry("CastCreatures", "CreaturesCast"), java.util.Map.entry("PlayLands", "LandsPlayed"), java.util.Map.entry("DealDamage", "DamageDealt"),
+                java.util.Map.entry("KillCreatures", "OpponentCreaturesDied"), java.util.Map.entry("CastArtifactsEnchantments", "ArtifactsAndEnchantmentsCast"));
+        int expected = 0;
+        for (com.google.gson.JsonElement e : before) {
+            com.google.gson.JsonObject q = e.getAsJsonObject();
+            String metric = metricOf.get(q.get("kind").getAsString());
+            if (!q.get("done").getAsBoolean() && metric != null && metrics.has(metric)) expected++;
+        }
+        System.out.println("  quests " + who + ": " + moved.size() + " moved (expected " + expected + ") " + moved);
+        ok &= moved.size() == expected;
+        if (!ok) System.out.println("  PROBLEM: " + who + "'s quest counters or progress are wrong");
         return ok;
     }
 

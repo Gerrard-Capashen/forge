@@ -107,7 +107,22 @@ public final class ForgeBackend implements GameBackend {
 
     public void setOutcomeListener(java.util.function.Consumer<String> l) { outcomeListener = l; }
 
+    /** This seat's quest counters (QuestMetrics), handed over once when the match ends; by default to the registry the Front Door reads. */
+    private final QuestMetrics metrics = new QuestMetrics();
+    private volatile java.util.function.Consumer<com.google.gson.JsonObject> metricsListener;
+
+    /** Where this seat's quest counters go when the match ends (the host sends its guest's seat over the peer link). */
+    public void setMetricsListener(java.util.function.Consumer<com.google.gson.JsonObject> l) { metricsListener = l; }
+
     private void tellOutcome(String outcome) {
+        java.util.function.Consumer<com.google.gson.JsonObject> ml = metricsListener;
+        metricsListener = null;
+        if (ml != null) {
+            com.google.gson.JsonObject m = metrics.toJson();
+            m.addProperty("MatchPlayed", 1);
+            if ("win".equals(outcome)) m.addProperty("MatchWon", 1);
+            ml.accept(m);
+        }
         java.util.function.Consumer<String> l = outcomeListener;
         outcomeListener = null;
         if (l != null) l.accept(outcome);
@@ -121,6 +136,7 @@ public final class ForgeBackend implements GameBackend {
         this.index = index;
         this.seat = seat;
         this.matchId = room.matchId();
+        this.metricsListener = m -> QuestMetrics.publish(matchId, m);
         room.addHuman(index, this, seat);
     }
 
@@ -207,8 +223,12 @@ public final class ForgeBackend implements GameBackend {
             Card host = sa == null ? null : StateSync.visibleSource(sa.getHostCard());
             return host == null ? 0 : abilities.abilityId(sa, grp(host));
         });
+        metrics.bind(me.getView());
         game.subscribeToEvents(new Object() {
-            @Subscribe public void on(GameEvent ev) { onGameEvent(ev); }
+            @Subscribe public void on(GameEvent ev) {
+                metrics.on(ev);
+                onGameEvent(ev);
+            }
         });
     }
 

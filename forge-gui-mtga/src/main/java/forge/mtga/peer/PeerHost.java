@@ -122,6 +122,9 @@ public final class PeerHost {
             link.setReadTimeout(0);
             theirs = new ForgeBackend(db, o.room(), 1, seat);
             final PeerLink guestLink = link;
+            theirs.setMetricsListener(m -> {            // the guest's quest counters: its own server reports them
+                try { guestLink.sendText(PeerLink.METRICS, m.toString()); } catch (IOException ignored) { }
+            });
             theirs.setOutcomeListener(outcome -> {      // the guest's own server reports it to the coordinator
                 try { guestLink.sendText(PeerLink.RESULT, outcome); } catch (IOException ignored) { }
             });

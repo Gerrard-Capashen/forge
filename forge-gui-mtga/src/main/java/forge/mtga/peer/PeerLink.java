@@ -44,6 +44,8 @@ public final class PeerLink {
     public static final int BYE = 7;
     /** UTF-8 text "win" | "loss" | "draw": how the match ended for the receiving seat. Host -> guest. */
     public static final int RESULT = 8;
+    /** Host -> guest, before RESULT: the guest seat's quest counters (JSON); an older guest ignores it. */
+    public static final int METRICS = 9;
 
     private static final int MAX_BODY = 16 * 1024 * 1024;
 

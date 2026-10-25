@@ -83,6 +83,9 @@ public final class ForgeMtgaMain {
             fd.setSocial(social);
             if (accounts != null) fd.setResults(new forge.mtga.social.ResultReporter(accounts, profileStore));
             fd.setMastery(mastery);
+            forge.mtga.social.QuestService quests = new forge.mtga.social.QuestService(session);
+            quests.refresh();
+            fd.setQuests(quests);
             if (accounts != null) fd.setRank(new forge.mtga.social.RankService(session, profileStore, dataDir));
             new forge.mtga.fd.FrontDoorServer(fdPort, fd).start();
         } else {
