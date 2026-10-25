@@ -24,18 +24,21 @@ public final class RankService {
     private static final long STALE_MS = 20_000;
     private static final String[] CLASSES = {"Bronze", "Silver", "Gold", "Platinum", "Diamond", "Mythic"};
 
-    private final Accounts accounts;
+    private final CoordinatorSession accounts;
     private final FileProfileStore profiles;
     private final File cacheFile;
     private volatile JsonObject cache;
     private volatile long fetchedAt;
     private volatile boolean refreshing;
-    private volatile String token;
-    private volatile long tokenAt;
 
     /** {@code accounts} null = offline: the starting rank, nothing is fetched. */
     public RankService(Accounts accounts, FileProfileStore profiles, File dataDir) {
-        this.accounts = accounts;
+        this(accounts == null ? null : new CoordinatorSession(accounts, profiles), profiles, dataDir);
+    }
+
+    /** {@code session} null = offline. */
+    public RankService(CoordinatorSession session, FileProfileStore profiles, File dataDir) {
+        this.accounts = session;
         this.profiles = profiles;
         this.cacheFile = dataDir == null ? null : new File(dataDir, "rank.json");
         this.cache = accounts == null ? null : readCache();
@@ -45,24 +48,12 @@ public final class RankService {
     public boolean online() { return accounts != null; }
 
     /** The coordinator session token (24 h), for the ranked queue ticket too. */
-    public synchronized String session() throws IOException {
+    public String session() throws IOException {
         if (accounts == null) throw new IOException("offline");
-        if (token == null || System.currentTimeMillis() - tokenAt > 20 * 3_600_000L) {
-            token = accounts.login(profiles.load().playerId);
-            tokenAt = System.currentTimeMillis();
-        }
-        return token;
+        return accounts.token();
     }
 
-    private JsonObject call(String method, String path) throws IOException {
-        try {
-            return accounts.call(method, path, null, session());
-        } catch (Accounts.ApiException e) {
-            if (e.status != 401) throw e;
-            synchronized (this) { token = null; }                                // expired: sign in again once
-            return accounts.call(method, path, null, session());
-        }
-    }
+    private JsonObject call(String method, String path) throws IOException { return accounts.call(method, path, null); }
 
     // ---- the client's rank calls ----------------------------------------------------------------------------------
 
@@ -188,6 +179,12 @@ public final class RankService {
         if (c == null || !c.has("pools")) return 0;
         JsonObject p = pool(c.getAsJsonObject("pools"), pool);
         return p.has("percentile") ? p.get("percentile").getAsDouble() : 0;
+    }
+
+    /** A match's rank change (the {@code rank} of its verdict): the cache now, the coordinator's full answer in the background. */
+    public void onMatch(JsonObject rank) {
+        applyLocally(rank);
+        refreshAsync();
     }
 
     /** The new pips go into the cache at once (the client asks for the combined rank before a refresh could answer). */

@@ -108,13 +108,46 @@ public final class ProfileCheck {
             check(em.getEmotesCount() == 25 && stickers == 10, "emotes: owned only, no duplicates, 15 phrases + 10 stickers at most (" + em.getEmotesCount() + ")");
         }
 
-        // ownership when the player does not own everything
-        store.update(p -> { p.owned.all = false; p.owned.avatars = new ArrayList<>(real ? List.of("Avatar_Basic_GarrukWildspeaker") : List.of()); });
-        check(api.owned().getAvatarsCount() >= 5 || !real, "not owning everything: the default avatars stay owned");
-        String notOwned = catalog.avatars().stream().filter(a -> !catalog.isDefaultAvatar(a)).findFirst().orElse(null);
-        if (real && notOwned != null) {
-            String keep = api.preferred().getAvatar().getId();
-            check(keep.equals(api.setAvatar(notOwned).getAvatar().getId()), "an avatar that is not owned is refused");
+        // ownership online (mastery, docs/results-rank-mastery.md section 3): the always-owned set + the coordinator's grants
+        if (real) {
+            System.out.println("mastery ownership:");
+            String sleeve = catalog.sleeves().stream().filter(x -> !x.equals(Profile.DEFAULT_SLEEVE)).findFirst().orElseThrow();
+            String otherSleeve = catalog.sleeves().stream().filter(x -> !x.equals(Profile.DEFAULT_SLEEVE) && !x.equals(sleeve)).findFirst().orElseThrow();
+            String title = catalog.titles().stream().map(CosmeticCatalog.Title::id).filter(x -> !x.equals(forge.mtga.profile.Mastery.CHAMPION_TITLE)).findFirst().orElseThrow();
+            String sticker = catalog.stickers().get(0);
+            String granted = catalog.avatars().stream().filter(x -> !x.equals(forge.mtga.profile.Mastery.DEFAULT_AVATAR) && !x.equals("Avatar_Basic_JaceBeleren")).findFirst().orElseThrow();
+            store.update(p -> {
+                p.owned.all = false;
+                p.owned.avatars = new ArrayList<>(List.of(granted));
+                p.owned.sleeves = new ArrayList<>(List.of(sleeve));
+                p.owned.pets = new ArrayList<>();
+                p.owned.emotes = new ArrayList<>(List.of(sticker));
+                p.owned.titles = new ArrayList<>(List.of(title));
+                p.equipped.avatar = "Avatar_Basic_JaceBeleren";       // equipped while everything was unlocked, not owned now
+                p.equipped.sleeve = otherSleeve;
+                p.equipped.title = forge.mtga.profile.Mastery.CHAMPION_TITLE;     // equipped while everything was unlocked
+            });
+            CosmeticsClient own = api.owned();
+            check(own.getAvatarsCount() == 2 && own.getAvatars(0).getId().equals(forge.mtga.profile.Mastery.DEFAULT_AVATAR)
+                    && own.getAvatars(1).getId().equals(granted), "owned avatars = the Adventurer + the granted one (" + own.getAvatarsCount() + ")");
+            check(own.getSleevesCount() == 2 && own.getPetsCount() == 0 && own.getEmotesCount() == Profile.DEFAULT_EMOTES.size() + 1,
+                    "owned sleeves = default + granted, no pet, emotes = the basic phrases + the granted sticker");
+            check(own.getTitlesCount() == 1 && own.getTitles(0).getId().equals(title), "owned titles = the granted one only (the champion title is earned last)");
+            check(forge.mtga.profile.Mastery.DEFAULT_AVATAR.equals(api.self().avatar()) && Profile.DEFAULT_SLEEVE.equals(api.self().sleeve())
+                    && forge.mtga.profile.Mastery.DEFAULT_AVATAR.equals(api.preferred().getAvatar().getId()) && api.self().title().isEmpty(),
+                    "an equipped cosmetic that is not owned shows as the default (no title)");
+            check(granted.equals(api.setAvatar(granted).getAvatar().getId()), "an owned avatar can be equipped");
+            check(granted.equals(api.setAvatar("Avatar_Basic_JaceBeleren").getAvatar().getId()), "an avatar that is not owned is refused");
+            check(Profile.DEFAULT_SLEEVE.equals(api.setSleeve(otherSleeve).getSleeve().getId()) && sleeve.equals(api.setSleeve(sleeve).getSleeve().getId()),
+                    "a sleeve that is not owned is refused, an owned one accepted");
+            check(!api.setPet(catalog.pets().get(0).id()).hasPet(), "a pet that is not owned is refused");
+            check(title.equals(api.setTitle(title).getTitle().getId()) && title.equals(api.setTitle(forge.mtga.profile.Mastery.CHAMPION_TITLE).getTitle().getId()),
+                    "an owned title can be equipped, the champion title (not owned) is refused");
+            String phrase = catalog.phrases().stream().filter(x -> !Profile.DEFAULT_EMOTES.contains(x)).findFirst().orElseThrow();
+            check(!api.setEmotes(List.of("Phrase_Basic_Hello", phrase, sticker)).getEmotesList().stream().anyMatch(e -> e.getId().equals(phrase)),
+                    "an emote that is not owned is left out of the loadout");
+            new forge.mtga.social.MasteryService(null, store, dir);
+            check(store.load().owned.all, "an offline start (no account) owns everything again");
         }
         store.update(p -> p.owned.all = true);
 

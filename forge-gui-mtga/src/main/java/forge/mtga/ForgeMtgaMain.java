@@ -49,6 +49,11 @@ public final class ForgeMtgaMain {
         } else if (!"spike".equals(System.getProperty("mtga.social"))) {
             System.setProperty("mtga.social", "off");
         }
+        // Mastery (coordinator): the track and the cosmetics granted so far go into profile.json before the client reads it; offline = everything owned
+        forge.mtga.social.CoordinatorSession session = accounts == null ? null : new forge.mtga.social.CoordinatorSession(accounts, profileStore);
+        forge.mtga.social.MasteryService mastery = new forge.mtga.social.MasteryService(session, profileStore, dataDir);
+        mastery.sync();
+        if (mastery.online()) System.out.println("[mtga] mastery: level " + mastery.level() + " (" + mastery.xp() + " XP), track " + mastery.track().size() + " levels");
         forge.mtga.profile.Profile me = profileStore.load();
         System.setProperty("mtga.name", me.displayName);       // the Match Door and the engine seats use it
         System.out.println("[mtga] profile: " + me.clientName() + " (" + me.playerId + ")");
@@ -77,7 +82,8 @@ public final class ForgeMtgaMain {
             fd.setPeer(peerConfig(db, clientDir));
             fd.setSocial(social);
             if (accounts != null) fd.setResults(new forge.mtga.social.ResultReporter(accounts, profileStore));
-            if (accounts != null) fd.setRank(new forge.mtga.social.RankService(accounts, profileStore, dataDir));
+            fd.setMastery(mastery);
+            if (accounts != null) fd.setRank(new forge.mtga.social.RankService(session, profileStore, dataDir));
             new forge.mtga.fd.FrontDoorServer(fdPort, fd).start();
         } else {
             System.out.println("[mtga] Front Door disabled (fdport=0)");

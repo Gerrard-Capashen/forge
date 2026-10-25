@@ -259,6 +259,7 @@ public final class SelfPlay {
         boolean ranked = Boolean.getBoolean("selfplay.ranked"), results = ranked || Boolean.getBoolean("selfplay.results");
         String queue = ranked ? "RankedPlay_Standard" : "CasualPlay_Modern", fp = "selfplay-db-" + System.nanoTime();     // own card DB name: never meets another test's queue
         forge.mtga.social.RankService rankA = null, rankB = null;
+        forge.mtga.social.MasteryService masteryA = null, masteryB = null;
         forge.mtga.social.Accounts accA = null, accB = null;
         forge.mtga.profile.FileProfileStore storeA = null, storeB = null;
         String idA = "id-alice", idB = "id-bob";
@@ -278,6 +279,10 @@ public final class SelfPlay {
             if (ranked) {
                 rankA = new forge.mtga.social.RankService(accA, storeA, da);
                 rankB = new forge.mtga.social.RankService(accB, storeB, db2);
+                masteryA = new forge.mtga.social.MasteryService(new forge.mtga.social.CoordinatorSession(accA, storeA), storeA, da);
+                masteryB = new forge.mtga.social.MasteryService(new forge.mtga.social.CoordinatorSession(accB, storeB), storeB, db2);
+                masteryA.sync();
+                masteryB.sync();
             }
         }
         for (int g = 0; g < games; g++) {
@@ -337,6 +342,7 @@ public final class SelfPlay {
                 if (!status.equals("verified")) failed++;
             }
             if (ranked && !checkRank(pa.match(), rankA, storeA, outA.get(), "Alice") | !checkRank(pb.match(), rankB, storeB, outB.get(), "Bob")) failed++;
+            if (ranked && !checkMastery(pa.match(), masteryA, storeA, outA.get(), "Alice") | !checkMastery(pb.match(), masteryB, storeB, outB.get(), "Bob")) failed++;
             j.backend().onDisconnect(fc[1]);
             mine.onDisconnect(fc[0]);
         }
@@ -369,6 +375,28 @@ public final class SelfPlay {
         ok &= p.rank.rankClass.equals(to.get("class").getAsString()) && p.rank.tier == to.get("level").getAsInt();
         ok &= rank.seasonAndRankDetails().getAsJsonArray("constructedRankInfo").size() == 21;
         if (!ok) System.out.println("  PROBLEM: " + who + "'s rank change, combined rank " + combined + " or profile rank " + p.rank.rankClass + " " + p.rank.tier + " is wrong");
+        return ok;
+    }
+
+    /**
+     * A player's mastery after an online match: the verdict carries the XP (250 for playing, +150 for a win, inside the daily cap), the
+     * progress follows it, and profile.json owns exactly the track's first 2 x `level` cosmetics (owned.all off).
+     */
+    private static boolean checkMastery(String match, forge.mtga.social.MasteryService mastery, forge.mtga.profile.FileProfileStore store, String outcome, String who) {
+        int before = mastery.xp();
+        com.google.gson.JsonObject v = mastery.awaitVerdict(match, 6_000);
+        int paid = v != null && v.has("mastery") ? v.getAsJsonObject("mastery").get("xp").getAsInt() : -1;
+        int expected = outcome.equals("win") ? 400 : 250;
+        forge.mtga.profile.Profile p = store.load();
+        List<String[]> track = mastery.track();
+        Set<String> owned = new java.util.HashSet<>();
+        owned.addAll(p.owned.avatars); owned.addAll(p.owned.sleeves); owned.addAll(p.owned.pets); owned.addAll(p.owned.emotes); owned.addAll(p.owned.titles);
+        int grantedItems = Math.min(track.size(), 2 * mastery.level());     // two rewards per level
+        boolean grantsOk = owned.size() == grantedItems;
+        for (int i = 0; i < grantedItems; i++) grantsOk &= owned.contains(track.get(i)[1]);
+        System.out.println("  mastery " + who + ": " + outcome + " +" + paid + " XP, total " + mastery.xp() + ", level " + mastery.level() + ", owned " + owned.size());
+        boolean ok = paid == expected && mastery.xp() == before + paid && !p.owned.all && grantsOk && track.size() > 2000;
+        if (!ok) System.out.println("  PROBLEM: " + who + "'s mastery: paid " + paid + " (expected " + expected + "), xp " + before + " -> " + mastery.xp() + ", owned.all " + p.owned.all + ", grants " + grantsOk);
         return ok;
     }
 

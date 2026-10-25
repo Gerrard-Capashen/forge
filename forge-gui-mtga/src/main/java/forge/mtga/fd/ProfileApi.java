@@ -11,6 +11,7 @@ import com.wizards.mtga.fd.CosmeticsClient;
 import com.wizards.mtga.fd.CosmeticsSleeveEntry;
 import com.wizards.mtga.fd.PreferredCosmetics;
 import forge.mtga.profile.CosmeticCatalog;
+import forge.mtga.profile.Mastery;
 import forge.mtga.profile.Profile;
 import forge.mtga.profile.ProfileStore;
 import forge.mtga.profile.PublicProfile;
@@ -48,15 +49,18 @@ public final class ProfileApi {
     public ProfileStore store() { return store; }
     public CosmeticCatalog catalog() { return catalog; }
     public Profile profile() { return store.load(); }
-    public PublicProfile self() { return PublicProfile.of(store.load()); }
+    /** The player as others see them: what is equipped, where owned (an online profile shows only what it owns; see {@link #wearable}). */
+    public PublicProfile self() { return wearable(store.load()); }
     /** Developer flag (orange name), as the coordinator last said. */
     public boolean isDev() { return store.load().wotc; }
     int inventorySeq() { return inventorySeq.incrementAndGet(); }
 
     // ---- ownership ----------------------------------------------------------------------------------------------
+    // owned.all (offline): the whole catalogue. Otherwise (online, docs/results-rank-mastery.md section 3) the always-owned set
+    // (Mastery.ALWAYS_OWNED: the Adventurer, the default card back, the basic phrases) plus the coordinator's grants.
 
     private List<String> ownedAvatars(Profile p) {
-        return p.owned.all ? catalog.avatars() : merge(catalog.avatars().stream().filter(catalog::isDefaultAvatar).toList(), p.owned.avatars, catalog::hasAvatar);
+        return p.owned.all ? catalog.avatars() : merge(List.of(Mastery.DEFAULT_AVATAR), p.owned.avatars, catalog::hasAvatar);
     }
 
     private List<String> ownedSleeves(Profile p) {
@@ -78,6 +82,24 @@ public final class ProfileApi {
 
     private List<CosmeticCatalog.Title> ownedTitles(Profile p) {
         return p.owned.all ? catalog.titles() : catalog.titles().stream().filter(x -> p.owned.titles.contains(x.id())).toList();
+    }
+
+    /**
+     * The equipped cosmetics, each replaced by the default when it is not owned (a profile equipped offline with everything unlocked,
+     * then started online): the Adventurer, the default card back, no pet, no title, the owned emotes (the basic ones if none is left).
+     */
+    PublicProfile wearable(Profile p) {
+        PublicProfile all = PublicProfile.of(p);
+        if (p.owned.all) return all;
+        String avatar = ownedAvatars(p).contains(all.avatar()) ? all.avatar() : Mastery.DEFAULT_AVATAR;
+        String sleeve = ownedSleeves(p).contains(all.sleeve()) ? all.sleeve() : Profile.DEFAULT_SLEEVE;
+        String pet = all.pet().isEmpty() || ownedPets(p).stream().anyMatch(x -> x.id().equals(all.pet())) ? all.pet() : "";
+        String title = all.title().isEmpty() || ownedTitles(p).stream().anyMatch(x -> x.id().equals(all.title())) ? all.title() : "";
+        List<String> owned = ownedEmotes(p);
+        List<String> emotes = new ArrayList<>(all.emotes());
+        emotes.removeIf(e -> !owned.contains(e));
+        if (emotes.isEmpty()) emotes = Profile.DEFAULT_EMOTES;
+        return new PublicProfile(all.playerId(), all.name(), avatar, sleeve, pet, title, emotes, all.rankClass(), all.rankTier());
     }
 
     private static List<String> merge(List<String> defaults, List<String> granted, java.util.function.Predicate<String> exists) {
@@ -132,7 +154,7 @@ public final class ProfileApi {
     private static int flags(boolean isDefault) { return isDefault ? FLAG_DEFAULT : FLAG_EVENT; }
 
     /** The equipped cosmetics (StartHook, GetPreferredCosmetics and the answer of every Set*). */
-    PreferredCosmetics preferred() { return preferred(PublicProfile.of(store.load())); }
+    PreferredCosmetics preferred() { return preferred(self()); }
 
     PreferredCosmetics preferred(PublicProfile p) {
         PreferredCosmetics.Builder b = PreferredCosmetics.newBuilder();

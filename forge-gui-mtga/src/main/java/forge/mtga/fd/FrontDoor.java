@@ -208,14 +208,21 @@ public final class FrontDoor {
             for (Graph g : GRAPHS) {
                 if (requested == null || requested.equals("None") || requested.equals("-1") || requested.equals(g.type())) defs.add(g.definition());
             }
+            if (masteryTrack.enabled() && (requested == null || requested.equals("None") || requested.equals("-1") || requested.equals("SetMastery"))) {
+                defs.add(masteryTrack.definition());
+            }
             return obj("GraphDefinitions", defs);
         });
         on("GraphGetGraphState", (s, r) -> graphState(str(r.obj(), "GraphId")));
         on("GraphProcessV2", (s, r) -> {
             String graphId = str(r.obj(), "GraphId");
+            JsonObject inventory = null;
+            if (masteryTrack.enabled() && MasteryTrack.GRAPH_ID.equals(graphId) && r.obj().has("NodeIds") && r.obj().get("NodeIds").isJsonArray()) {
+                inventory = masteryTrack.claim(r.obj().getAsJsonArray("NodeIds"));
+            }
             JsonObject states = new JsonObject();
             states.add(graphId == null ? "" : graphId, graphState(graphId));
-            return obj("GraphStates", states, "InventoryInfo", null);
+            return obj("GraphStates", states, "InventoryInfo", inventory);
         });
 
         // ---- play: Bot Play (vs the Forge AI) and Casual Play (vs another player) per format, see PlayQueues ----
@@ -382,48 +389,78 @@ public final class FrontDoor {
     public int premierOthersDrafting() { return premier.othersStillDrafting(); }
 
     private volatile forge.mtga.social.ResultReporter results;
-    private volatile forge.mtga.social.RankService rank = new forge.mtga.social.RankService(null, null, null);
+    private volatile forge.mtga.social.RankService rank = new forge.mtga.social.RankService((forge.mtga.social.CoordinatorSession) null, null, null);
 
     /** The player's rank from the coordinator (set by the server main when online play is on; otherwise the starting rank). */
     public void setRank(forge.mtga.social.RankService r) { rank = r; }
 
-    /** Online ranked matches of this run (match id -> event) and the wait for each one's rank change (started by the first report request). */
-    private final Map<String, String> rankedMatches = new java.util.concurrent.ConcurrentHashMap<>();
-    private final Map<String, java.util.concurrent.CompletableFuture<JsonObject>> rankWaits = new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile forge.mtga.social.MasteryService mastery = new forge.mtga.social.MasteryService(null, null, null);
+    private volatile MasteryTrack masteryTrack = new MasteryTrack(mastery);
+
+    /** The mastery track from the coordinator (set by the server main when online play is on; offline: everything owned, no track). */
+    public void setMastery(forge.mtga.social.MasteryService m) {
+        mastery = m;
+        masteryTrack = new MasteryTrack(m);
+    }
+
+    /** Online matches of this run (match id -> event) and, per finished match, the wait for what it earned (started by the first report request). */
+    private final Map<String, String> onlineMatches = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, java.util.concurrent.CompletableFuture<JsonObject>> rewardWaits = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * EventGetMatchResultReport. For a ranked match the coordinator's verdict may still be pending (the other seat reports a moment
-     * later): the rank change is fetched in the background and the client is told FoundMatch=false meanwhile, which makes it ask again
-     * (it retries for 8 s; RankService gives up after 6 s and the end screen then shows no pips). Handlers run on the network thread,
-     * so nothing here may block.
+     * EventGetMatchResultReport: what the match earned, for the end screen. An online match: its verdict (the other seat may report a
+     * moment later), with the rank change of a ranked match ({@code rankUpdates}, the pips) and the mastery XP of any match. A local bot
+     * match: its mastery XP (the coordinator's daily cap applies). Both are fetched in the background and the client is told FoundMatch=false
+     * meanwhile, which makes it ask again (it retries for 8 s; the waits give up after 6 s and the report then carries nothing).
+     * Handlers run on the network thread, so nothing here may block.
      */
     private Object matchResultReport(String matchId) {
         JsonObject report = obj("CurrentModule", lastEvent != null ? events.module(lastEvent) : "Complete", "FoundMatch", true, "InventoryInfo", null,
                 "questUpdates", new JsonArray(), "rankUpdates", null, "mythicRatingUpdates", null, "periodicRewardsProgress", null);
-        if (matchId == null || !rankedMatches.containsKey(matchId)) return report;
+        if (matchId == null) return report;
+        boolean online = onlineMatches.containsKey(matchId), bot = matchId.startsWith("forge-");
+        forge.mtga.social.MasteryService ms = mastery;
         forge.mtga.social.RankService rs = rank;
-        java.util.concurrent.CompletableFuture<JsonObject> wait = rankWaits.computeIfAbsent(matchId, id -> {
+        if (!(online || bot) || !ms.online()) return report;
+        java.util.concurrent.CompletableFuture<JsonObject> wait = rewardWaits.computeIfAbsent(matchId, id -> {
             double before = rs.percentile("constructed");
             return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
-                JsonObject change = rs.awaitMatch(id, 6_000);
-                if (change != null) change.addProperty("oldPercentile", before);
-                return change;
+                JsonObject earned = new JsonObject();
+                if (bot) {
+                    earned.addProperty("xp", ms.botMatch(id));
+                    return earned;
+                }
+                JsonObject verdict = ms.awaitVerdict(id, 6_000);
+                if (verdict == null) return earned;
+                if (verdict.has("mastery")) earned.addProperty("xp", verdict.getAsJsonObject("mastery").get("xp").getAsInt());
+                if (verdict.has("rank")) {
+                    JsonObject change = verdict.getAsJsonObject("rank");
+                    change.addProperty("oldPercentile", before);
+                    rs.onMatch(change);
+                    earned.add("rank", change);
+                }
+                return earned;
             });
         });
         if (!wait.isDone()) {
             report.addProperty("FoundMatch", false);
             return report;
         }
-        JsonObject change = wait.getNow(null);
+        JsonObject earned = wait.getNow(new JsonObject());
+        int xp = earned.has("xp") ? earned.get("xp").getAsInt() : 0;
+        if (xp > 0) report.add("InventoryInfo", MasteryTrack.xpChange(xp));
+        JsonObject change = earned.has("rank") ? earned.getAsJsonObject("rank") : null;
         if (change != null) {
             report.add("rankUpdates", forge.mtga.social.RankService.progress(change));
-            JsonObject mythic = forge.mtga.social.RankService.mythic(change, change.has("oldPercentile") ? change.get("oldPercentile").getAsDouble() : 0);
+            JsonObject mythic = forge.mtga.social.RankService.mythic(change, change.get("oldPercentile").getAsDouble());
             if (mythic != null) report.add("mythicRatingUpdates", mythic);
             System.out.println("[mtga] FD rank: match " + matchId + " " + change.get("result").getAsString() + " (" + change.get("reason").getAsString() + "): "
                     + flatPips(change.getAsJsonObject("old")) + " -> " + flatPips(change.getAsJsonObject("new")));
-        } else {
+        } else if (online && PlayQueues.isRanked(onlineMatches.get(matchId))) {
             System.out.println("[mtga] FD rank: no rank change for match " + matchId + " (yet)");
         }
+        System.out.println("[mtga] FD mastery: match " + matchId + " +" + xp + " XP (level " + ms.level() + ", " + ms.xp() % forge.mtga.profile.Mastery.LEVEL_XP + "/"
+                + forge.mtga.profile.Mastery.LEVEL_XP + ")");
         return report;
     }
 
@@ -695,7 +732,7 @@ public final class FrontDoor {
     void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
         String matchId = paired.match();
         System.out.println("[mtga] FD online: paired with " + paired.opponent() + " as " + paired.role() + ", match " + matchId);
-        if (PlayQueues.isRanked(eventId)) rankedMatches.put(matchId, eventId);
+        onlineMatches.put(matchId, eventId);
         forge.mtga.peer.PeerLink link = null;
         try {
             if (paired.host()) {
@@ -715,7 +752,7 @@ public final class FrontDoor {
                 return;
             }
             j.backend().setOutcomeListener(outcomeReport(paired, eventId));
-            if (PlayQueues.isRanked(eventId)) rankedMatches.put(j.matchId(), eventId);
+            onlineMatches.put(j.matchId(), eventId);
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
             pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), eventId);
         } catch (Exception e) {
@@ -870,7 +907,8 @@ public final class FrontDoor {
                 new String[] {"OpenDualColorPreconEvent", "OpenSparkQueue", "GraduateSparkRank", "NPE_Completed"}),
     };
 
-    private static JsonObject graphState(String graphId) {
+    private JsonObject graphState(String graphId) {
+        if (masteryTrack.enabled() && MasteryTrack.GRAPH_ID.equals(graphId)) return masteryTrack.state();
         for (Graph g : GRAPHS) if (g.id().equals(graphId)) return g.state();
         return obj("NodeStates", new JsonObject(), "MilestoneStates", new JsonObject());
     }

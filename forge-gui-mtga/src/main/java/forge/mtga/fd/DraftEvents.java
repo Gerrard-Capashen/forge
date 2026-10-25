@@ -365,6 +365,17 @@ final class DraftEvents {
      * Winning out shows the client's rewards panel with the Event Champion token, sent with SeqId 0 so the client applies
      * only the change and keeps its wallet and cosmetics.
      */
+    /** An empty InventoryChange with every field: the client's converter nulls the missing ones and then reads some unchecked (DecksV3). */
+    static JsonObject inventoryChange(String source, String sourceId) {
+        JsonObject change = obj("Source", source, "SourceId", sourceId, "InventoryGold", 0, "InventoryGems", 0,
+                "InventoryCustomTokens", obj(), "DeckCards", obj(), "Vouchers", obj(), "VouchersV2", obj(),
+                "WildCardTrackUnCommons", 0, "WildCardTrackRares", 0, "WildCardTrackMythics", 0, "SetMasteryProgress", 0,
+                "WildCardCommons", 0, "WildCardUnCommons", 0, "WildCardRares", 0, "WildCardMythics", 0);
+        for (String list : List.of("ArtStyles", "Avatars", "Sleeves", "Pets", "Emotes", "Titles", "Decks", "DecksV2", "DecksV3",
+                "Boosters", "GrantedCards", "NewLetters", "PrizeWallsUnlocked")) change.add(list, new JsonArray());
+        return change;
+    }
+
     Object claimPrize(JsonObject req) {
         String name = str(req, "EventName");
         JsonObject c = course(name);
@@ -373,13 +384,8 @@ final class DraftEvents {
             System.out.println("[mtga] FD " + name + ": event closed at " + c.get("CurrentWins") + "-" + c.get("CurrentLosses"));
             if (c.has("CurrentWins") && c.get("CurrentWins").getAsInt() >= MAX_WINS) {
                 JsonArray changes = new JsonArray();
-                // every field: the client's converter nulls the missing ones and then reads some unchecked (DecksV3)
-                JsonObject change = obj("Source", "EventReward", "SourceId", name, "InventoryGold", 0, "InventoryGems", 0,
-                        "InventoryCustomTokens", obj(PRIZE_TOKEN, 1), "DeckCards", obj(), "Vouchers", obj(), "VouchersV2", obj(),
-                        "WildCardTrackUnCommons", 0, "WildCardTrackRares", 0, "WildCardTrackMythics", 0, "SetMasteryProgress", 0,
-                        "WildCardCommons", 0, "WildCardUnCommons", 0, "WildCardRares", 0, "WildCardMythics", 0);
-                for (String list : List.of("ArtStyles", "Avatars", "Sleeves", "Pets", "Emotes", "Titles", "Decks", "DecksV2", "DecksV3",
-                        "Boosters", "GrantedCards", "NewLetters", "PrizeWallsUnlocked")) change.add(list, new JsonArray());
+                JsonObject change = inventoryChange("EventReward", name);
+                change.add("InventoryCustomTokens", obj(PRIZE_TOKEN, 1));
                 changes.add(change);
                 inventory = obj("SeqId", 0, "Changes", changes);
             }
