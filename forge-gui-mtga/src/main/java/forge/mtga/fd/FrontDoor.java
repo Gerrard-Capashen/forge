@@ -977,8 +977,12 @@ public final class FrontDoor {
 
     // ---- starter decks ------------------------------------------------------------------------------------------
 
-    /** Marker of the built-in deck set; a new set (new name) is seeded once on the next start. */
-    private static final String SEED_MARKER = ".seeded-defaults-v4";
+    /** The built-in decks this player was given (one name per line): never given twice, so a deleted one stays deleted. */
+    private static final String SEED_LEDGER = ".seeded-decks";
+    /** The previous marker (one shot per deck set); a profile that has it is moved to the ledger once. */
+    private static final String SEED_MARKER_V4 = ".seeded-defaults-v4";
+    /** Formats every client could always seed (before the Legacy/Vintage/Pauper cards were added to the client's card database). */
+    private static final java.util.Set<String> ALWAYS_SEEDABLE = java.util.Set.of("Standard", "Pioneer", "Modern");
 
     /** Can the built-in deck be played as its own format: every card on the client and legal in the format? Reason in the log. */
     private boolean playable(forge.mtga.DefaultDecks.Entry d) {
@@ -991,13 +995,15 @@ public final class FrontDoor {
     }
 
     /**
-     * First start with this deck set (marker file data/.seeded-defaults-v4): the player gets the built-in decks of every
-     * queue format (DefaultDecks); decks of an earlier set keep their names and are not seeded twice. The earlier starter decks ("Forge: <precon>", Timeless) are removed if the player never
-     * changed them. Delete the marker to seed again.
+     * Every start: the player gets each built-in deck of every queue format (DefaultDecks) once, as "<Name> (<Format>)". The ledger
+     * data/.seeded-decks lists the ones given (seeded, or found already there): a deck the player deleted is not given again, and one that
+     * could not be seeded yet (a card missing from this client's card database: an older patched folder) is tried again at the next start.
+     * A profile with the earlier one-shot marker (.seeded-defaults-v4) is moved to the ledger: Standard/Pioneer/Modern decks count as given,
+     * Legacy/Vintage/Pauper ones only when present (those were skipped on clients without their cards). The earlier starter decks
+     * ("Forge: <precon>", Timeless) are removed if the player never changed them. Delete the ledger to seed everything again.
      */
     private void seedStarterDecks(File dataDir) {
-        File marker = new File(dataDir, SEED_MARKER);
-        if (marker.exists()) return;
+        File ledgerFile = new File(dataDir, SEED_LEDGER);
         File old = new File(dataDir, ".seeded");
         if (old.exists()) {
             int removed = 0;
@@ -1014,24 +1020,42 @@ public final class FrontDoor {
             old.delete();
             System.out.println("[mtga] FD removed " + removed + " old starter decks");
         }
-        int made = 0;
         java.util.Set<String> have = new java.util.HashSet<>();
         for (JsonObject d : decks.all()) have.add(str(d.getAsJsonObject("Summary"), "Name"));
+        java.util.Set<String> given = new java.util.LinkedHashSet<>();
+        try {
+            if (ledgerFile.isFile()) {
+                for (String line : Files.readAllLines(ledgerFile.toPath(), StandardCharsets.UTF_8)) if (!line.isBlank()) given.add(line.strip());
+            } else if (new File(dataDir, SEED_MARKER_V4).exists()) {
+                for (forge.mtga.DefaultDecks.Entry d : forge.mtga.DefaultDecks.all()) {
+                    String name = d.name() + " (" + d.format() + ")";
+                    if (ALWAYS_SEEDABLE.contains(d.format()) || have.contains(name)) given.add(name);
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("[mtga] FD: cannot read " + ledgerFile + ": " + e);
+            return;                                  // never risk giving deleted decks back
+        }
+        int made = 0, before = given.size();
         for (forge.mtga.DefaultDecks.Entry d : forge.mtga.DefaultDecks.all()) {
+            String name = d.name() + " (" + d.format() + ")";
+            if (given.contains(name)) continue;
             try {
-                String name = d.name() + " (" + d.format() + ")";
-                if (!have.contains(name) && playable(d) && saveDeck(name, d.format(), d.main(), d.side())) made++;
+                if (have.contains(name)) given.add(name);
+                else if (playable(d) && saveDeck(name, d.format(), d.main(), d.side())) { given.add(name); made++; }
             } catch (Exception e) {
                 System.out.println("[mtga] FD: cannot seed " + d.name() + ": " + e);
             }
         }
-        try {
-            marker.getParentFile().mkdirs();
-            Files.writeString(marker.toPath(), "built-in decks seeded: " + made + System.lineSeparator(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            System.out.println("[mtga] FD: cannot write " + marker + ": " + e);
+        if (given.size() != before || !ledgerFile.isFile()) {
+            try {
+                ledgerFile.getParentFile().mkdirs();
+                Files.writeString(ledgerFile.toPath(), String.join(System.lineSeparator(), given) + System.lineSeparator(), StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                System.out.println("[mtga] FD: cannot write " + ledgerFile + ": " + e);
+            }
         }
-        System.out.println("[mtga] FD seeded " + made + " built-in decks");
+        System.out.println("[mtga] FD built-in decks: " + made + " seeded now, " + given.size() + " of " + forge.mtga.DefaultDecks.all().size() + " given");
     }
 
     private static String lastUpdated(JsonObject summary) {

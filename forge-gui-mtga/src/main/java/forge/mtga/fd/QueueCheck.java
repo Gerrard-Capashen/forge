@@ -102,6 +102,27 @@ public final class QueueCheck {
             }
         }
 
+        // a brand-new profile gets every built-in deck; the ledger keeps a deleted one deleted
+        File fresh = java.nio.file.Files.createTempDirectory("queuecheck-new").toFile();
+        int all = forge.mtga.DefaultDecks.all().size();
+        FrontDoor first = new FrontDoor(db, fresh, null);
+        check(first.decks().all().size() == all, "a new profile gets all " + all + " built-in decks (" + first.decks().all().size() + ")");
+        JsonObject vintage = first.decks().all().stream().filter(d -> d.getAsJsonObject("Summary").get("Name").getAsString().endsWith("(Vintage)")).findFirst().orElseThrow();
+        String deleted = vintage.getAsJsonObject("Summary").get("Name").getAsString();
+        first.decks().delete(vintage.getAsJsonObject("Summary").get("DeckId").getAsString());
+        FrontDoor second = new FrontDoor(db, fresh, null);
+        check(second.decks().all().size() == all - 1 && second.decks().all().stream().noneMatch(d -> deleted.equals(d.getAsJsonObject("Summary").get("Name").getAsString())),
+                "a built-in deck the player deleted is not given again (" + deleted + ")");
+        // a profile seeded once by the old marker on a client without the Legacy/Vintage/Pauper cards: those come now, deleted older ones do not
+        File older = java.nio.file.Files.createTempDirectory("queuecheck-v4").toFile();
+        java.nio.file.Files.writeString(new File(older, ".seeded-defaults-v4").toPath(), "built-in decks seeded: 3");
+        FrontDoor moved = new FrontDoor(db, older, null);
+        java.util.List<String> movedNames = new java.util.ArrayList<>();
+        for (JsonObject d : moved.decks().all()) movedNames.add(d.getAsJsonObject("Summary").get("Name").getAsString());
+        long lvp = forge.mtga.DefaultDecks.all().stream().filter(d -> java.util.Set.of("Legacy", "Vintage", "Pauper").contains(d.format())).count();
+        check(movedNames.size() == lvp && movedNames.stream().allMatch(n -> n.endsWith("(Legacy)") || n.endsWith("(Vintage)") || n.endsWith("(Pauper)")),
+                "an old one-shot profile gets the missing Legacy/Vintage/Pauper decks (" + movedNames.size() + " of " + lvp + "), not the Standard/Pioneer/Modern ones it deleted");
+
         // course flow
         check(q.setDeck("BotPlay_Modern", new JsonObject(), null) instanceof FrontDoor.Err, "set deck before join is an error");
         q.join("BotPlay_Modern");

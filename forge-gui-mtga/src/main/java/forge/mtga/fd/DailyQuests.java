@@ -13,7 +13,8 @@ import static forge.mtga.fd.FrontDoor.obj;
  * {@code Forge/Quest/<kind>_Text} with {quantity} = the goal (bridge FormatLoc), its reward the chest (mastery XP); QuestSwapQuest {QuestId}
  * answers the new collection; a match report's questUpdates carry startingProgress -> endingProgress (the bar animates) and, for a finished
  * quest, an inventoryUpdate whose context.sourceId is the quest id (the client's reward popup). The quests themselves live on the coordinator
- * ({@link QuestService}). Quirk of the client: after one swap it greys every quest's swap until the bar is rebuilt (next home visit).
+ * ({@link QuestService}). Finished quests are not listed (the client dropped them once claimed; their slot gets a new quest the next day).
+ * Quirk of the client: after one swap it greys every quest's swap until the bar is rebuilt (next home visit).
  */
 final class DailyQuests {
     private final QuestService service;
@@ -34,6 +35,7 @@ final class DailyQuests {
         boolean canSwap = false;
         for (JsonElement e : quests) {
             JsonObject q = e.getAsJsonObject();
+            if (q.get("done").getAsBoolean()) continue;      // a finished quest leaves the bar once claimed (Arena); its slot is refilled the next day
             arr.add(description(q, q.get("progress").getAsInt(), q.get("progress").getAsInt(), null));
             canSwap |= q.get("canSwap").getAsBoolean();
         }
