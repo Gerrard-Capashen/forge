@@ -55,7 +55,7 @@ final class ChallengeService {
     static final String EVENT = "DirectGame";
 
     /** What a player's own server needs to start the match once the coordinator has paired both sides. */
-    private record Pending(Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me) { }
+    private record Pending(Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard, int gamesToWin, PublicProfile me) { }
 
     private final FrontDoor fd;
     private final SocialClient social;
@@ -127,11 +127,10 @@ final class ChallengeService {
     }
 
     private Object settings(ChallengeSetSettingsReq req) throws IOException {
-        if (req.getWinConditionInternal() >= 2) return new FrontDoor.Err(7000, "Best of 3 is not available yet");
         JsonObject b = new JsonObject();
         b.addProperty("name", req.getChallengeName());
         b.addProperty("playFirst", new String[] {"Random", "Challenger", "Opponent"}[Math.max(0, Math.min(2, req.getPlayFirstInternal()))]);
-        b.addProperty("winCondition", "SingleElimination");
+        b.addProperty("winCondition", req.getWinConditionInternal() >= 2 ? "BestOf3" : "SingleElimination");
         b.addProperty("limit", 2);
         return post(req.getChallengeId(), "settings", b);
     }
@@ -160,12 +159,15 @@ final class ChallengeService {
     private Object issue(ChallengeIssueReq req) throws IOException {
         JsonObject stored = fd.decks().get(req.getDeckId());
         if (stored == null) return new FrontDoor.Err(7000, "deck not found");
-        String name = social.api("GET", "/challenges/" + req.getChallengeId(), null).getAsJsonObject("challenge").get("name").getAsString();
+        JsonObject challenge = social.api("GET", "/challenges/" + req.getChallengeId(), null).getAsJsonObject("challenge");
+        String name = challenge.get("name").getAsString();
         JsonObject deck = stored.getAsJsonObject("Deck");
         String problem = fd.deckProblem(FORMAT_OF.getOrDefault(name, "Standard"), deck);
         if (problem != null) return new FrontDoor.Err(7000, problem);
         FrontDoor.Cards cards = fd.cardsOf(deck);
-        pending.put(req.getChallengeId(), new Pending(cards.human(), cards.printing(), fd.profile().forDeck(stored.getAsJsonObject("Summary"))));
+        int gamesToWin = winCondition(s(challenge, "winCondition"));        // 2 = best of three
+        pending.put(req.getChallengeId(), new Pending(cards.human(), cards.printing(), gamesToWin > 1 ? cards.sideboard() : Map.of(), gamesToWin,
+                fd.profile().forDeck(stored.getAsJsonObject("Summary"))));
         try {
             return post(req.getChallengeId(), "issue", new JsonObject());
         } catch (IOException e) {
@@ -221,7 +223,7 @@ final class ChallengeService {
         }
         Coordinator.Paired paired = new Coordinator.Paired(fd.peer().coordinator(), m.get("role").getAsString(), m.get("match").getAsString(), m.get("token").getAsString(),
                 m.getAsJsonObject("opponent").get("fullName").getAsString());
-        Thread t = new Thread(() -> fd.playOnline(s, paired, p.human(), p.printing(), p.me(), EVENT, fd.peer()), "challenge-match");
+        Thread t = new Thread(() -> fd.playOnline(s, paired, p.human(), p.printing(), p.sideboard(), p.gamesToWin(), p.me(), EVENT, fd.peer()), "challenge-match");
         t.setDaemon(true);
         t.start();
     }

@@ -588,7 +588,9 @@ public final class FrontDoor {
     }
 
     /** A client-JSON deck as Forge card names with counts and the client printing each name has (cards Forge does not know are left out). */
-    record Cards(Map<String, Integer> human, Map<String, Integer> printing) { }
+    record Cards(Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard) {
+        Cards(Map<String, Integer> human, Map<String, Integer> printing) { this(human, printing, Map.of()); }
+    }
 
     Cards cardsOf(JsonObject deck) {
         Map<String, Integer> human = new LinkedHashMap<>();
@@ -604,7 +606,19 @@ public final class FrontDoor {
                 printing.putIfAbsent(name, grp);
             }
         }
-        return new Cards(human, printing);
+        Map<String, Integer> sideboard = new LinkedHashMap<>();
+        JsonArray side = deck.getAsJsonArray("Sideboard");
+        if (side != null) {
+            for (JsonElement e : side) {
+                JsonObject c = e.getAsJsonObject();
+                int grp = c.get("cardId").getAsInt(), qty = c.get("quantity").getAsInt();
+                String name = db.name(grp);
+                if (name == null || StaticData.instance().getCommonCards().getUniqueByName(name) == null) continue;
+                sideboard.merge(name, qty, Integer::sum);
+                printing.putIfAbsent(name, grp);
+            }
+        }
+        return new Cards(human, printing, sideboard);
     }
 
     /** EventEnterPairing: a Bot Play / Casual Play queue starts its match; for a draft event play the course's deck against one of the bots' drafted decks. */
@@ -813,6 +827,12 @@ public final class FrontDoor {
     }
 
     void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
+        playOnline(s, paired, human, printing, Map.of(), 1, me, eventId, p);
+    }
+
+    /** {@code gamesToWin} 2 = best of three: both players sideboard between games (the host's engine runs them; a guest only sends its sideboard). */
+    void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing,
+                    Map<String, Integer> sideboard, int gamesToWin, PublicProfile me, String eventId, Peer p) {
         String matchId = paired.match();
         System.out.println("[mtga] FD online: paired with " + paired.opponent() + " as " + paired.role() + ", match " + matchId);
         onlineMatches.put(matchId, eventId);
@@ -820,7 +840,8 @@ public final class FrontDoor {
         try {
             if (paired.host()) {
                 forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
-                forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing));
+                forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing, sideboard));
+                room.setGamesToWin(gamesToWin);
                 forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
                 mine.setOutcomeListener(outcomeReport(paired, eventId));
                 p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), eventId)));
@@ -829,7 +850,7 @@ public final class FrontDoor {
                 return;
             }
             link = forge.mtga.peer.Coordinator.openRoom(paired);
-            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.joinOnline(link, p.fingerprint(), eventId, me, human, printing);
+            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.joinOnline(link, p.fingerprint(), eventId, me, human, printing, sideboard);
             if (j.error() != null) {
                 System.out.println("[mtga] FD online: join failed: " + j.error());
                 return;

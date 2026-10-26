@@ -124,9 +124,13 @@ public final class SelfPlay {
         for (int g = 0; g < games; g++) {
             ForgeMatch room = new ForgeMatch(db, "pvp-" + g);
             FakeClient[] fc = { new FakeClient(new Random(seed + 2L * g)), new FakeClient(new Random(seed + 2L * g + 1)) };
+            fc[0].label = "Alice"; fc[1].label = "Bob";
+            fc[1].holdMulligan = Boolean.getBoolean("selfplay.pvp.mullhold");
+            boolean bo3 = Boolean.getBoolean("selfplay.bo3");
+            if (bo3) room.setGamesToWin(2);
             ForgeBackend[] be = {
-                new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of())),
-                new ForgeBackend(db, room, 1, new ForgeMatch.Seat("Bob", decks[1], Map.of())) };
+                new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of(), bo3 ? sideboardFor(decks[0], decks[1]) : Map.of())),
+                new ForgeBackend(db, room, 1, new ForgeMatch.Seat("Bob", decks[1], Map.of(), bo3 ? sideboardFor(decks[1], decks[0]) : Map.of())) };
             ClientToGREMessage.Builder connect = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConnectReq);
             connect.getConnectReqBuilder().getDefaultSettingsBuilder();
             for (int i = 0; i < 2; i++) fc[i].backend = be[i];
@@ -144,6 +148,39 @@ public final class SelfPlay {
                 be[1].onDisconnect(fc[1]);
                 continue;
             }
+            if (Boolean.getBoolean("selfplay.pvp.mullhold")) {
+                // Bob sits on his keep/mulligan question while Alice keeps; he answers 2 s later
+                Thread.sleep(3000);
+                boolean quiet = fc[1].afterHeldQuestion == 0;
+                System.out.println("=== Bob sat on his keep/mulligan question while Alice kept: " + fc[1].afterHeldQuestion + " messages reached him" + (quiet ? "" : "  (WRONG)"));
+                if (!quiet) failed++;
+                System.out.println("=== Bob answers now");
+                fc[1].holdMulligan = false;
+                ClientToGREMessage.Builder keep = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_MulliganResp);
+                keep.getMulliganRespBuilder().setDecision(com.wizards.mtga.gre.MulliganOption.MulliganOption_AcceptHand);
+                be[1].onClientMessage(fc[1], keep.build());
+                Thread.sleep(2000);
+                be[0].onDisconnect(fc[0]);
+                be[1].onDisconnect(fc[1]);
+                continue;
+            }
+            if (bo3 && (Boolean.getBoolean("selfplay.pvp.sbleave") || Boolean.getBoolean("selfplay.pvp.sbconcede"))) {
+                // Bob never reaches the sideboard screen after game 1, then leaves / concedes: Alice must win the match at once
+                fc[1].noSideboard = true;
+                long end = System.currentTimeMillis() + limit * 1000;
+                while (fc[0].confirmations < 1 && System.currentTimeMillis() < end) Thread.sleep(50);
+                Thread.sleep(500);
+                if (Boolean.getBoolean("selfplay.pvp.sbconcede")) be[1].onClientMessage(fc[1], ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConcedeReq).build());
+                else be[1].onDisconnect(fc[1]);
+                boolean got = fc[0].done.await(5, TimeUnit.SECONDS);
+                boolean right = fc[0].result.endsWith("team 1") && fc[0].finalMatchEntries == 1;
+                System.out.println("=== pvp sideboard " + (Boolean.getBoolean("selfplay.pvp.sbconcede") ? "concede" : "leave") + " game " + (g + 1) + ": "
+                        + (got ? "Alice got a result" : "DID NOT END") + ": " + fc[0].result + (right ? "" : " (WRONG)"));
+                fc[0].problems.forEach((k, v) -> System.out.println("  PROBLEM x" + v + ": " + k));
+                if (!got || !right || !fc[0].problems.isEmpty()) failed++;
+                be[0].onDisconnect(fc[0]);
+                continue;
+            }
             if (Boolean.getBoolean("selfplay.pvp.concede")) {    // Bob concedes while the game waits for Alice: it must end at once
                 long end = System.currentTimeMillis() + limit * 1000;
                 while (fc[0].states < 150 && fc[1].done.getCount() > 0 && System.currentTimeMillis() < end) Thread.sleep(50);
@@ -159,6 +196,7 @@ public final class SelfPlay {
             }
             if (!emoteExchange(fc, be, "pvp")) failed++;
             if (!awaitAndCheck(fc, g, "pvp", limit)) failed++;
+            if (bo3 && !bo3Check(fc)) failed++;
             for (int i = 0; i < 2; i++) be[i].onDisconnect(fc[i]);
         }
         System.out.println("opponent hand cards visible to a client (reveals): " + OPP_HAND_VISIBLE.get() + ", opponent library cards shown by look-at browsers: " + OPP_LIBRARY_SHOWN.get());
@@ -190,6 +228,26 @@ public final class SelfPlay {
         return ok;
     }
 
+    /** Sideboard of a best-of-three test: copies of a card the other deck plays (else of this deck's first card), so the fake client can swap one in. */
+    static Map<String, Integer> sideboardFor(Map<String, Integer> mine, Map<String, Integer> other) {
+        String pick = other.keySet().stream().filter(n -> !mine.containsKey(n)).findFirst().orElse(mine.keySet().iterator().next());
+        return Map.of(pick, 3);
+    }
+
+    /** Both clients saw the same best-of-three: games, sideboard screens, confirmations and the final result list. */
+    static boolean bo3Check(FakeClient[] fc) {
+        boolean ok = true;
+        for (int i = 0; i < 2; i++) {
+            int played = fc[i].intermissions + 1;
+            boolean good = fc[i].sideboardScreens == fc[i].intermissions && fc[i].confirmations == fc[i].intermissions && fc[i].finalGames == played
+                    && fc[i].finalMatchEntries == 1 && fc[i].lastGameNumber == played && played >= 2;
+            System.out.println("  bo3 " + (i == 0 ? "Alice" : "Bob") + ": games " + played + ", sideboard screens " + fc[i].sideboardScreens + ", confirmations " + fc[i].confirmations
+                    + ", final results " + fc[i].finalGames + " games + " + fc[i].finalMatchEntries + " match" + (good ? "" : "  (WRONG)"));
+            ok &= good;
+        }
+        return ok && fc[0].intermissions == fc[1].intermissions;
+    }
+
     /** Wait for both clients' results, print them and check them: no problems, and exactly one winner (or both see the draw). */
     static boolean awaitAndCheck(FakeClient[] fc, int g, String label, long limit) throws InterruptedException {
         boolean done = fc[0].done.await(limit, TimeUnit.SECONDS) && fc[1].done.await(limit, TimeUnit.SECONDS);
@@ -218,14 +276,17 @@ public final class SelfPlay {
         int failed = 0;
         for (int g = 0; g < games; g++) {
             ForgeMatch room = new ForgeMatch(db, "peer-" + g);
-            ForgeBackend mine = new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of()));
+            boolean bo3 = Boolean.getBoolean("selfplay.bo3");
+            if (bo3) room.setGamesToWin(2);
+            ForgeBackend mine = new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of(), bo3 ? sideboardFor(decks[0], decks[1]) : Map.of()));
             CountDownLatch joined = new CountDownLatch(1);
             java.util.concurrent.atomic.AtomicReference<PublicProfile> hostSaw = new java.util.concurrent.atomic.AtomicReference<>();
             PublicProfile alice = new PublicProfile("id-alice", "Alice", "Avatar_Basic_JaceBeleren", "CardBack_Default", "AFR_Dragon.Skin1",
                     "Title_Core_AchievementHunter", List.of("Phrase_Basic_Hello", "Sticker_AFR_Beholder"), "Gold", 2);
             PublicProfile bob = new PublicProfile("id-bob", "Bob", "Avatar_Basic_LilianaVess", "CardBack_Basic_Streamer", "", "", List.of("Phrase_Basic_GoodGame"), "Mythic", 1);
             host.offer(new forge.mtga.peer.PeerHost.Offer(room.matchId(), room, alice, guest -> { hostSaw.set(guest); joined.countDown(); }));
-            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", bob, decks[1], Map.of());
+            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", "", bob, decks[1], Map.of(),
+                    bo3 ? sideboardFor(decks[1], decks[0]) : Map.of());
             if (j.error() != null || !joined.await(5, TimeUnit.SECONDS)) {
                 System.out.println("  PROBLEM: guest could not join: " + j.error());
                 failed++;
@@ -245,6 +306,7 @@ public final class SelfPlay {
             j.backend().onConnect(fc[1], connect.build());
             if (!emoteExchange(fc, new forge.mtga.net.GameBackend[] {mine, j.backend()}, "peer")) failed++;
             if (!awaitAndCheck(fc, g, "peer", Long.getLong("selfplay.timeout", 300))) failed++;
+            if (bo3 && !bo3Check(fc)) failed++;
             j.backend().onDisconnect(fc[1]);
             mine.onDisconnect(fc[0]);
         }
@@ -480,6 +542,17 @@ public final class SelfPlay {
         final Map<String, Integer> annCounts = new TreeMap<>();
         int states, requests, turnNo, mulligans;
         /** Best-of-three bookkeeping: IntermissionReqs that offered the sideboard, screens shown, confirmations, the final result list, the last game number seen. */
+        /** Test: this client never answers the end-of-game intermission, so it never reaches the sideboard screen. */
+        volatile boolean noSideboard;
+        /** Test: this client reads its mulligan question but answers only when the test says so. */
+        volatile boolean holdMulligan;
+        /** Messages received after the held keep/mulligan question (a client that is deciding must get none). */
+        volatile int afterHeldQuestion;
+        private volatile boolean heldQuestionSeen;
+        String label = "";
+        private static final String nlTrace = System.lineSeparator();
+        /** -Dselfplay.trace=true: print what this client receives (message types, game state ids, who is pending / deciding). */
+        static final boolean TRACE = Boolean.getBoolean("selfplay.trace");
         int intermissions, sideboardScreens, confirmations, finalGames, finalMatchEntries, lastGameNumber, expectedMainSize;
         com.wizards.mtga.gre.GameInfo info = com.wizards.mtga.gre.GameInfo.getDefaultInstance();
         final Map<String, Integer> tokenDeleted = new TreeMap<>();
@@ -533,6 +606,26 @@ public final class SelfPlay {
         private static ClientToGREMessage.Builder msg(ClientMessageType t) { return ClientToGREMessage.newBuilder().setType(t); }
 
         private void handle(GREToClientMessage g) {
+            if (holdMulligan && heldQuestionSeen) afterHeldQuestion++;
+            if (TRACE) {
+                StringBuilder t = new StringBuilder("[trace " + label + "] " + g.getType() + " gs=" + g.getGameStateId());
+                if (g.hasGameStateMessage()) {
+                    GameStateMessage m = g.getGameStateMessage();
+                    t.append(' ').append(m.getType()).append(" id=").append(m.getGameStateId());
+                    for (PlayerInfo p : m.getPlayersList()) t.append(" seat").append(p.getSystemSeatNumber()).append("{pending=").append(p.getPendingMessageType()).append("}");
+                    if (m.hasTurnInfo()) t.append(" decision=").append(m.getTurnInfo().getDecisionPlayer());
+                    if (m.hasGameInfo()) t.append(" matchState=").append(m.getGameInfo().getMatchState());
+                    if (Boolean.getBoolean("selfplay.trace.ann")) {
+                        for (AnnotationInfo a : m.getAnnotationsList()) {
+                            t.append(nlTrace).append("      ").append(a.getType(0).name().replace("AnnotationType_", "")).append(" aff=").append(a.getAffectedIdsList());
+                            for (com.wizards.mtga.gre.KeyValuePairInfo d : a.getDetailsList()) {
+                                t.append(' ').append(d.getKey()).append('=').append(d.getValueInt32Count() > 0 ? String.valueOf(d.getValueInt32(0)) : d.getValueStringCount() > 0 ? d.getValueString(0) : "");
+                            }
+                        }
+                    }
+                }
+                System.out.println(t);
+            }
             switch (g.getType()) {
                 case GREMessageType_GameStateMessage -> state(g.getGameStateMessage());
                 case GREMessageType_MulliganReq -> {
@@ -542,6 +635,7 @@ public final class SelfPlay {
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
                     if (g.getMulliganReq().getMulliganCount() != mulligans - (mull ? 1 : 0)) problem("MulliganReq.mulliganCount mismatch");
+                    if (holdMulligan) { mulligans--; heldQuestionSeen = true; break; }
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_MulliganResp);
                     r.getMulliganRespBuilder().setDecision(mull ? MulliganOption.MulliganOption_Mulligan : MulliganOption.MulliganOption_AcceptHand);
                     reply(r);
@@ -753,7 +847,7 @@ public final class SelfPlay {
                         intermissions++;
                         if (g.getIntermissionReq().getResult().getScope() != com.wizards.mtga.gre.MatchScope.MatchScope_Game) problem("intermission result is not a game result");
                         if (info.getMatchState() != com.wizards.mtga.gre.MatchState.MatchState_GameComplete) problem("intermission while match state is " + info.getMatchState());
-                        reply(msg(ClientMessageType.ClientMessageType_EnterSideboardingReq));
+                        if (!noSideboard) reply(msg(ClientMessageType.ClientMessageType_EnterSideboardingReq));
                     }
                 }
                 case GREMessageType_SubmitDeckReq -> {

@@ -182,8 +182,14 @@ public final class PeerHost {
             int grp = e.getValue().getAsInt();
             if (db.name(grp) != null) printing.put(e.getKey(), grp);       // a printing this client build does not have is ignored
         }
+        Map<String, Integer> side = new LinkedHashMap<>();       // a guest of an older build sends none
+        if (h.has("sideboard") && h.get("sideboard").isJsonObject()) {
+            for (Map.Entry<String, JsonElement> e : h.getAsJsonObject("sideboard").entrySet()) {
+                if (StaticData.instance().getCommonCards().getUniqueByName(e.getKey()) != null && db.grpId(e.getKey()) != 0) side.put(e.getKey(), e.getValue().getAsInt());
+            }
+        }
         String name = str(h, "name");
-        return new ForgeMatch.Seat(name.isBlank() ? "Guest" : name, deck, printing);
+        return new ForgeMatch.Seat(name.isBlank() ? "Guest" : name, deck, printing, side);
     }
 
     private static String str(JsonObject o, String k) { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : ""; }

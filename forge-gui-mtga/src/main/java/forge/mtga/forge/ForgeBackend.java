@@ -297,6 +297,16 @@ public final class ForgeBackend implements GameBackend {
         tellOutcome("loss");
     }
 
+    /** The other seat conceded or left while both sideboarded: this seat wins the match. */
+    void matchWonByForfeit() {
+        if (disconnected || session == null || sync == null) return;
+        sendResults(true, false, StateSync.HUMAN_SEAT);
+        java.util.function.Consumer<Boolean> cb = onResult;
+        onResult = null;
+        if (cb != null) cb.accept(true);
+        tellOutcome("win");
+    }
+
     /** The game thread died: when the opponent's client left, this seat wins by forfeit; otherwise nothing more can be sent. */
     void matchAborted() {
         if (disconnected || session == null || sync == null || !introSent) return;
@@ -320,7 +330,8 @@ public final class ForgeBackend implements GameBackend {
         sync.setResults(results, matchOver ? com.wizards.mtga.gre.MatchState.MatchState_MatchComplete : com.wizards.mtga.gre.MatchState.MatchState_GameComplete);
         GameStateMessage.Builder d = withStateDiff ? sync.diff(false) : sync.diff(false, true);
         GREToClientMessage.Builder inter = req(GREMessageType.GREMessageType_IntermissionReq);
-        inter.getIntermissionReqBuilder().setResult(matchOver ? results.get(0) : games.get(games.size() - 1));
+        // the end screen shows the winner: the match's (a forfeit after a lost game still wins it), else the game just decided
+        inter.getIntermissionReqBuilder().setResult(matchOver ? resultSpec(com.wizards.mtga.gre.MatchScope.MatchScope_Game, winningTeam) : games.get(games.size() - 1));
         if (!matchOver) {
             inter.getIntermissionReqBuilder().addOptions(com.wizards.mtga.gre.UserOption.newBuilder()
                     .setResponseType(ClientMessageType.ClientMessageType_EnterSideboardingReq));
@@ -378,8 +389,8 @@ public final class ForgeBackend implements GameBackend {
             session.sendGre(req(GREMessageType.GREMessageType_SubmitDeckConfirmation));
             return chosen;
         } catch (IllegalStateException e) {
-            if (disconnected) return null;     // the client left: nothing to send
-            throw e;
+            System.out.println("[mtga] sideboarding ended: " + e.getMessage());      // this client or the other seat left
+            return null;
         }
     }
 
@@ -402,6 +413,12 @@ public final class ForgeBackend implements GameBackend {
         room.applyConcessions();       // game thread: a concession while nobody is asked (the AI's turn) ends the game here
         if (!introSent) return;
         sync.onEvent(ev);
+        if (batching && mulligans > 0 && ev instanceof forge.game.event.GameEventShuffle sh && human.getView().equals(sh.player())) {
+            // a mulligan: the old hand is in the library now and the new one is not drawn yet. It goes out as a state of its own: a card
+            // that comes straight back needs its library id in the first state, else the client leaves it in the hand (seen in the fan)
+            sendDiff(false);
+            return;
+        }
         if (ev instanceof forge.game.event.GameEventTurnBegan || ev instanceof forge.game.event.GameEventTurnPhase) batching = false;
         if (batching) return;       // collected into the next decision-time diff
         // All combat damage of a step must reach the client in ONE diff: the client builds one combat frame (attack
@@ -593,9 +610,13 @@ public final class ForgeBackend implements GameBackend {
         if (push) pushDiff();
     }
 
-    /** Game thread: send whatever changed to this client now (nothing before its opening state). */
+    /**
+     * Game thread: send whatever changed to this client now (nothing before its opening state, nothing while it is deciding
+     * keep or mulligan). The client opens its display-only opening-hand overlay on every state it gets during the opening-hand
+     * stage, which replaces the keep/mulligan prompt: the opponent's decision reaches this client with its own answer.
+     */
     void pushDiff() {
-        if (!introSent || session == null || sync == null) return;
+        if (!introSent || session == null || sync == null || mulliganAsked) return;
         GameStateMessage.Builder d = sync.diff(false, true);
         if (d != null) session.sendGre(gameState(d));
     }
@@ -2110,6 +2131,7 @@ public final class ForgeBackend implements GameBackend {
         public boolean mulliganKeepHand(Player firstPlayer, int cardsToReturn) {
             return askMulligan(cardsToReturn);
         }
+
 
         @Override
         public Player chooseStartingPlayer(boolean isFirstGame) {

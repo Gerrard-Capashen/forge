@@ -153,6 +153,9 @@ public final class ForgeMatch {
     /** A best-of-three that keeps drawing ends after this many games. */
     private static final int MAX_GAMES = 5;
 
+    /** The main deck can't fall below this when sideboarding (a 40-card draft deck vs a 60-card constructed one). */
+    private static int minDeck(Map<String, Integer> deck) { return Math.min(60, deck.values().stream().mapToInt(Integer::intValue).sum()); }
+
     private void run() {
         try {
             runMatch();
@@ -177,8 +180,6 @@ public final class ForgeMatch {
             players.add(rp);
         }
         Match match = new Match(rules, players, "MTGA");
-        // the main deck can't fall below this when sideboarding (a 40-card draft deck vs a 60-card constructed one)
-        int minDeck = Math.min(60, main[0].values().stream().mapToInt(Integer::intValue).sum());
 
         for (int gameNo = 1; ; gameNo++) {
             Map<String, Integer> grpByName = new HashMap<>();
@@ -195,7 +196,7 @@ public final class ForgeMatch {
                 if (seats[1 - i].overrides() != null) view.putAll(seats[1 - i].overrides());
                 if (seats[i].overrides() != null) view.putAll(seats[i].overrides());
                 Player me = game.getPlayers().get(i);
-                humans[i].bind(game, me, game.getPlayers().get(1 - i), view, StateSync.matchInfo(gameNo, gamesToWin, minDeck));
+                humans[i].bind(game, me, game.getPlayers().get(1 - i), view, StateSync.matchInfo(gameNo, gamesToWin, minDeck(seats[i].deck())));
             }
             game.setNoGUIUser();
             try {
@@ -212,6 +213,9 @@ public final class ForgeMatch {
             for (ForgeBackend b : humans) if (b != null) b.sendGameEnd(matchOver);
             if (matchOver) return;
 
+            // every human seat sideboards at once (each client has its own timer); a seat that concedes or leaves ends the match
+            Map<String, Integer>[] chosen = new Map[2];
+            Thread[] threads = new Thread[2];
             for (int i = 0; i < 2; i++) {
                 if (humans[i] == null) continue;
                 // the sideboard is every card of the deck and sideboard that the main deck doesn't play now
@@ -219,12 +223,29 @@ public final class ForgeMatch {
                 seats[i].sideboard().forEach((n, c) -> side.merge(n, c, Integer::sum));
                 main[i].forEach((n, c) -> side.merge(n, -c, Integer::sum));
                 side.values().removeIf(n -> n <= 0);
-                Map<String, Integer> chosen = humans[i].sideboard(main[i], side);
-                if (chosen == null) return;                    // the client left
-                main[i] = chosen;
+                final int seat = i;
+                final Map<String, Integer> curMain = main[i];
+                threads[i] = new Thread(() -> {
+                    chosen[seat] = humans[seat].sideboard(curMain, side);
+                    if (chosen[seat] == null) seatLeft(humans[seat]);      // wake the other seat's screen
+                }, "forge-sideboard-" + i);
+                threads[i].setDaemon(true);
+                threads[i].start();
+            }
+            for (Thread t : threads) if (t != null) t.join();
+            boolean ended = false;
+            for (int i = 0; i < 2; i++) ended |= humans[i] != null && chosen[i] == null;
+            if (ended) {
+                // a seat that is still here wins the match by forfeit
+                for (int i = 0; i < 2; i++) if (humans[i] != null && chosen[i] != null && !humans[i].isDisconnected()) humans[i].matchWonByForfeit();
+                return;
+            }
+            for (int i = 0; i < 2; i++) {
+                if (humans[i] == null) continue;
+                main[i] = chosen[i];
                 CardPool pool = players.get(i).getDeck().getMain();
                 pool.clear();
-                pool.addAll(ForgeSmoke.deck("deck", chosen).getMain());
+                pool.addAll(ForgeSmoke.deck("deck", chosen[i]).getMain());
             }
         }
     }
