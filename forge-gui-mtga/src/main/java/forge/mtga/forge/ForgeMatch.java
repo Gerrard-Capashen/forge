@@ -35,6 +35,14 @@ public final class ForgeMatch {
 
     int gamesToWin() { return gamesToWin; }
 
+    private int firstSeat = -1;
+
+    /** The first game's starting player: seat 0 or 1 (a challenge's "play first" setting), -1 = the coin toss decides. */
+    public void setFirstSeat(int seat) { firstSeat = seat; }
+
+    /** Game thread: the player the settings make the first game's starter, null when the coin toss decides. */
+    Player forcedStarter() { return firstSeat < 0 || game == null || firstSeat >= game.getPlayers().size() ? null : game.getPlayers().get(firstSeat); }
+
     private final CardDb db;
     private final String matchId;
     private final Seat[] seats = new Seat[2];
@@ -135,7 +143,11 @@ public final class ForgeMatch {
      * Called by the first seat that reaches its mulligan: every human seat is asked keep or mulligan at once (the other seats get
      * their ConnectResp, opening state and question now), each client seeing the other as deciding.
      */
+    private boolean mulliganOpened;
+
     void introduceOthers(ForgeBackend first) {
+        if (mulliganOpened) return;
+        mulliganOpened = true;
         for (ForgeBackend b : humans) if (b != null) setMulliganPending(b.player(), true, false);
         for (ForgeBackend b : humans) if (b != null && b != first) b.sendIntro(true);
     }
@@ -143,6 +155,20 @@ public final class ForgeMatch {
     /** A seat's mulligan question opened or closed: every human client learns it (with a diff when {@code push}). */
     void setMulliganPending(Player p, boolean on, boolean push) {
         for (ForgeBackend b : humans) if (b != null) b.setMulliganPending(p, on, push);
+    }
+
+    /**
+     * Game thread: {@code chooser} (the loser of the last game) decides who plays first. The other human seat gets the
+     * opening state at once, its client shows "waiting for opponent" from the chooser's pending ChooseStartingPlayerResp.
+     */
+    void startChoiceOpened(ForgeBackend chooser) {
+        for (ForgeBackend b : humans) if (b != null) b.setStartPending(chooser.player());
+        for (ForgeBackend b : humans) if (b != null && b != chooser) b.sendWaitingOpening(chooser.player());
+    }
+
+    /** The choice is made: every human client learns the pending question is gone. */
+    void startChoiceClosed(ForgeBackend chooser) {
+        for (ForgeBackend b : humans) if (b != null) b.clearStartPending(chooser.player());
     }
 
     /** The hand or mulligan count of {@code changed} moved: the other human clients see the opponent's new hand size. */
@@ -199,6 +225,7 @@ public final class ForgeMatch {
                 humans[i].bind(game, me, game.getPlayers().get(1 - i), view, StateSync.matchInfo(gameNo, gamesToWin, minDeck(seats[i].deck())));
             }
             game.setNoGUIUser();
+            mulliganOpened = false;
             try {
                 match.startGame(game);
                 System.out.println("[mtga] game " + gameNo + " over");
@@ -207,9 +234,11 @@ public final class ForgeMatch {
                 if (!game.isGameOver()) throw t;
                 System.out.println("[mtga] game " + gameNo + " over (conceded)");     // a concession ended the game while someone was being asked
             }
-            boolean conceded = false;
-            for (Player p : game.getPlayers()) conceded |= p.conceded();
-            boolean matchOver = gamesToWin <= 1 || conceded || match.isMatchOver() || gameNo >= MAX_GAMES;
+            // a best of three goes on after a game concession; a match concession (or a single game) ends it
+            boolean matchConceded = false;
+            for (ForgeBackend b : humans) matchConceded |= b != null && b.concedeMatchAsked();
+            if (!matchConceded) for (ForgeBackend b : humans) if (b != null) b.clearConcessions();
+            boolean matchOver = gamesToWin <= 1 || matchConceded || match.isMatchOver() || gameNo >= MAX_GAMES;
             for (ForgeBackend b : humans) if (b != null) b.sendGameEnd(matchOver);
             if (matchOver) return;
 

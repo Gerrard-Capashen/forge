@@ -55,7 +55,7 @@ final class ChallengeService {
     static final String EVENT = "DirectGame";
 
     /** What a player's own server needs to start the match once the coordinator has paired both sides. */
-    private record Pending(Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard, int gamesToWin, PublicProfile me) { }
+    private record Pending(Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard, int gamesToWin, int firstSeat, PublicProfile me) { }
 
     private final FrontDoor fd;
     private final SocialClient social;
@@ -166,7 +166,7 @@ final class ChallengeService {
         if (problem != null) return new FrontDoor.Err(7000, problem);
         FrontDoor.Cards cards = fd.cardsOf(deck);
         int gamesToWin = winCondition(s(challenge, "winCondition"));        // 2 = best of three
-        pending.put(req.getChallengeId(), new Pending(cards.human(), cards.printing(), gamesToWin > 1 ? cards.sideboard() : Map.of(), gamesToWin,
+        pending.put(req.getChallengeId(), new Pending(cards.human(), cards.printing(), gamesToWin > 1 ? cards.sideboard() : Map.of(), gamesToWin, firstSeat(s(challenge, "playFirst")),
                 fd.profile().forDeck(stored.getAsJsonObject("Summary"))));
         try {
             return post(req.getChallengeId(), "issue", new JsonObject());
@@ -223,7 +223,7 @@ final class ChallengeService {
         }
         Coordinator.Paired paired = new Coordinator.Paired(fd.peer().coordinator(), m.get("role").getAsString(), m.get("match").getAsString(), m.get("token").getAsString(),
                 m.getAsJsonObject("opponent").get("fullName").getAsString());
-        Thread t = new Thread(() -> fd.playOnline(s, paired, p.human(), p.printing(), p.sideboard(), p.gamesToWin(), p.me(), EVENT, fd.peer()), "challenge-match");
+        Thread t = new Thread(() -> fd.playOnline(s, paired, p.human(), p.printing(), p.sideboard(), p.gamesToWin(), p.firstSeat(), p.me(), EVENT, fd.peer()), "challenge-match");
         t.setDaemon(true);
         t.start();
     }
@@ -247,6 +247,9 @@ final class ChallengeService {
     private static String s(JsonObject o, String k) { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : ""; }
 
     private static int playFirst(String v) { return "Challenger".equals(v) ? 1 : "Opponent".equals(v) ? 2 : 0; }
+
+    /** The owner hosts (seat 0): "Challenger" = the owner plays first, "Opponent" = the guest; anything else is the coin toss. */
+    private static int firstSeat(String v) { return "Challenger".equals(v) ? 0 : "Opponent".equals(v) ? 1 : -1; }
 
     private static int winCondition(String v) { return "BestOf3".equals(v) ? 2 : 1; }
 

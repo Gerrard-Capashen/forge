@@ -111,6 +111,7 @@ public final class StateSync {
     private final int[] mulligans = new int[3];
     /** Seats whose mulligan question is outstanding: the client shows "opponent is deciding" from PlayerInfo.pendingMessageType. */
     private final boolean[] mulliganPending = new boolean[3];
+    private final boolean[] startPending = new boolean[3];
     private final Set<Integer> revealed = new HashSet<>();
     private final Map<String, AnnotationInfo.Builder> extraPersistent = new LinkedHashMap<>();
     private List<com.wizards.mtga.gre.Action> hypothetical = List.of();
@@ -192,6 +193,9 @@ public final class StateSync {
     public void setMulliganCount(Player p, int n) { mulligans[seatOf(p)] = n; }
 
     public void setMulliganPending(Player p, boolean on) { mulliganPending[seatOf(p)] = on; }
+
+    /** The seat is choosing who plays first (the loser of the last game): the other client shows "waiting for opponent". */
+    public void setStartPending(Player p, boolean on) { startPending[seatOf(p)] = on; }
 
     public int lastStateId() { return gsId; }
 
@@ -469,6 +473,7 @@ public final class StateSync {
                     .setMulliganCount(mulligans[seat])
                     .setTurnNumber(p.getTurn());
             if (mulliganPending[seat]) pi.setPendingMessageType(com.wizards.mtga.gre.ClientMessageType.ClientMessageType_MulliganResp);
+            else if (startPending[seat]) pi.setPendingMessageType(com.wizards.mtga.gre.ClientMessageType.ClientMessageType_ChooseStartingPlayerResp);
             for (PoolMana pm : pool(p)) {
                 Card src = pm.mana().getSourceCard();
                 pi.addManaPool(com.wizards.mtga.gre.ManaInfo.newBuilder().setManaId(pm.id()).setColor(manaColor(pm.mana().getColor())).setCount(1)

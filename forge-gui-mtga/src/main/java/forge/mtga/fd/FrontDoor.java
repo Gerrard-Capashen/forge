@@ -827,12 +827,15 @@ public final class FrontDoor {
     }
 
     void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
-        playOnline(s, paired, human, printing, Map.of(), 1, me, eventId, p);
+        playOnline(s, paired, human, printing, Map.of(), 1, -1, me, eventId, p);
     }
 
-    /** {@code gamesToWin} 2 = best of three: both players sideboard between games (the host's engine runs them; a guest only sends its sideboard). */
+    /**
+     * {@code gamesToWin} 2 = best of three: both players sideboard between games (the host's engine runs them; a guest only sends its sideboard).
+     * {@code firstSeat} (host's engine only): 0 = the host (challenge owner) plays first in game 1, 1 = the guest does, -1 = coin toss.
+     */
     void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing,
-                    Map<String, Integer> sideboard, int gamesToWin, PublicProfile me, String eventId, Peer p) {
+                    Map<String, Integer> sideboard, int gamesToWin, int firstSeat, PublicProfile me, String eventId, Peer p) {
         String matchId = paired.match();
         System.out.println("[mtga] FD online: paired with " + paired.opponent() + " as " + paired.role() + ", match " + matchId);
         onlineMatches.put(matchId, eventId);
@@ -842,6 +845,7 @@ public final class FrontDoor {
                 forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
                 forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing, sideboard));
                 room.setGamesToWin(gamesToWin);
+                room.setFirstSeat(firstSeat);
                 forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
                 mine.setOutcomeListener(outcomeReport(paired, eventId));
                 p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), eventId)));

@@ -92,6 +92,8 @@ public final class ForgeBackend implements GameBackend {
     private static final ClientToGREMessage CONCEDE_WAKE = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_None).build();
     /** This seat's client sent ConcedeReq (read by the game thread, see ForgeMatch.applyConcessions). */
     private volatile boolean concedeAsked;
+    /** The concession asked for the whole match (ConcedeReq scope Match; the client offers it between games), not just this game. */
+    private volatile boolean concedeMatchAsked;
 
     public ForgeBackend(CardDb db, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck) {
         this(db, new forge.mtga.MatchSetup(DEFAULT_MATCH_ID, humanDeck, aiDeck, Map.of(), "Forge AI"));
@@ -164,6 +166,7 @@ public final class ForgeBackend implements GameBackend {
         forge.mtga.net.Capture.log("CLIENT -> " + forge.mtga.net.Capture.flat(msg, 1200));
         switch (msg.getType()) {
             case ClientMessageType_ConcedeReq -> {
+                if (msg.getConcedeReq().getScope() == com.wizards.mtga.gre.MatchScope.MatchScope_Match) concedeMatchAsked = true;
                 concedeAsked = true;            // at once, whoever the game waits for (see ForgeMatch.conceded)
                 inbox.add(msg);
                 room.conceded(this);
@@ -174,7 +177,8 @@ public final class ForgeBackend implements GameBackend {
                  ClientMessageType_SelectTargetsResp, ClientMessageType_SubmitTargetsReq, ClientMessageType_CancelActionReq,
                  ClientMessageType_GroupResp, ClientMessageType_SelectNResp, ClientMessageType_OptionalActionResp,
                  ClientMessageType_NumericInputResp, ClientMessageType_OrderResp, ClientMessageType_CastingTimeOptionsResp,
-                 ClientMessageType_EffectCostResp, ClientMessageType_EnterSideboardingReq, ClientMessageType_SubmitDeckResp -> inbox.add(msg);
+                 ClientMessageType_EffectCostResp, ClientMessageType_EnterSideboardingReq, ClientMessageType_SubmitDeckResp,
+                 ClientMessageType_ChooseStartingPlayerResp -> inbox.add(msg);
             case ClientMessageType_SetSettingsReq -> {
                 settings.merge(msg.getSetSettingsReq().getSettings(), msg.getSetSettingsReq().getTurnNumber());
                 System.out.println("[mtga] settings now: " + settings);
@@ -201,7 +205,16 @@ public final class ForgeBackend implements GameBackend {
     /** The other seat conceded: a pending decision here ends the game now (the concession is applied on the game thread). */
     void wakeConcede() { inbox.add(CONCEDE_WAKE); }
 
+    /** A game concession is spent once the game is over (its message may sit unread when the other seat's turn ended the game): it must not reach the sideboard screen. */
+    void clearConcessions() {
+        concedeAsked = concedeMatchAsked = false;
+        inbox.removeIf(m -> m == CONCEDE_WAKE || m.getType() == ClientMessageType.ClientMessageType_ConcedeReq);
+    }
+
     boolean concedeAsked() { return concedeAsked; }
+
+    /** In a best of three, a game concession only loses that game; this says the seat gave up the match. */
+    boolean concedeMatchAsked() { return concedeMatchAsked; }
 
     Player player() { return human; }
 
@@ -227,6 +240,8 @@ public final class ForgeBackend implements GameBackend {
         view = grpByName;
         // a later game of a best-of-three starts from a clean slate, but the client keeps counting message ids
         introSent = playStageSent = batching = mulliganAsked = false;
+        // a game concession of the last game is spent (its message may still sit unread when the AI's turn ended the game)
+        clearConcessions();
         mulligans = 0;
         offered.clear();
         offeredTaps.clear();
@@ -544,13 +559,16 @@ public final class ForgeBackend implements GameBackend {
             if (System.getProperty("mtga.rig") != null) rigHand(human);
             room.introduceOthers(this);      // a second human gets its ConnectResp, opening state and question too: both decide at once
             sendIntro(true);
-        } else if (!mulliganAsked) {
-            batching = false;
-            sync.setDecisionPlayer(human);
-            sendDiff(false);
-            session.sendGre(mulliganReq());
-            mulliganAsked = true;
-            room.refreshOthers(this);      // the opponent sees this seat's new hand size
+        } else {
+            room.introduceOthers(this);      // no-op unless the opening state went out early (play/draw choice)
+            if (!mulliganAsked) {
+                batching = false;
+                sync.setDecisionPlayer(human);
+                sendDiff(false);
+                session.sendGre(mulliganReq());
+                mulliganAsked = true;
+                room.refreshOthers(this);      // the opponent sees this seat's new hand size
+            }
         }       // else: the question went out with the opening state and may be answered already
         ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_MulliganResp, ClientMessageType.ClientMessageType_ConcedeReq));
         mulliganAsked = false;
@@ -579,7 +597,18 @@ public final class ForgeBackend implements GameBackend {
 
     /** ConnectResp + the opening state (+ the mulligan question when this seat decides first). Game thread only. */
     void sendIntro(boolean withMulliganReq) {
-        if (introSent) return;
+        if (introSent) {
+            // already shown the opening state (waiting for the other seat's play/draw choice): the question follows now
+            if (withMulliganReq && !mulliganAsked && !gameWinners.isEmpty()) {
+                batching = false;
+                sync.setDecisionPlayer(human);
+                sendDiff(false);
+                session.sendGre(mulliganReq());
+                mulliganAsked = true;
+                batching = true;
+            }
+            return;
+        }
         boolean firstGame = gameWinners.isEmpty();
         GREToClientMessage.Builder connect = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_ConnectResp)
                 .addSystemSeatIds(StateSync.HUMAN_SEAT);
@@ -599,6 +628,52 @@ public final class ForgeBackend implements GameBackend {
         else session.sendGre(opening);
         introSent = true;
         batching = true;       // mulligan stage: one diff per prompt (the opponent's mulligans included), like the real GRE
+    }
+
+    /**
+     * Game thread, a later game of a best-of-three: this seat lost the last game and chooses who plays first. Its client gets the
+     * opening state and the question, the other human seat's client the state with "waiting" ({@link ForgeMatch#startChoiceOpened}).
+     * Returns the player who goes first.
+     */
+    Player askStartingPlayer() {
+        if (session == null || sync == null || disconnected || introSent) return human;
+        room.startChoiceOpened(this);
+        sync.setDecisionPlayer(human);
+        GREToClientMessage.Builder opening = gameState(sync.full(sync.info()));
+        GREToClientMessage.Builder question = req(GREMessageType.GREMessageType_ChooseStartingPlayerReq);
+        question.getChooseStartingPlayerReqBuilder().setTeamType(com.wizards.mtga.gre.TeamType.TeamType_Individual)
+                .addSystemSeatIds(StateSync.HUMAN_SEAT).addSystemSeatIds(StateSync.AI_SEAT);
+        session.sendGre(opening, question);
+        introSent = true;
+        batching = true;
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_ChooseStartingPlayerResp, ClientMessageType.ClientMessageType_ConcedeReq));
+        room.startChoiceClosed(this);
+        if (r.getType() == ClientMessageType.ClientMessageType_ConcedeReq) {
+            human.concede();
+            return human;
+        }
+        boolean play = r.getChooseStartingPlayerResp().getSystemSeatId() != StateSync.AI_SEAT;
+        System.out.println("[mtga] starting player choice: " + (play ? "play" : "draw"));
+        return play ? human : opponent;
+    }
+
+    /** Game thread: the other seat chooses who plays first; this client gets the opening state and shows "waiting for opponent". */
+    void sendWaitingOpening(Player chooser) {
+        if (introSent || session == null || sync == null || disconnected) return;
+        sync.setDecisionPlayer(chooser);
+        session.sendGre(gameState(sync.full(sync.info())));
+        introSent = true;
+        batching = true;
+    }
+
+    void setStartPending(Player chooser) {
+        if (sync != null) sync.setStartPending(chooser, true);
+    }
+
+    void clearStartPending(Player chooser) {
+        if (sync == null) return;
+        sync.setStartPending(chooser, false);
+        if (this.human != chooser) pushDiff();      // the chooser itself is sent the game's next message anyway
     }
 
     boolean isDisconnected() { return disconnected; }
@@ -2136,6 +2211,8 @@ public final class ForgeBackend implements GameBackend {
         @Override
         public Player chooseStartingPlayer(boolean isFirstGame) {
             if ("block".equals(System.getProperty("mtga.rig"))) return opponent;      // test rig: let the AI attack first
+            if (isFirstGame && room.forcedStarter() != null) return room.forcedStarter();      // a challenge's "play first" setting
+            if (!isFirstGame && room.gamesToWin() > 1) return askStartingPlayer();      // best of three: the loser chooses
             if ("playtest".equals(System.getProperty("mtga.deck"))) return player;      // solo sandbox: you start
             return super.chooseStartingPlayer(isFirstGame);
         }

@@ -96,8 +96,8 @@ public final class SelfPlay {
             if (bo3) {
                 int played = fc.intermissions + 1;
                 boolean ok = fc.sideboardScreens == fc.intermissions && fc.confirmations == fc.intermissions && fc.finalGames == played
-                        && fc.finalMatchEntries == 1 && fc.lastGameNumber == played;
-                System.out.println("  bo3: games " + played + ", intermissions " + fc.intermissions + ", sideboard screens " + fc.sideboardScreens
+                        && fc.finalMatchEntries == 1 && fc.lastGameNumber == played && fc.startQuestions <= fc.intermissions && fc.startWrong == 0;
+                System.out.println("  bo3: games " + played + ", play/draw asked " + fc.startQuestions + ", intermissions " + fc.intermissions + ", sideboard screens " + fc.sideboardScreens
                         + ", confirmations " + fc.confirmations + ", final results " + fc.finalGames + " games + " + fc.finalMatchEntries + " match, last game number "
                         + fc.lastGameNumber + (ok ? "" : "  (WRONG)"));
                 if (!ok || played < 2) failed++;
@@ -128,6 +128,11 @@ public final class SelfPlay {
             fc[1].holdMulligan = Boolean.getBoolean("selfplay.pvp.mullhold");
             boolean bo3 = Boolean.getBoolean("selfplay.bo3");
             if (bo3) room.setGamesToWin(2);
+            if (Boolean.getBoolean("selfplay.pvp.first")) {       // a challenge's "play first" setting: the seat that must open game 1 alternates
+                room.setFirstSeat(g % 2);
+                fc[0].expectedFirstSeat = g % 2 == 0 ? 1 : 2;
+                fc[1].expectedFirstSeat = g % 2 == 1 ? 1 : 2;
+            }
             ForgeBackend[] be = {
                 new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of(), bo3 ? sideboardFor(decks[0], decks[1]) : Map.of())),
                 new ForgeBackend(db, room, 1, new ForgeMatch.Seat("Bob", decks[1], Map.of(), bo3 ? sideboardFor(decks[1], decks[0]) : Map.of())) };
@@ -194,6 +199,22 @@ public final class SelfPlay {
                 for (int i = 0; i < 2; i++) be[i].onDisconnect(fc[i]);
                 continue;
             }
+            if (bo3 && Boolean.getBoolean("selfplay.pvp.gameconcede")) {    // Bob concedes game 1 (scope Game): the match goes on to sideboarding and game 2
+                long end = System.currentTimeMillis() + limit * 1000;
+                while (fc[0].states < 150 && System.currentTimeMillis() < end) Thread.sleep(50);
+                fc[0].hold = true;
+                Thread.sleep(1500);
+                ClientToGREMessage.Builder cg = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConcedeReq);
+                cg.getConcedeReqBuilder().setScope(com.wizards.mtga.gre.MatchScope.MatchScope_Game);
+                fc[0].hold = false;      // Alice's pending question stays unanswered (the game ends under it); she answers everything after
+                be[1].onClientMessage(fc[1], cg.build());
+                if (!awaitAndCheck(fc, g, "pvp", limit)) failed++;
+                boolean ok = fc[0].intermissions >= 1 && fc[0].finalMatchEntries == 1 && fc[0].lastGameNumber >= 2 && fc[0].sideboardScreens == fc[0].intermissions;
+                System.out.println("=== pvp game concede " + (g + 1) + ": games " + (fc[0].intermissions + 1) + ", match result entries " + fc[0].finalMatchEntries + (ok ? "" : " (WRONG)"));
+                if (!ok) failed++;
+                for (int i = 0; i < 2; i++) be[i].onDisconnect(fc[i]);
+                continue;
+            }
             if (!emoteExchange(fc, be, "pvp")) failed++;
             if (!awaitAndCheck(fc, g, "pvp", limit)) failed++;
             if (bo3 && !bo3Check(fc)) failed++;
@@ -240,8 +261,10 @@ public final class SelfPlay {
         for (int i = 0; i < 2; i++) {
             int played = fc[i].intermissions + 1;
             boolean good = fc[i].sideboardScreens == fc[i].intermissions && fc[i].confirmations == fc[i].intermissions && fc[i].finalGames == played
-                    && fc[i].finalMatchEntries == 1 && fc[i].lastGameNumber == played && played >= 2;
-            System.out.println("  bo3 " + (i == 0 ? "Alice" : "Bob") + ": games " + played + ", sideboard screens " + fc[i].sideboardScreens + ", confirmations " + fc[i].confirmations
+                    && fc[i].finalMatchEntries == 1 && fc[i].lastGameNumber == played && played >= 2
+                    && fc[i].startQuestions + fc[i].startWaits == fc[i].intermissions && fc[i].startWrong == 0;      // every later game: one seat chooses, the other waits
+            System.out.println("  bo3 " + (i == 0 ? "Alice" : "Bob") + ": games " + played + ", play/draw asked " + fc[i].startQuestions + " waited " + fc[i].startWaits
+                    + ", sideboard screens " + fc[i].sideboardScreens + ", confirmations " + fc[i].confirmations
                     + ", final results " + fc[i].finalGames + " games + " + fc[i].finalMatchEntries + " match" + (good ? "" : "  (WRONG)"));
             ok &= good;
         }
@@ -554,6 +577,9 @@ public final class SelfPlay {
         /** -Dselfplay.trace=true: print what this client receives (message types, game state ids, who is pending / deciding). */
         static final boolean TRACE = Boolean.getBoolean("selfplay.trace");
         int intermissions, sideboardScreens, confirmations, finalGames, finalMatchEntries, lastGameNumber, expectedMainSize;
+        /** Best of three play/draw choice: questions this client answered, games it saw the opponent choosing, and the seat that must have the first turn. */
+        int startQuestions, startWaits, startWrong;
+        int expectedFirstSeat;
         com.wizards.mtga.gre.GameInfo info = com.wizards.mtga.gre.GameInfo.getDefaultInstance();
         final Map<String, Integer> tokenDeleted = new TreeMap<>();
         private ArrayDeque<Attacker> attackPlan;
@@ -628,6 +654,16 @@ public final class SelfPlay {
             }
             switch (g.getType()) {
                 case GREMessageType_GameStateMessage -> state(g.getGameStateMessage());
+                case GREMessageType_ChooseStartingPlayerReq -> {
+                    startQuestions++;
+                    if (g.getChooseStartingPlayerReq().getSystemSeatIdsCount() != 2) problem("ChooseStartingPlayerReq without both seats");
+                    if (info.getMatchWinCondition() != com.wizards.mtga.gre.MatchWinCondition.MatchWinCondition_Best2of3 || info.getGameNumber() < 2) problem("play/draw question outside a later game of a best of three");
+                    boolean play = rnd.nextBoolean();
+                    expectedFirstSeat = play ? 1 : 2;
+                    ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_ChooseStartingPlayerResp);
+                    r.getChooseStartingPlayerRespBuilder().setTeamType(g.getChooseStartingPlayerReq().getTeamType()).setSystemSeatId(play ? 1 : 2).setTeamId(play ? 1 : 2);
+                    reply(r);
+                }
                 case GREMessageType_MulliganReq -> {
                     requests++;
                     boolean mull = mulligans < 2 && rnd.nextInt(3) == 0;
@@ -935,6 +971,12 @@ public final class SelfPlay {
             }
             if (gs.hasTurnInfo()) turn = gs.getTurnInfo();
             if (turn != null) turnNo = turn.getTurnNumber();
+            if (gs.getType() == GameStateType.GameStateType_Full && players.containsKey(2)
+                    && players.get(2).getPendingMessageType() == ClientMessageType.ClientMessageType_ChooseStartingPlayerResp) startWaits++;
+            if (expectedFirstSeat != 0 && turn != null && turn.getTurnNumber() == 1) {
+                if (turn.getActivePlayer() != expectedFirstSeat) { startWrong++; problem("chose seat " + expectedFirstSeat + " to start, seat " + turn.getActivePlayer() + " did"); }
+                expectedFirstSeat = 0;
+            }
             if (gs.getType() == GameStateType.GameStateType_Full && info.getGameNumber() > 1) {
                 int total = zone(31).getObjectInstanceIdsCount() + zone(32).getObjectInstanceIdsCount();
                 if (total != expectedMainSize) problem("game " + info.getGameNumber() + " starts with " + total + " cards in hand + library, sideboarded deck has " + expectedMainSize);
