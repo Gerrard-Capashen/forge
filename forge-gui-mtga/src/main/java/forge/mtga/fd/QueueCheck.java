@@ -38,10 +38,22 @@ public final class QueueCheck {
 
         JsonArray cfg = q.queueConfig(), events = q.eventInfos();
         int queues = PlayQueues.Mode.values().length * PlayQueues.FORMATS.size();
-        check(cfg.size() == queues && events.size() == queues, queues + " queues and " + queues + " events");
+        // Bot Play also has a best-of-three event per format
+        check(cfg.size() == queues && events.size() == queues + PlayQueues.FORMATS.size(), queues + " queues and " + (queues + PlayQueues.FORMATS.size()) + " events");
+        java.util.Map<String, JsonObject> byName = new java.util.HashMap<>();
+        for (int i = 0; i < events.size(); i++) byName.put(events.get(i).getAsJsonObject().get("InternalEventName").getAsString(), events.get(i).getAsJsonObject());
         for (int i = 0; i < cfg.size(); i++) {
-            JsonObject c = cfg.get(i).getAsJsonObject(), e = events.get(i).getAsJsonObject();
+            JsonObject c = cfg.get(i).getAsJsonObject(), e = byName.get(cfg.get(i).getAsJsonObject().get("EventNameBO1").getAsString());
             String name = e.get("InternalEventName").getAsString();
+            boolean bot = PlayQueues.modeOf(name) == PlayQueues.Mode.BOT;
+            String bo3 = c.get("EventNameBO3").isJsonNull() ? null : c.get("EventNameBO3").getAsString();
+            check(bot ? (name + PlayQueues.BO3).equals(bo3) : bo3 == null, name + (bot ? " offers a best-of-three event" : " is best-of-one only"));
+            if (bot) {
+                JsonObject e3 = byName.get(bo3);
+                check(e3 != null && PlayQueues.isQueueEvent(bo3) && PlayQueues.modeOf(bo3) == PlayQueues.Mode.BOT && PlayQueues.formatOf(bo3).equals(PlayQueues.formatOf(name))
+                        && "BestOf3".equals(e3.get("WinCondition").getAsString()) && PlayQueues.gamesToWin(bo3) == 2 && PlayQueues.gamesToWin(name) == 1,
+                        bo3 + " is a best-of-three queue event of the same format");
+            }
             check(c.get("EventNameBO1").getAsString().equals(name) && PlayQueues.isQueueEvent(name), "queue " + c.get("Id").getAsString() + " -> event " + name);
             String format = e.getAsJsonObject("EventUXInfo").get("DeckSelectFormat").getAsString();
             check(format.equals(PlayQueues.formatOf(name)) && PlayQueues.FORMATS.contains(format), name + " deck picker format " + format);

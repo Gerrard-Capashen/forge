@@ -6,11 +6,13 @@ import forge.game.GameType;
 import forge.game.Match;
 import forge.game.player.Player;
 import forge.game.player.RegisteredPlayer;
+import forge.deck.CardPool;
 import forge.player.GamePlayerUtil;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -22,7 +24,16 @@ import java.util.Map;
  */
 public final class ForgeMatch {
     /** What a seat plays: display name, deck by Forge card name, the printings the player chose (card name -> GrpId). */
-    public record Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides) { }
+    public record Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard) {
+        public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides) { this(name, deck, overrides, Map.of()); }
+    }
+
+    /** Games a seat must win to take the match: 1 = a single game, 2 = best of three (the human sideboards between games). */
+    private int gamesToWin = 1;
+
+    public void setGamesToWin(int n) { gamesToWin = Math.max(1, n); }
+
+    int gamesToWin() { return gamesToWin; }
 
     private final CardDb db;
     private final String matchId;
@@ -125,21 +136,42 @@ public final class ForgeMatch {
         for (ForgeBackend b : humans) if (b != null && b != first) b.sendIntro(false);
     }
 
+    /** A best-of-three that keeps drawing ends after this many games. */
+    private static final int MAX_GAMES = 5;
+
     private void run() {
         try {
-            GameRules rules = new GameRules(GameType.Constructed);
-            rules.setAppliedVariants(EnumSet.of(GameType.Constructed));
-            List<RegisteredPlayer> players = new ArrayList<>();
-            for (int i = 0; i < 2; i++) {
-                RegisteredPlayer rp = new RegisteredPlayer(ForgeSmoke.deck(i == 0 ? "You" : "Opponent", seats[i].deck()));
-                rp.setPlayer(humans[i] != null ? humans[i].newLobbyPlayer() : GamePlayerUtil.createAiPlayer(aiName, 1, ""));
-                players.add(rp);
-            }
+            runMatch();
+        } catch (Throwable t) {
+            if (t instanceof InterruptedException || t.getCause() instanceof InterruptedException) return;
+            System.out.println("[mtga] game thread died: " + t);
+            t.printStackTrace(System.out);
+            for (ForgeBackend b : humans) if (b != null) b.matchAborted();
+        }
+    }
 
+    private void runMatch() throws Throwable {
+        GameRules rules = new GameRules(GameType.Constructed);
+        rules.setAppliedVariants(EnumSet.of(GameType.Constructed));
+        rules.setGamesPerMatch(gamesToWin * 2 - 1);
+        List<RegisteredPlayer> players = new ArrayList<>();
+        Map<String, Integer>[] main = new Map[2];
+        for (int i = 0; i < 2; i++) {
+            main[i] = new LinkedHashMap<>(seats[i].deck());
+            RegisteredPlayer rp = new RegisteredPlayer(ForgeSmoke.deck(i == 0 ? "You" : "Opponent", seats[i].deck()));
+            rp.setPlayer(humans[i] != null ? humans[i].newLobbyPlayer() : GamePlayerUtil.createAiPlayer(aiName, 1, ""));
+            players.add(rp);
+        }
+        Match match = new Match(rules, players, "MTGA");
+        // the main deck can't fall below this when sideboarding (a 40-card draft deck vs a 60-card constructed one)
+        int minDeck = Math.min(60, main[0].values().stream().mapToInt(Integer::intValue).sum());
+
+        for (int gameNo = 1; ; gameNo++) {
             Map<String, Integer> grpByName = new HashMap<>();
-            for (Seat s : seats) for (String n : s.deck().keySet()) grpByName.put(n, db.grpId(n));
-
-            Match match = new Match(rules, players, "MTGA");
+            for (int i = 0; i < 2; i++) {
+                for (String n : main[i].keySet()) grpByName.put(n, db.grpId(n));
+                for (String n : seats[i].sideboard().keySet()) grpByName.put(n, db.grpId(n));
+            }
             Game game = match.createGame();
             this.game = game;
             for (int i = 0; i < 2; i++) {
@@ -149,23 +181,37 @@ public final class ForgeMatch {
                 if (seats[1 - i].overrides() != null) view.putAll(seats[1 - i].overrides());
                 if (seats[i].overrides() != null) view.putAll(seats[i].overrides());
                 Player me = game.getPlayers().get(i);
-                humans[i].bind(game, me, game.getPlayers().get(1 - i), view);
+                humans[i].bind(game, me, game.getPlayers().get(1 - i), view, StateSync.matchInfo(gameNo, gamesToWin, minDeck));
             }
             game.setNoGUIUser();
-            match.startGame(game);
-            System.out.println("[mtga] game over");
-            for (ForgeBackend b : humans) if (b != null) b.sendGameOver();
-        } catch (Throwable t) {
-            if (t instanceof InterruptedException || t.getCause() instanceof InterruptedException) return;
-            Game g = game;
-            if (g != null && g.isGameOver()) {               // a concession ended the game while someone was being asked
-                System.out.println("[mtga] game over (conceded)");
-                for (ForgeBackend b : humans) if (b != null) b.sendGameOver();
-                return;
+            try {
+                match.startGame(game);
+                System.out.println("[mtga] game " + gameNo + " over");
+            } catch (Throwable t) {
+                if (t instanceof InterruptedException || t.getCause() instanceof InterruptedException) return;
+                if (!game.isGameOver()) throw t;
+                System.out.println("[mtga] game " + gameNo + " over (conceded)");     // a concession ended the game while someone was being asked
             }
-            System.out.println("[mtga] game thread died: " + t);
-            t.printStackTrace(System.out);
-            for (ForgeBackend b : humans) if (b != null) b.matchAborted();
+            boolean conceded = false;
+            for (Player p : game.getPlayers()) conceded |= p.conceded();
+            boolean matchOver = gamesToWin <= 1 || conceded || match.isMatchOver() || gameNo >= MAX_GAMES;
+            for (ForgeBackend b : humans) if (b != null) b.sendGameEnd(matchOver);
+            if (matchOver) return;
+
+            for (int i = 0; i < 2; i++) {
+                if (humans[i] == null) continue;
+                // the sideboard is every card of the deck and sideboard that the main deck doesn't play now
+                Map<String, Integer> side = new LinkedHashMap<>(seats[i].deck());
+                seats[i].sideboard().forEach((n, c) -> side.merge(n, c, Integer::sum));
+                main[i].forEach((n, c) -> side.merge(n, -c, Integer::sum));
+                side.values().removeIf(n -> n <= 0);
+                Map<String, Integer> chosen = humans[i].sideboard(main[i], side);
+                if (chosen == null) return;                    // the client left
+                main[i] = chosen;
+                CardPool pool = players.get(i).getDeck().getMain();
+                pool.clear();
+                pool.addAll(ForgeSmoke.deck("deck", chosen).getMain());
+            }
         }
     }
 }

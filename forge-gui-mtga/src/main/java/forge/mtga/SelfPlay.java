@@ -70,7 +70,16 @@ public final class SelfPlay {
                 d1 = b.main();
                 System.out.println("[selfplay] game " + (g + 1) + ": " + a.format() + " / " + a.name() + " vs " + b.format() + " / " + b.name());
             }
-            ForgeBackend backend = new ForgeBackend(db, d0, d1);
+            boolean bo3 = Boolean.getBoolean("selfplay.bo3");
+            ForgeBackend backend;
+            if (bo3) {
+                // sideboard: copies of a card the AI plays (else of the first main deck card), so the fake client can swap one in
+                final Map<String, Integer> mine = d0;
+                String pick = d1.keySet().stream().filter(n -> !mine.containsKey(n)).findFirst().orElse(d0.keySet().iterator().next());
+                backend = new ForgeBackend(db, new MatchSetup("selfplay-bo3-" + g, d0, d1, Map.of(), "Forge AI", null, null, Map.of(pick, 3), 2));
+            } else {
+                backend = new ForgeBackend(db, d0, d1);
+            }
             fc.backend = backend;
             ClientToGREMessage.Builder connect = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_ConnectReq);
             connect.getConnectReqBuilder().getDefaultSettingsBuilder();
@@ -84,6 +93,15 @@ public final class SelfPlay {
                     + ", requests " + fc.requests + ", result " + fc.result);
             fc.problems.forEach((k, v) -> System.out.println("  PROBLEM x" + v + ": " + k));
             System.out.println("  token deletions: " + fc.tokenDeleted);
+            if (bo3) {
+                int played = fc.intermissions + 1;
+                boolean ok = fc.sideboardScreens == fc.intermissions && fc.confirmations == fc.intermissions && fc.finalGames == played
+                        && fc.finalMatchEntries == 1 && fc.lastGameNumber == played;
+                System.out.println("  bo3: games " + played + ", intermissions " + fc.intermissions + ", sideboard screens " + fc.sideboardScreens
+                        + ", confirmations " + fc.confirmations + ", final results " + fc.finalGames + " games + " + fc.finalMatchEntries + " match, last game number "
+                        + fc.lastGameNumber + (ok ? "" : "  (WRONG)"));
+                if (!ok || played < 2) failed++;
+            }
             fc.annCounts.forEach((k, v) -> totals.merge(k, v, Integer::sum));
             if (!done || !fc.problems.isEmpty()) failed++;
             backend.onDisconnect(fc);
@@ -461,6 +479,9 @@ public final class SelfPlay {
         final Map<String, Integer> problems = new LinkedHashMap<>();
         final Map<String, Integer> annCounts = new TreeMap<>();
         int states, requests, turnNo, mulligans;
+        /** Best-of-three bookkeeping: IntermissionReqs that offered the sideboard, screens shown, confirmations, the final result list, the last game number seen. */
+        int intermissions, sideboardScreens, confirmations, finalGames, finalMatchEntries, lastGameNumber, expectedMainSize;
+        com.wizards.mtga.gre.GameInfo info = com.wizards.mtga.gre.GameInfo.getDefaultInstance();
         final Map<String, Integer> tokenDeleted = new TreeMap<>();
         private ArrayDeque<Attacker> attackPlan;
         private final Set<Integer> expectedAttackers = new HashSet<>();
@@ -496,6 +517,10 @@ public final class SelfPlay {
             }
             if (m.hasMatchGameRoomStateChangedEvent()
                     && m.getMatchGameRoomStateChangedEvent().getGameRoomInfo().getStateType() == MatchGameRoomStateType.MatchGameRoomStateType_MatchCompleted) {
+                for (com.wizards.mtga.gre.ResultSpec r : m.getMatchGameRoomStateChangedEvent().getGameRoomInfo().getFinalMatchResult().getResultListList()) {
+                    if (r.getScope() == com.wizards.mtga.gre.MatchScope.MatchScope_Match) finalMatchEntries++;
+                    else finalGames++;
+                }
                 done.countDown();
             }
         }
@@ -720,7 +745,39 @@ public final class SelfPlay {
                     reply(msg(ClientMessageType.ClientMessageType_SubmitBlockersReq));
                 }
                 case GREMessageType_UIMessage -> { if (g.getUiMessage().hasOnChat()) emotesGot.add(g.getUiMessage().getOnChat().getText()); }
-                case GREMessageType_IntermissionReq -> result = g.getIntermissionReq().getResult().getResult() + " team " + g.getIntermissionReq().getResult().getWinningTeamId();
+                case GREMessageType_IntermissionReq -> {
+                    result = g.getIntermissionReq().getResult().getResult() + " team " + g.getIntermissionReq().getResult().getWinningTeamId();
+                    boolean sideboarding = g.getIntermissionReq().getOptionsList().stream()
+                            .anyMatch(o -> o.getResponseType() == ClientMessageType.ClientMessageType_EnterSideboardingReq);
+                    if (sideboarding) {
+                        intermissions++;
+                        if (g.getIntermissionReq().getResult().getScope() != com.wizards.mtga.gre.MatchScope.MatchScope_Game) problem("intermission result is not a game result");
+                        if (info.getMatchState() != com.wizards.mtga.gre.MatchState.MatchState_GameComplete) problem("intermission while match state is " + info.getMatchState());
+                        reply(msg(ClientMessageType.ClientMessageType_EnterSideboardingReq));
+                    }
+                }
+                case GREMessageType_SubmitDeckReq -> {
+                    sideboardScreens++;
+                    com.wizards.mtga.gre.DeckMessage d = g.getSubmitDeckReq().getDeck();
+                    var dc = info.getDeckConstraintInfo();
+                    if (info.getMatchState() != com.wizards.mtga.gre.MatchState.MatchState_Sideboarding) problem("sideboard screen while match state is " + info.getMatchState());
+                    if (dc.getMaxDeckSize() == 0 || dc.getMaxSideboardSize() == 0) problem("sideboard screen without deck constraints");
+                    long wins = info.getResultsList().stream().filter(r -> r.getResult() == com.wizards.mtga.gre.ResultType.ResultType_WinLoss).count();
+                    if (wins != sideboardScreens) problem("sideboard screen sees " + wins + " game results after " + sideboardScreens + " games");
+                    if (d.getDeckCardsCount() < dc.getMinDeckSize() || d.getDeckCardsCount() > dc.getMaxDeckSize()) problem("sideboard main deck size " + d.getDeckCardsCount() + " outside constraints");
+                    // swap one main deck card for a sideboard card, like a player would
+                    List<Integer> main = new ArrayList<>(d.getDeckCardsList()), side = new ArrayList<>(d.getSideboardCardsList());
+                    if (!side.isEmpty() && !main.isEmpty()) {
+                        int out = main.remove(0), in = side.remove(0);
+                        side.add(out);
+                        main.add(in);
+                    }
+                    expectedMainSize = main.size();
+                    ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_SubmitDeckResp);
+                    r.getSubmitDeckRespBuilder().getDeckBuilder().addAllDeckCards(main).addAllSideboardCards(side);
+                    reply(r);
+                }
+                case GREMessageType_SubmitDeckConfirmation -> confirmations++;
                 case GREMessageType_ConnectResp, GREMessageType_SubmitTargetsResp, GREMessageType_SubmitAttackersResp,
                      GREMessageType_SubmitBlockersResp, GREMessageType_SetSettingsResp -> { }
                 default -> problem("fake client does not handle " + g.getType());
@@ -759,6 +816,14 @@ public final class SelfPlay {
                 problem("diff prevGameStateId " + gs.getPrevGameStateId() + " != " + lastGsId);
             }
             lastGsId = gs.getGameStateId();
+            if (gs.hasGameInfo()) {
+                info = gs.getGameInfo();
+                if (gs.getType() == GameStateType.GameStateType_Full) {
+                    if (info.getGameNumber() != lastGameNumber + 1) problem("game number " + info.getGameNumber() + " after " + lastGameNumber);
+                    lastGameNumber = info.getGameNumber();
+                    mulligans = 0;
+                }
+            }
             for (GameObjectInfo o : gs.getGameObjectsList()) objs.put(o.getInstanceId(), o);
             for (ZoneInfo z : gs.getZonesList()) zones.put(z.getZoneId(), z);
             for (PlayerInfo p : gs.getPlayersList()) {
@@ -776,6 +841,11 @@ public final class SelfPlay {
             }
             if (gs.hasTurnInfo()) turn = gs.getTurnInfo();
             if (turn != null) turnNo = turn.getTurnNumber();
+            if (gs.getType() == GameStateType.GameStateType_Full && info.getGameNumber() > 1) {
+                int total = zone(31).getObjectInstanceIdsCount() + zone(32).getObjectInstanceIdsCount();
+                if (total != expectedMainSize) problem("game " + info.getGameNumber() + " starts with " + total + " cards in hand + library, sideboarded deck has " + expectedMainSize);
+                if (info.getMatchState() != com.wizards.mtga.gre.MatchState.MatchState_GameInProgress) problem("new game with match state " + info.getMatchState());
+            }
 
             checkLibReveals();
             // structural consistency

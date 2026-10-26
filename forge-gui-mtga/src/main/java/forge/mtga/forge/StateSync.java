@@ -84,6 +84,9 @@ public final class StateSync {
     private final Map<Integer, PlayerInfo> sentPlayers = new HashMap<>();
     private final Map<String, AnnotationInfo> sentPersistent = new LinkedHashMap<>();
     private List<com.wizards.mtga.gre.ResultSpec> pendingResults;
+    private com.wizards.mtga.gre.MatchState pendingMatchState = com.wizards.mtga.gre.MatchState.MatchState_MatchComplete;
+    /** The GameInfo block of this game (game number and win condition of a best-of-three match). */
+    private GameInfoSupplier info = DEFAULT_INFO;
 
     // ---- instance ids: key "c<forge card id>" (cards) or "s<stack instance id>" (abilities on the stack)
     private final Map<String, Integer> iidByKey = new HashMap<>();
@@ -137,7 +140,37 @@ public final class StateSync {
     public void clearRevealed() { revealed.clear(); }
 
     /** The next diff reports the game/match as finished with these results. */
-    public void setResults(List<com.wizards.mtga.gre.ResultSpec> results) { pendingResults = results; }
+    public void setResults(List<com.wizards.mtga.gre.ResultSpec> results) { setResults(results, com.wizards.mtga.gre.MatchState.MatchState_MatchComplete); }
+
+    /** Same, with the match state the client moves to: GameComplete when the match goes on with another game. */
+    public void setResults(List<com.wizards.mtga.gre.ResultSpec> results, com.wizards.mtga.gre.MatchState state) {
+        pendingResults = results;
+        pendingMatchState = state;
+    }
+
+    /** GameInfo of this game's messages (game number, win condition); the default is game 1 of a single-game match. */
+    public void setInfo(GameInfoSupplier i) { info = i; }
+
+    public GameInfoSupplier info() { return info; }
+
+    /** A later game of the same match: the client keeps counting game state, annotation and instance ids across games. */
+    public void continueFrom(StateSync prev) {
+        gsId = prev.gsId;
+        annId = prev.annId;
+        nextIid = prev.nextIid;
+    }
+
+    /**
+     * A GameStateMessage that carries only a complete GameInfo with {@code state} (+ the per-game {@code results}): between
+     * games, to move the client to Sideboarding. Counts as the last message sent.
+     */
+    public GameStateMessage.Builder matchStateDiff(com.wizards.mtga.gre.MatchState state, List<com.wizards.mtga.gre.ResultSpec> results) {
+        GameStateMessage.Builder m = GameStateMessage.newBuilder().setType(GameStateType.GameStateType_Diff);
+        info.fill(m.getGameInfoBuilder(), matchId);
+        m.getGameInfoBuilder().setStage(GameStage.GameStage_GameOver).setMatchState(state).addAllResults(results);
+        m.setGameStateId(++gsId).setPrevGameStateId(gsId - 1);
+        return m;
+    }
 
     public StateSync(Game game, Player human, Player ai, CardDb db, Map<String, Integer> grpByName, String matchId) {
         this.game = game;
@@ -880,12 +913,12 @@ public final class StateSync {
         // object deletions go out with the result.
         boolean gameOver = pendingResults != null;
         if (pendingResults != null) {
-            DEFAULT_INFO.fill(m.getGameInfoBuilder(), matchId);
+            info.fill(m.getGameInfoBuilder(), matchId);
             m.getGameInfoBuilder().setStage(GameStage.GameStage_GameOver)
-                    .setMatchState(com.wizards.mtga.gre.MatchState.MatchState_MatchComplete).addAllResults(pendingResults);
+                    .setMatchState(pendingMatchState).addAllResults(pendingResults);
             pendingResults = null;
         } else if (playStage) {
-            DEFAULT_INFO.fill(m.getGameInfoBuilder(), matchId);
+            info.fill(m.getGameInfoBuilder(), matchId);
             m.getGameInfoBuilder().setStage(GameStage.GameStage_Play);
         }
         for (GameObjectInfo o : s.objs.values()) {
@@ -1126,5 +1159,17 @@ public final class StateSync {
             .setSuperFormat(com.wizards.mtga.gre.SuperFormat.SuperFormat_Constructed)
             .setMulliganType(com.wizards.mtga.gre.MulliganType.MulliganType_London)
             .setFreeMulliganCount(0);
+
+    /** GameInfo of game {@code gameNumber} in a match won by {@code gamesToWin} games (1 = a single game); {@code minDeck} bounds the sideboarded main deck. */
+    public static GameInfoSupplier matchInfo(int gameNumber, int gamesToWin, int minDeck) {
+        if (gamesToWin <= 1 && gameNumber == 1) return DEFAULT_INFO;
+        return (gi, matchId) -> {
+            DEFAULT_INFO.fill(gi, matchId);
+            gi.setGameNumber(gameNumber).setMatchWinCondition(gamesToWin > 1
+                    ? com.wizards.mtga.gre.MatchWinCondition.MatchWinCondition_Best2of3 : com.wizards.mtga.gre.MatchWinCondition.MatchWinCondition_SingleElimination);
+            // the client's sideboard screen validates the deck it submits against these (all zero = "deck too big")
+            gi.getDeckConstraintInfoBuilder().setMinDeckSize(minDeck).setMaxDeckSize(250).setMinSideboardSize(0).setMaxSideboardSize(15);
+        };
+    }
 
 }

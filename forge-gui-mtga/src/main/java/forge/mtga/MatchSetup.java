@@ -6,11 +6,18 @@ import java.util.Map;
  * What the next Match Door connection plays ({@code seat} set: a player-vs-player seat prepared by the Front Door, either the
  * host's engine seat or the guest's relay to the host; else a match against the AI): decks by Forge card name, the client GrpIds to show for the human's
  * chosen printings, and the match id the Front Door announced. The Front Door publishes one with {@link #publish}
- * when a match is created; the Match Door picks up the latest (rig/duel mode uses the hard-coded decks instead).
+ * when a match is created ({@code gamesToWin} 2 = best of three, played with {@code humanSideboard} between games); the Match Door picks up the latest (rig/duel mode uses the hard-coded decks instead).
  */
 public record MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
                          Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
-                         java.util.function.Consumer<Boolean> onResult) {
+                         java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin) {
+    /** One game, no sideboard. */
+    public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
+                      Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
+                      java.util.function.Consumer<Boolean> onResult) {
+        this(matchId, humanDeck, aiDeck, grpOverrides, aiName, seat, onResult, Map.of(), 1);
+    }
+
     /** Without a result callback. */
     public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
                       Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat) {

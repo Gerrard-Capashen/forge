@@ -45,11 +45,23 @@ final class PlayQueues {
 
     static String eventName(Mode mode, String format) { return mode.prefix + "_" + format; }
 
+    /** The best-of-three variant of a queue event ends with this ("BotPlay_Standard_BO3"); only Bot Play offers one so far. */
+    static final String BO3 = "_BO3";
+
+    static boolean isBo3(String eventName) { return eventName != null && eventName.endsWith(BO3); }
+
+    /** The queue event without its best-of-three marker. */
+    private static String baseName(String eventName) { return isBo3(eventName) ? eventName.substring(0, eventName.length() - BO3.length()) : eventName; }
+
+    /** Games to win in a queue event's match: 2 in a best-of-three, else 1. */
+    static int gamesToWin(String eventName) { return isBo3(eventName) && modeOf(eventName) == Mode.BOT ? 2 : 1; }
+
     /** The mode of a queue event name, null if it is not one of ours. */
     static Mode modeOf(String eventName) {
         if (eventName == null) return null;
+        String base = baseName(eventName);
         for (Mode m : Mode.values()) {
-            if (eventName.startsWith(m.prefix + "_") && FORMATS.contains(eventName.substring(m.prefix.length() + 1))) return m;
+            if (base.startsWith(m.prefix + "_") && FORMATS.contains(base.substring(m.prefix.length() + 1))) return m;
         }
         return null;
     }
@@ -59,7 +71,7 @@ final class PlayQueues {
     /** The format of a queue event, null if it is not one of ours. */
     static String formatOf(String eventName) {
         Mode m = modeOf(eventName);
-        return m == null ? null : eventName.substring(m.prefix.length() + 1);
+        return m == null ? null : baseName(eventName).substring(m.prefix.length() + 1);
     }
 
     /** GetPlayBladeQueueConfig: the "Ranked" list and the "Unranked" one (Bot Play first). */
@@ -73,7 +85,7 @@ final class PlayQueues {
             for (String f : FORMATS) {
                 String ev = eventName(m, f);
                 q.add(obj("Id", queueId(m, f), "QueueType", m.queueType, "LocTitle", "Events/Event_Title_" + ev,
-                        "EventNameBO1", ev, "EventNameBO3", null, "DeckSizeBO1", null, "DeckSizeBO3", null,
+                        "EventNameBO1", ev, "EventNameBO3", m == Mode.BOT ? ev + BO3 : null, "DeckSizeBO1", null, "DeckSizeBO3", null,
                         "SideBoardBO1", null, "SideBoardBO3", null, "Tags", new JsonArray()));
             }
         }
@@ -88,8 +100,8 @@ final class PlayQueues {
         int priority = 200;
         for (Mode m : Mode.values()) {
             if (!modes.contains(m)) continue;
-            for (String f : FORMATS) {
-                String name = eventName(m, f);
+            for (String f : FORMATS) for (boolean bo3 : m == Mode.BOT ? new boolean[] {false, true} : new boolean[] {false}) {
+                String name = eventName(m, f) + (bo3 ? BO3 : "");
                 JsonObject data = obj(
                         "TitleRankText", obj("LocKey", "Events/Event_Title_" + name),
                         "DescriptionText", obj("LocKey", "Events/Event_Desc_" + name),
@@ -102,7 +114,7 @@ final class PlayQueues {
                 out.add(obj("InternalEventName", name, "EventState", "Active", "FormatType", "Constructed",
                         "StartTime", "2020-01-01T00:00:00Z", "LockedTime", "2099-01-01T00:00:00Z", "ClosedTime", "2099-01-01T00:00:00Z",
                         "Flags", flags(m), "PastEntries", obj(), "EntryFees", new JsonArray(), "EventTags", new JsonArray(),
-                        "EventUXInfo", ux, "WinCondition", "SingleElimination"));
+                        "EventUXInfo", ux, "WinCondition", bo3 ? "BestOf3" : "SingleElimination"));
             }
         }
         return out;

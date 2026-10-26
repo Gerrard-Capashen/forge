@@ -689,6 +689,19 @@ public final class FrontDoor {
                 printing.putIfAbsent(name, grp);
             }
         }
+        // the sideboard: only a best-of-three plays with it
+        Map<String, Integer> sideboard = new LinkedHashMap<>();
+        JsonArray side = deck.getAsJsonArray("Sideboard");
+        if (side != null) {
+            for (JsonElement e : side) {
+                JsonObject c = e.getAsJsonObject();
+                int grp = c.get("cardId").getAsInt(), qty = c.get("quantity").getAsInt();
+                String name = db.name(grp);
+                if (name == null || StaticData.instance().getCommonCards().getUniqueByName(name) == null) continue;
+                sideboard.merge(name, qty, Integer::sum);
+                printing.putIfAbsent(name, grp);
+            }
+        }
         if (human.isEmpty()) return new Err(7000, "deck '" + deckName + "' has no cards Forge knows");
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
 
@@ -722,8 +735,9 @@ public final class FrontDoor {
         String aiName = "Forge AI";
         boolean event = DraftEvents.isDraftEvent(eventId);
         lastEvent = event ? eventId : null;
+        int gamesToWin = PlayQueues.gamesToWin(eventId);
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName, null,
-                event ? won -> events.recordResult(eventId, won) : null));
+                event ? won -> events.recordResult(eventId, won) : null, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin));
         int total = human.values().stream().mapToInt(Integer::intValue).sum();
         botMatches.put(matchId, eventId);
         System.out.println("[mtga] FD bot match " + matchId + " (" + eventId + "): '" + deckName + "' (" + total + " cards) vs AI deck '" + ai.name() + "'");

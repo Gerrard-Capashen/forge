@@ -68,6 +68,10 @@ public final class ForgeBackend implements GameBackend {
     /** The client left (set on a Netty thread). */
     private volatile boolean disconnected;
     private StateSync sync;
+    /** Card name -> the GrpId this client shows it with (its chosen printings win over the opponent's). */
+    private Map<String, Integer> view = Map.of();
+    /** The winning team of each game of the match so far (0 = draw). */
+    private final List<Integer> gameWinners = new ArrayList<>();
     private boolean introSent, playStageSent;
     /** While Forge redraws a mulligan hand, send one diff at the next prompt instead of one per card move. */
     private boolean batching;
@@ -94,7 +98,8 @@ public final class ForgeBackend implements GameBackend {
     /** A human (seat 1) against Forge's AI. */
     public ForgeBackend(CardDb db, forge.mtga.MatchSetup setup) {
         this(db, new ForgeMatch(db, setup.matchId() == null ? DEFAULT_MATCH_ID : setup.matchId()), 0,
-                new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides()));
+                new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides(), setup.humanSideboard()));
+        room.setGamesToWin(setup.gamesToWin());
         room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of()), setup.aiName() == null ? "Forge AI" : setup.aiName());
         this.onResult = setup.onResult();
     }
@@ -167,7 +172,7 @@ public final class ForgeBackend implements GameBackend {
                  ClientMessageType_SelectTargetsResp, ClientMessageType_SubmitTargetsReq, ClientMessageType_CancelActionReq,
                  ClientMessageType_GroupResp, ClientMessageType_SelectNResp, ClientMessageType_OptionalActionResp,
                  ClientMessageType_NumericInputResp, ClientMessageType_OrderResp, ClientMessageType_CastingTimeOptionsResp,
-                 ClientMessageType_EffectCostResp -> inbox.add(msg);
+                 ClientMessageType_EffectCostResp, ClientMessageType_EnterSideboardingReq, ClientMessageType_SubmitDeckResp -> inbox.add(msg);
             case ClientMessageType_SetSettingsReq -> {
                 settings.merge(msg.getSetSettingsReq().getSettings(), msg.getSetSettingsReq().getTurnNumber());
                 System.out.println("[mtga] settings now: " + settings);
@@ -213,12 +218,25 @@ public final class ForgeBackend implements GameBackend {
     // ---- game thread -------------------------------------------------------------------------------------------
 
     /** The shared game exists (game thread, before it starts): this seat plays {@code me} against {@code opp}. */
-    void bind(Game g, Player me, Player opp, Map<String, Integer> grpByName) {
+    void bind(Game g, Player me, Player opp, Map<String, Integer> grpByName, StateSync.GameInfoSupplier info) {
         game = g;
         human = me;
         opponent = opp;
+        view = grpByName;
+        // a later game of a best-of-three starts from a clean slate, but the client keeps counting message ids
+        introSent = playStageSent = batching = false;
+        mulligans = 0;
+        offered.clear();
+        offeredTaps.clear();
+        pendingTaps = null;
+        offeredTapColors.clear();
+        pendingTapColors = null;
+        otherZoneActions.clear();
+        StateSync previous = sync;
         settings.setTurnSupplier(() -> Math.max(0, game.getPhaseHandler().getTurn()));      // the client's TurnInfo.turnNumber
         sync = new StateSync(game, human, opponent, db, grpByName, matchId);
+        sync.setInfo(info);
+        if (previous != null) sync.continueFrom(previous);
         sync.setAbilityResolver(sa -> {
             Card host = sa == null ? null : StateSync.visibleSource(sa.getHostCard());
             return host == null ? 0 : abilities.abilityId(sa, grp(host));
@@ -244,14 +262,37 @@ public final class ForgeBackend implements GameBackend {
 
     private int iid(Card c) { return sync.iid(c); }
 
-    void sendGameOver() {
+    /** The game on the Forge side is over: report it; {@code matchOver} also ends the match, else the sideboarding that follows is {@link #sideboard}. */
+    void sendGameEnd(boolean matchOver) {
         boolean draw = game.getOutcome().isDraw();
         boolean humanWon = !draw && game.getOutcome().getWinningLobbyPlayer() == human.getLobbyPlayer();
-        sendMatchResult(draw ? 0 : humanWon ? StateSync.HUMAN_SEAT : StateSync.AI_SEAT, true);
+        gameWinners.add(draw ? 0 : humanWon ? StateSync.HUMAN_SEAT : StateSync.AI_SEAT);
+        sendResults(matchOver, true, matchWinner());
+        if (!matchOver) return;
+        int winner = matchWinner();
         java.util.function.Consumer<Boolean> cb = onResult;
         onResult = null;
-        if (cb != null && !draw) cb.accept(humanWon);
-        tellOutcome(draw ? "draw" : humanWon ? "win" : "loss");
+        if (cb != null && winner != 0) cb.accept(winner == StateSync.HUMAN_SEAT);
+        tellOutcome(winner == 0 ? "draw" : winner == StateSync.HUMAN_SEAT ? "win" : "loss");
+    }
+
+    /** Team that won the match: the one with enough game wins, else (a concession, a run of draws) the last game's winner; 0 = draw. */
+    private int matchWinner() {
+        int[] wins = new int[3];
+        for (int w : gameWinners) wins[w]++;
+        int need = room.gamesToWin();
+        if (wins[StateSync.HUMAN_SEAT] >= need) return StateSync.HUMAN_SEAT;
+        if (wins[StateSync.AI_SEAT] >= need) return StateSync.AI_SEAT;
+        return gameWinners.isEmpty() ? 0 : gameWinners.get(gameWinners.size() - 1);
+    }
+
+    /** The client conceded while sideboarding: the match is lost now. */
+    private void concedeBetweenGames() {
+        sendResults(true, false, StateSync.AI_SEAT);
+        java.util.function.Consumer<Boolean> cb = onResult;
+        onResult = null;
+        if (cb != null) cb.accept(false);
+        tellOutcome("loss");
     }
 
     /** The game thread died: when the opponent's client left, this seat wins by forfeit; otherwise nothing more can be sent. */
@@ -259,25 +300,32 @@ public final class ForgeBackend implements GameBackend {
         if (disconnected || session == null || sync == null || !introSent) return;
         boolean opponentLeft = room.opponentLeft(this);
         if (opponentLeft) {
-            sendMatchResult(StateSync.HUMAN_SEAT, false);
+            gameWinners.add(StateSync.HUMAN_SEAT);
+            sendResults(true, false, StateSync.HUMAN_SEAT);
             tellOutcome("win");
         }
     }
 
-    private void sendMatchResult(int winningTeam, boolean withStateDiff) {
-        boolean draw = winningTeam == 0;
+    /**
+     * Reports the games played so far (and the match with {@code winningTeam} when {@code matchOver}). Between games it ends
+     * with an IntermissionReq that offers the sideboard screen; the match's end also closes the room.
+     */
+    private void sendResults(boolean matchOver, boolean withStateDiff, int winningTeam) {
         List<com.wizards.mtga.gre.ResultSpec> results = new ArrayList<>();
-        for (com.wizards.mtga.gre.MatchScope scope : List.of(com.wizards.mtga.gre.MatchScope.MatchScope_Game, com.wizards.mtga.gre.MatchScope.MatchScope_Match)) {
-            results.add(com.wizards.mtga.gre.ResultSpec.newBuilder().setScope(scope)
-                    .setResult(draw ? com.wizards.mtga.gre.ResultType.ResultType_Draw : com.wizards.mtga.gre.ResultType.ResultType_WinLoss)
-                    .setWinningTeamId(winningTeam).setReason(com.wizards.mtga.gre.ResultReason.ResultReason_Game).build());
-        }
-        sync.setResults(results);
+        for (int w : gameWinners) results.add(resultSpec(com.wizards.mtga.gre.MatchScope.MatchScope_Game, w));
+        List<com.wizards.mtga.gre.ResultSpec> games = new ArrayList<>(results);
+        if (matchOver) results.add(resultSpec(com.wizards.mtga.gre.MatchScope.MatchScope_Match, winningTeam));
+        sync.setResults(results, matchOver ? com.wizards.mtga.gre.MatchState.MatchState_MatchComplete : com.wizards.mtga.gre.MatchState.MatchState_GameComplete);
         GameStateMessage.Builder d = withStateDiff ? sync.diff(false) : sync.diff(false, true);
         GREToClientMessage.Builder inter = req(GREMessageType.GREMessageType_IntermissionReq);
-        inter.getIntermissionReqBuilder().setResult(results.get(0));
+        inter.getIntermissionReqBuilder().setResult(matchOver ? results.get(0) : games.get(games.size() - 1));
+        if (!matchOver) {
+            inter.getIntermissionReqBuilder().addOptions(com.wizards.mtga.gre.UserOption.newBuilder()
+                    .setResponseType(ClientMessageType.ClientMessageType_EnterSideboardingReq));
+        }
         if (d != null) session.sendGre(gameState(d), inter);
         else session.sendGre(inter);
+        if (!matchOver) return;
 
         com.wizards.mtga.gre.MatchServiceToClientMessage.Builder out = com.wizards.mtga.gre.MatchServiceToClientMessage.newBuilder();
         com.wizards.mtga.gre.MatchGameRoomInfo.Builder info = out.getMatchGameRoomStateChangedEventBuilder().getGameRoomInfoBuilder();
@@ -286,6 +334,66 @@ public final class ForgeBackend implements GameBackend {
         info.getFinalMatchResultBuilder().setMatchId(matchId)
                 .setMatchCompletedReason(com.wizards.mtga.gre.MatchCompletedReasonType.MatchCompletedReasonType_Success).addAllResultList(results);
         session.send(out, 0);
+    }
+
+    private static com.wizards.mtga.gre.ResultSpec resultSpec(com.wizards.mtga.gre.MatchScope scope, int winningTeam) {
+        return com.wizards.mtga.gre.ResultSpec.newBuilder().setScope(scope)
+                .setResult(winningTeam == 0 ? com.wizards.mtga.gre.ResultType.ResultType_Draw : com.wizards.mtga.gre.ResultType.ResultType_WinLoss)
+                .setWinningTeamId(winningTeam).setReason(com.wizards.mtga.gre.ResultReason.ResultReason_Game).build();
+    }
+
+    /**
+     * Between the games of a best-of-three (game thread): waits for the client to enter the sideboard screen, shows it
+     * {@code main} and {@code side} (card name -> count) and returns the main deck it submits, or null if the client left
+     * or conceded (the match is then over and reported).
+     */
+    Map<String, Integer> sideboard(Map<String, Integer> main, Map<String, Integer> side) {
+        List<com.wizards.mtga.gre.ResultSpec> gameResults = new ArrayList<>();
+        for (int w : gameWinners) gameResults.add(resultSpec(com.wizards.mtga.gre.MatchScope.MatchScope_Game, w));
+        try {
+            ClientToGREMessage in = await(m -> is(m, ClientMessageType.ClientMessageType_EnterSideboardingReq, ClientMessageType.ClientMessageType_ConcedeReq));
+            if (in.getType() == ClientMessageType.ClientMessageType_ConcedeReq) { concedeBetweenGames(); return null; }
+            GREToClientMessage.Builder reqMsg = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_SubmitDeckReq)
+                    .addSystemSeatIds(StateSync.HUMAN_SEAT);
+            com.wizards.mtga.gre.DeckMessage.Builder deck = reqMsg.getSubmitDeckReqBuilder().getDeckBuilder();
+            addGrps(deck::addDeckCards, main);
+            addGrps(deck::addSideboardCards, side);
+            GameStateMessage.Builder state = sync.matchStateDiff(com.wizards.mtga.gre.MatchState.MatchState_Sideboarding, gameResults);
+            reqMsg.setGameStateId(sync.lastStateId());
+            session.sendGre(gameState(state), reqMsg);
+
+            ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SubmitDeckResp, ClientMessageType.ClientMessageType_ConcedeReq));
+            if (r.getType() == ClientMessageType.ClientMessageType_ConcedeReq) { concedeBetweenGames(); return null; }
+            Map<String, Integer> chosen = new LinkedHashMap<>();
+            for (int grp : r.getSubmitDeckResp().getDeck().getDeckCardsList()) {
+                String name = db.name(grp);
+                if (name != null) chosen.merge(name, 1, Integer::sum);
+            }
+            if (!legalSideboarding(chosen, main, side)) {
+                System.out.println("[mtga] sideboard: submitted deck uses cards outside deck + sideboard, keeping the old main deck");
+                chosen = main;
+            }
+            session.sendGre(req(GREMessageType.GREMessageType_SubmitDeckConfirmation));
+            return chosen;
+        } catch (IllegalStateException e) {
+            if (disconnected) return null;     // the client left: nothing to send
+            throw e;
+        }
+    }
+
+    private void addGrps(java.util.function.IntConsumer into, Map<String, Integer> cards) {
+        for (Map.Entry<String, Integer> e : cards.entrySet()) {
+            int grp = view.getOrDefault(e.getKey(), db.grpId(e.getKey()));
+            for (int i = 0; i < e.getValue(); i++) into.accept(grp);
+        }
+    }
+
+    /** The submitted main deck draws only on the cards of main deck + sideboard (no more copies than the player has). */
+    private static boolean legalSideboarding(Map<String, Integer> chosen, Map<String, Integer> main, Map<String, Integer> side) {
+        for (Map.Entry<String, Integer> e : chosen.entrySet()) {
+            if (e.getValue() > main.getOrDefault(e.getKey(), 0) + side.getOrDefault(e.getKey(), 0)) return false;
+        }
+        return !chosen.isEmpty();
     }
 
     private void onGameEvent(GameEvent ev) {
@@ -448,6 +556,7 @@ public final class ForgeBackend implements GameBackend {
     /** ConnectResp + the opening state (+ the mulligan question when this seat decides first). Game thread only. */
     void sendIntro(boolean withMulliganReq) {
         if (introSent) return;
+        boolean firstGame = gameWinners.isEmpty();
         GREToClientMessage.Builder connect = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_ConnectResp)
                 .addSystemSeatIds(StateSync.HUMAN_SEAT);
         connect.getConnectRespBuilder().setStatus(ConnectionStatus.ConnectionStatus_Success).setProtoVer(protoVer).setSettings(settings.toMessage());
@@ -455,9 +564,14 @@ public final class ForgeBackend implements GameBackend {
             connect.getConnectRespBuilder().getDeckMessageBuilder().addDeckCards(db.grpId(c.getName()));
         }
         sync.setDecisionPlayer(withMulliganReq ? human : null);
-        if (withMulliganReq) session.sendGre(connect, gameState(sync.full(StateSync.DEFAULT_INFO)), mulliganReq());
-        else session.sendGre(connect, gameState(sync.full(StateSync.DEFAULT_INFO)));
-        session.sendRoomState(MatchGameRoomStateType.MatchGameRoomStateType_Playing, matchId);
+        // a later game of the match: no new connection, just the opening state of the new game
+        GREToClientMessage.Builder opening = gameState(sync.full(sync.info()));
+        if (firstGame) {
+            if (withMulliganReq) session.sendGre(connect, opening, mulliganReq());
+            else session.sendGre(connect, opening);
+            session.sendRoomState(MatchGameRoomStateType.MatchGameRoomStateType_Playing, matchId);
+        } else if (withMulliganReq) session.sendGre(opening, mulliganReq());
+        else session.sendGre(opening);
         introSent = true;
         batching = true;       // mulligan stage: one diff per prompt (the opponent's mulligans included), like the real GRE
     }
