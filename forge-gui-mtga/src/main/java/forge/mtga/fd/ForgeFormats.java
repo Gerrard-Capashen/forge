@@ -140,7 +140,8 @@ public final class ForgeFormats {
 
     /** Format of the direct challenge screen's slot name (client format names): Standard / Pioneer / Modern / Limited rules under the slot's own name. */
     private static final Map<String, List<String>> DIRECT_SLOTS = Map.of("Standard", List.of("DirectGame"), "Pioneer", List.of("DirectGameBrawlRebalanced"),
-            "Modern", List.of("DirectGameAlchemy"), "Limited", List.of("DirectGameLimited"));
+            "Modern", List.of("DirectGameAlchemy"), "Legacy", List.of("DirectGameLimited"), "Vintage", List.of("DirectGameVintage"),
+            "Pauper", List.of("DirectGamePauper"));
 
     public synchronized GetFormatsResponse response() {
         GetFormatsResponse.Builder b = GetFormatsResponse.newBuilder();

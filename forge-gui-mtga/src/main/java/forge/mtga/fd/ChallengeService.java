@@ -38,7 +38,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * the match runs like any online match: the challenger's engine hosts.
  *
  * <p>Format: the challenge screen has fixed slots; ours are re-skinned: DirectGame = Standard, DirectGameBrawl = Pioneer,
- * DirectGameAlchemy = Modern, DirectGameLimited = Limited (docs/online-identity-friends.md, section 8). Best of 3 and "who plays first"
+ * DirectGameAlchemy = Modern, DirectGameLimited = Legacy, DirectGameTournamentMode = Vintage, DirectGameTournamentLimited = Pauper (the bridge's
+ * ChallengeSlots rebuilds the client's spinners to match; docs/online-identity-friends.md, section 8). Best of 3 and "who plays first"
  * are not supported yet (one game, the engine decides).
  */
 final class ChallengeService {
@@ -47,7 +48,8 @@ final class ChallengeService {
             "ChallengeInvite", "ChallengeSendMessage", "ChallengeReconnectAll");
 
     /** Challenge slot (client match type) -> format whose rules the decks are checked against. */
-    static final Map<String, String> FORMAT_OF = Map.of("DirectGame", "Standard", "DirectGameBrawl", "Pioneer", "DirectGameAlchemy", "Modern", "DirectGameLimited", "Limited");
+    static final Map<String, String> FORMAT_OF = Map.of("DirectGame", "Standard", "DirectGameBrawl", "Pioneer", "DirectGameAlchemy", "Modern",
+            "DirectGameLimited", "Legacy", "DirectGameTournamentMode", "Vintage", "DirectGameTournamentLimited", "Pauper");
 
     /** The event id every challenge match is created with (the client treats it as its private game). */
     static final String EVENT = "DirectGame";

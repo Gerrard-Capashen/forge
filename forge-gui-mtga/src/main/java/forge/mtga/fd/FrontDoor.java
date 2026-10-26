@@ -623,8 +623,16 @@ public final class FrontDoor {
             Cards cards = cardsOf(course.getAsJsonObject("CourseDeck"));
             if (cards.human().isEmpty()) return new Err(7000, "no deck for event " + eventName);
             lastEvent = eventName;
+            String session = null;      // signed in = the match counts for the Limited rank; an account problem only makes it an unranked match
+            if (rank.online()) {
+                try {
+                    session = rank.session();
+                } catch (java.io.IOException e) {
+                    System.out.println("[mtga] FD premier: cannot sign in, the match will not count for rank (" + e.getMessage() + ")");
+                }
+            }
             return startOnlineMatch(s, str(course.getAsJsonObject("CourseDeckSummary"), "Name"), cards.human(), cards.printing(),
-                    profile.forDeck(course.getAsJsonObject("CourseDeckSummary")), eventName, p, null);
+                    profile.forDeck(course.getAsJsonObject("CourseDeckSummary")), eventName, p, session);
         }
         Map<String, Integer> bot = events.botDeck(eventName);
         forge.mtga.AiDecks.Choice ai = bot == null ? null : new forge.mtga.AiDecks.Choice("draft bot", bot);
