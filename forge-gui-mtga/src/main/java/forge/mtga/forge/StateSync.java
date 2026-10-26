@@ -28,6 +28,7 @@ import com.wizards.mtga.gre.ZoneInfo;
 import forge.game.Game;
 import forge.game.card.Card;
 import forge.game.card.CardView;
+import forge.card.CardStateName;
 import forge.game.event.GameEvent;
 import forge.game.event.GameEventCardDamaged;
 import forge.game.event.GameEventCardSacrificed;
@@ -108,6 +109,8 @@ public final class StateSync {
     private final List<PendingAction> pendingActions = new ArrayList<>();
     private Player decisionOverride;
     private final int[] mulligans = new int[3];
+    /** Seats whose mulligan question is outstanding: the client shows "opponent is deciding" from PlayerInfo.pendingMessageType. */
+    private final boolean[] mulliganPending = new boolean[3];
     private final Set<Integer> revealed = new HashSet<>();
     private final Map<String, AnnotationInfo.Builder> extraPersistent = new LinkedHashMap<>();
     private List<com.wizards.mtga.gre.Action> hypothetical = List.of();
@@ -187,6 +190,8 @@ public final class StateSync {
     public void setDecisionPlayer(Player p) { decisionOverride = p; }
 
     public void setMulliganCount(Player p, int n) { mulligans[seatOf(p)] = n; }
+
+    public void setMulliganPending(Player p, boolean on) { mulliganPending[seatOf(p)] = on; }
 
     public int lastStateId() { return gsId; }
 
@@ -361,10 +366,13 @@ public final class StateSync {
                 return t != 0 ? t : db.grpId(c.getName());      // token copies of real cards
             });
         }
-        Integer g = grpByName.get(c.getName());
+        // a Room in play is its current half in Forge ("Unholy Annex" once only that door is unlocked): the client always
+        // shows the whole card (both halves, locked ones marked by a designation), so it needs the "A // B" printing
+        String name = c.isRoom() && c.hasState(forge.card.CardStateName.Original) ? c.getState(forge.card.CardStateName.Original).getName() : c.getName();
+        Integer g = grpByName.get(name);
         if (g == null) {
-            g = db.grpId(c.getName());
-            grpByName.put(c.getName(), g);
+            g = db.grpId(name);
+            grpByName.put(name, g);
         }
         return g;
     }
@@ -460,6 +468,7 @@ public final class StateSync {
                     .setControllerType(ControllerType.ControllerType_Player)
                     .setMulliganCount(mulligans[seat])
                     .setTurnNumber(p.getTurn());
+            if (mulliganPending[seat]) pi.setPendingMessageType(com.wizards.mtga.gre.ClientMessageType.ClientMessageType_MulliganResp);
             for (PoolMana pm : pool(p)) {
                 Card src = pm.mana().getSourceCard();
                 pi.addManaPool(com.wizards.mtga.gre.ManaInfo.newBuilder().setManaId(pm.id()).setColor(manaColor(pm.mana().getColor())).setCount(1)
@@ -628,7 +637,7 @@ public final class StateSync {
             if (m != null) o.addCardTypes(m);
         }
         for (String st : c.getType().getSubtypes()) {
-            SubType m = enumOrNull(SubType.class, "SubType_" + st.replace(" ", "").replace("'", "").replace("-", ""));
+            SubType m = subTypeOf(st);
             if (m != null) o.addSubtypes(m);
         }
         for (forge.card.CardType.Supertype su : c.getType().getSupertypes()) {
@@ -676,6 +685,15 @@ public final class StateSync {
                     s.persistent.put("counter:" + iid + ":" + e.getKey(), AnnotationInfo.newBuilder().setAffectorId(iid).addAffectedIds(iid)
                             .addType(AnnotationType.AnnotationType_Counter)
                             .addDetails(intDetail("count", e.getValue())).addDetails(intDetail("counter_type", e.getKey())));
+                }
+            }
+            if (c.isRoom()) {       // which doors are open: the client marks the locked half of the card from these
+                for (CardStateName door : c.getUnlockedRooms()) {
+                    int type = door == CardStateName.LeftSplit ? com.wizards.mtga.gre.Designation.Designation_LeftUnlocked_VALUE
+                            : door == CardStateName.RightSplit ? com.wizards.mtga.gre.Designation.Designation_RightUnlocked_VALUE : 0;
+                    if (type == 0) continue;
+                    s.persistent.put("door:" + iid + ":" + type, AnnotationInfo.newBuilder().setAffectorId(iid).addAffectedIds(iid)
+                            .addType(AnnotationType.AnnotationType_Designation).addDetails(intDetail("DesignationType", type)));
                 }
             }
         }
@@ -783,6 +801,11 @@ public final class StateSync {
     private static int counterType(forge.game.card.CounterType ct) {
         String n = ct instanceof Enum<?> e ? e.name() : ct.getName();
         return COUNTER_TYPES.getOrDefault(n.replace("_", "").replace(" ", "").toLowerCase(), 0);
+    }
+
+    /** The GRE SubType of a Forge subtype name, or null when the client has none. */
+    public static SubType subTypeOf(String forgeName) {
+        return forgeName == null ? null : enumOrNull(SubType.class, "SubType_" + forgeName.replace(" ", "").replace("'", "").replace("-", ""));
     }
 
     private static <E extends Enum<E>> E enumOrNull(Class<E> cls, String name) {
@@ -1142,6 +1165,22 @@ public final class StateSync {
 
     /** True while combat damage is being dealt (damage events are then batched into one diff = one combat frame). */
     public boolean dealingCombatDamage() { return inCombatDamage(); }
+
+    /**
+     * True for events whose diff should wait for the next one: everything of a combat damage step except the step change
+     * itself (damage, deaths, life, counters go out together), and zone moves into the graveyard or exile, or out of the
+     * graveyard, while an effect resolves (the whole graveyard leaving is one diff).
+     */
+    public boolean holdForBatch(GameEvent ev) {
+        if (ev instanceof forge.game.event.GameEventTurnPhase || ev instanceof forge.game.event.GameEventTurnBegan
+                || ev instanceof forge.game.event.GameEventGameFinished || ev instanceof forge.game.event.GameEventGameOutcome) return false;
+        if (inCombatDamage()) return true;
+        if (ev instanceof forge.game.event.GameEventCardChangeZone e && game.getStack().isResolving()) {
+            ZoneType from = e.from() == null ? null : e.from().zoneType(), to = e.to() == null ? null : e.to().zoneType();
+            return from == ZoneType.Graveyard || to == ZoneType.Exile || to == ZoneType.Graveyard && from != ZoneType.Stack;
+        }
+        return false;
+    }
 
     /** Fills the static GameInfo block. */
     public interface GameInfoSupplier {

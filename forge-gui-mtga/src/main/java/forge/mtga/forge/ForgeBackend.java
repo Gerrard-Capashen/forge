@@ -73,6 +73,8 @@ public final class ForgeBackend implements GameBackend {
     /** The winning team of each game of the match so far (0 = draw). */
     private final List<Integer> gameWinners = new ArrayList<>();
     private boolean introSent, playStageSent;
+    /** This seat's keep/mulligan question is out and unanswered (the second seat's goes out with the opening state). */
+    private boolean mulliganAsked;
     /** While Forge redraws a mulligan hand, send one diff at the next prompt instead of one per card move. */
     private boolean batching;
     private int mulligans;
@@ -224,7 +226,7 @@ public final class ForgeBackend implements GameBackend {
         opponent = opp;
         view = grpByName;
         // a later game of a best-of-three starts from a clean slate, but the client keeps counting message ids
-        introSent = playStageSent = batching = false;
+        introSent = playStageSent = batching = mulliganAsked = false;
         mulligans = 0;
         offered.clear();
         offeredTaps.clear();
@@ -405,8 +407,9 @@ public final class ForgeBackend implements GameBackend {
         // All combat damage of a step must reach the client in ONE diff: the client builds one combat frame (attack
         // lunge + hits) per run of consecutive DamageDealt events, so one diff per creature showed two separate hits.
         // The held annotations go out with the next diff (deaths, next step or the next request).
-        if ((ev instanceof forge.game.event.GameEventCardDamaged || ev instanceof forge.game.event.GameEventPlayerDamaged)
-                && sync.dealingCombatDamage()) return;
+        // The deaths that follow (and life changes, counters...) belong to the same frame; mass moves out of the graveyard
+        // or into exile during a resolving effect ("exile all graveyards") are one diff too, not one per card.
+        if (sync.holdForBatch(ev)) return;
         GameStateMessage.Builder d = sync.diff(false, false);
         if (d == null) return;
         session.sendGre(gameState(d));
@@ -522,15 +525,18 @@ public final class ForgeBackend implements GameBackend {
         sync.setMulliganCount(human, mulligans);
         if (!introSent) {
             if (System.getProperty("mtga.rig") != null) rigHand(human);
-            room.introduceOthers(this);      // a second human gets its ConnectResp + opening state while this seat decides
+            room.introduceOthers(this);      // a second human gets its ConnectResp, opening state and question too: both decide at once
             sendIntro(true);
-        } else {
+        } else if (!mulliganAsked) {
             batching = false;
             sync.setDecisionPlayer(human);
             sendDiff(false);
             session.sendGre(mulliganReq());
-        }
+            mulliganAsked = true;
+            room.refreshOthers(this);      // the opponent sees this seat's new hand size
+        }       // else: the question went out with the opening state and may be answered already
         ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_MulliganResp, ClientMessageType.ClientMessageType_ConcedeReq));
+        mulliganAsked = false;
         if (r.getType() == ClientMessageType.ClientMessageType_ConcedeReq) {
             human.concede();
             return true;
@@ -543,6 +549,7 @@ public final class ForgeBackend implements GameBackend {
             sync.setMulliganCount(human, mulligans);
             return false;
         }
+        room.setMulliganPending(human, false, true);      // kept: the opponent's client stops waiting on this seat
         if (toBottom > 0) {
             CardCollectionView hand = human.getCardsIn(ZoneType.Hand);
             CardCollectionView bottom = askTuck(hand, toBottom);
@@ -564,6 +571,7 @@ public final class ForgeBackend implements GameBackend {
             connect.getConnectRespBuilder().getDeckMessageBuilder().addDeckCards(db.grpId(c.getName()));
         }
         sync.setDecisionPlayer(withMulliganReq ? human : null);
+        mulliganAsked = withMulliganReq;
         // a later game of the match: no new connection, just the opening state of the new game
         GREToClientMessage.Builder opening = gameState(sync.full(sync.info()));
         if (firstGame) {
@@ -577,6 +585,20 @@ public final class ForgeBackend implements GameBackend {
     }
 
     boolean isDisconnected() { return disconnected; }
+
+    /** Game thread: another seat's (or this seat's) mulligan question opened or closed; {@code push} also tells this client now. */
+    void setMulliganPending(Player p, boolean on, boolean push) {
+        if (sync == null || p == null) return;
+        sync.setMulliganPending(p, on);
+        if (push) pushDiff();
+    }
+
+    /** Game thread: send whatever changed to this client now (nothing before its opening state). */
+    void pushDiff() {
+        if (!introSent || session == null || sync == null) return;
+        GameStateMessage.Builder d = sync.diff(false, true);
+        if (d != null) session.sendGre(gameState(d));
+    }
 
     private GREToClientMessage.Builder mulliganReq() {
         GREToClientMessage.Builder m = req(GREMessageType.GREMessageType_MulliganReq);
@@ -662,6 +684,24 @@ public final class ForgeBackend implements GameBackend {
                     System.out.println("[mtga] rig: Room of Refuge instance " + iid(c));
                     break;
                 }
+            }
+            return;
+        }
+        if ("bos".equals(rig)) {      // Forest x3 in play, Boseiju in hand, the AI's Command Tower in play: play the land or channel it
+            for (String name : List.of("Forest", "Forest", "Forest", "Boseiju, Who Endures", "Cavern of Souls", "Unholy Annex // Ritual Chamber")) {
+                Card pick = null;
+                for (Card c : p.getCardsIn(ZoneType.Library)) {
+                    if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
+                }
+                if (pick == null) continue;
+                if (name.startsWith("Boseiju") || name.startsWith("Cavern") || name.startsWith("Unholy")) game.getAction().moveToHand(pick, null);
+                else game.getAction().moveToPlay(pick, null, forge.game.ability.AbilityKey.newMap());
+                System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
+            }
+            for (Card c : opponent.getCardsIn(ZoneType.Library)) {
+                if (!c.getName().equals("Command Tower")) continue;
+                game.getAction().moveToPlay(c, null, forge.game.ability.AbilityKey.newMap());
+                break;
             }
             return;
         }
@@ -1053,6 +1093,9 @@ public final class ForgeBackend implements GameBackend {
         return out;
     }
 
+    /** The client's "Choose options." prompt (Prompts table). */
+    private static final int PROMPT_CHOOSE_OPTIONS = 23;
+
     /** The client's "Choose a color." prompt (Prompts table). */
     private static final int PROMPT_CHOOSE_COLOR = 118;
 
@@ -1084,6 +1127,41 @@ public final class ForgeBackend implements GameBackend {
         }
         System.out.println("[mtga] client chose color " + r.getSelectNResp().getIdsList());
         return out;
+    }
+
+    /**
+     * "Choose a creature type" (Cavern of Souls, Cover of Darkness, Metallic Mimic...): the client's type picker, a SelectNReq over
+     * the static SubTypes list answered with the SubType value. Returns the Forge type name; null if the client cancelled or sent
+     * something unknown (the AI's pick is used then).
+     */
+    String askCreatureType(Card source, java.util.Collection<String> validTypes, boolean optional) {
+        Map<Integer, String> byId = new LinkedHashMap<>();
+        for (String t : validTypes) {
+            com.wizards.mtga.gre.SubType st = StateSync.subTypeOf(t);
+            if (st != null) byId.put(st.getNumber(), t);
+        }
+        if (byId.size() < 2) return null;
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(optional ? 0 : 1).setMaxSel(1)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_StaticSubset)
+                .setStaticList(com.wizards.mtga.gre.StaticList.StaticList_SubTypes)
+                .addAllIds(byId.keySet());
+        if (source != null) sn.setSourceId(iid(source));
+        sn.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);      // the client has no "choose a creature type" prompt, and a SelectNReq without one NREs
+        req.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);
+        System.out.println("[mtga] asking creature type among " + byId.size() + " for " + source);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp) return null;
+        for (int id : r.getSelectNResp().getIdsList()) {
+            String t = byId.get(id);
+            if (t != null) {
+                System.out.println("[mtga] client chose creature type " + t);
+                return t;
+            }
+        }
+        return null;
     }
 
     /** GRE CardColor value of a Forge color mask (Colorless 0, White 1, Blue 2, Black 3, Red 4, Green 5). */
@@ -2214,6 +2292,13 @@ public final class ForgeBackend implements GameBackend {
             if (!live() || allowRepeat) return super.chooseModeForAbility(sa, possible, min, num, allowRepeat);
             List<AbilitySub> chosen = askModes(sa, possible, min, num);
             return chosen == null ? super.chooseModeForAbility(sa, possible, min, num, allowRepeat) : chosen;
+        }
+
+        @Override
+        public String chooseSomeType(String kindOfType, SpellAbility sa, java.util.Collection<String> validTypes, boolean isOptional) {
+            if (!live() || !"Creature".equalsIgnoreCase(kindOfType) || validTypes.size() < 2) return super.chooseSomeType(kindOfType, sa, validTypes, isOptional);
+            String type = askCreatureType(sa == null ? null : sa.getHostCard(), validTypes, isOptional);
+            return type == null ? super.chooseSomeType(kindOfType, sa, validTypes, isOptional) : type;
         }
 
         @Override

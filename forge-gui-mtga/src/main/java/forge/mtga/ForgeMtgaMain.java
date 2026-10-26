@@ -164,6 +164,16 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("bos".equals(rig)) {      // test rig: Boseiju, Who Endures + Cavern of Souls (choose a creature type) + a Room in hand vs a passive opponent with a nonbasic land
+            green.clear();
+            green.put("Boseiju, Who Endures", 10);
+            green.put("Cavern of Souls", 5);
+            green.put("Unholy Annex // Ritual Chamber", 5);
+            green.put("Forest", 20);
+            red.clear();
+            red.put("Command Tower", 10);
+            red.put("Mountain", 30);
+        }
         if ("color".equals(rig)) {      // test rig: "choose a color" as a land enters (Room of Refuge) vs a passive opponent
             green.clear();
             green.put("Room of Refuge", 10);

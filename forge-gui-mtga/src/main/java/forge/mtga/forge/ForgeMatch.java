@@ -131,9 +131,23 @@ public final class ForgeMatch {
         return false;
     }
 
-    /** Called by the first seat that reaches its mulligan: the other human seats get their ConnectResp + opening state now. */
+    /**
+     * Called by the first seat that reaches its mulligan: every human seat is asked keep or mulligan at once (the other seats get
+     * their ConnectResp, opening state and question now), each client seeing the other as deciding.
+     */
     void introduceOthers(ForgeBackend first) {
-        for (ForgeBackend b : humans) if (b != null && b != first) b.sendIntro(false);
+        for (ForgeBackend b : humans) if (b != null) setMulliganPending(b.player(), true, false);
+        for (ForgeBackend b : humans) if (b != null && b != first) b.sendIntro(true);
+    }
+
+    /** A seat's mulligan question opened or closed: every human client learns it (with a diff when {@code push}). */
+    void setMulliganPending(Player p, boolean on, boolean push) {
+        for (ForgeBackend b : humans) if (b != null) b.setMulliganPending(p, on, push);
+    }
+
+    /** The hand or mulligan count of {@code changed} moved: the other human clients see the opponent's new hand size. */
+    void refreshOthers(ForgeBackend changed) {
+        for (ForgeBackend b : humans) if (b != null && b != changed) b.pushDiff();
     }
 
     /** A best-of-three that keeps drawing ends after this many games. */
