@@ -55,7 +55,7 @@ final class ChallengeService {
     static final String EVENT = "DirectGame";
 
     /** What a player's own server needs to start the match once the coordinator has paired both sides. */
-    private record Pending(Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard, int gamesToWin, int firstSeat, PublicProfile me) { }
+    private record Pending(Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard, int gamesToWin, int firstSeat, PublicProfile me, String companion) { }
 
     private final FrontDoor fd;
     private final SocialClient social;
@@ -167,7 +167,7 @@ final class ChallengeService {
         FrontDoor.Cards cards = fd.cardsOf(deck);
         int gamesToWin = winCondition(s(challenge, "winCondition"));        // 2 = best of three
         pending.put(req.getChallengeId(), new Pending(cards.human(), cards.printing(), gamesToWin > 1 ? cards.sideboard() : Map.of(), gamesToWin, firstSeat(s(challenge, "playFirst")),
-                fd.profile().forDeck(stored.getAsJsonObject("Summary"))));
+                fd.profile().forDeck(stored.getAsJsonObject("Summary")), cards.companion()));
         try {
             return post(req.getChallengeId(), "issue", new JsonObject());
         } catch (IOException e) {
@@ -223,7 +223,7 @@ final class ChallengeService {
         }
         Coordinator.Paired paired = new Coordinator.Paired(fd.peer().coordinator(), m.get("role").getAsString(), m.get("match").getAsString(), m.get("token").getAsString(),
                 m.getAsJsonObject("opponent").get("fullName").getAsString());
-        Thread t = new Thread(() -> fd.playOnline(s, paired, p.human(), p.printing(), p.sideboard(), p.gamesToWin(), p.firstSeat(), p.me(), EVENT, fd.peer()), "challenge-match");
+        Thread t = new Thread(() -> fd.playOnline(s, paired, p.human(), p.printing(), p.sideboard(), p.gamesToWin(), p.firstSeat(), p.me(), EVENT, fd.peer(), p.companion()), "challenge-match");
         t.setDaemon(true);
         t.start();
     }

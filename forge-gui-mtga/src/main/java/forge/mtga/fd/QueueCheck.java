@@ -92,6 +92,21 @@ public final class QueueCheck {
             check(lacking.isEmpty() && problem == null, "built-in deck " + d.format() + " / " + d.name());
         }
 
+        // the bots' wider pool (resources bot-decks): lists the client lacks cards for or the format refuses are skipped at play time; each format keeps a wide choice
+        for (String f : PlayQueues.FORMATS) {
+            java.util.List<forge.mtga.DefaultDecks.Entry> pool = forge.mtga.DefaultDecks.botPool(f);
+            int ok = 0;
+            for (forge.mtga.DefaultDecks.Entry d : pool) {
+                java.util.List<String> lacking = new java.util.ArrayList<>();
+                for (String n : d.main().keySet()) if (db.grpId(n) == 0) lacking.add(n);
+                String problem = formats.problem(d.format(), d.main(), 0);
+                if (lacking.isEmpty() && problem == null) ok++;
+                else System.out.println("  bot pool " + f + " / " + d.name() + " skipped:" + (lacking.isEmpty() ? "" : " NOT ON CLIENT " + lacking) + (problem == null ? "" : " ILLEGAL: " + problem));
+            }
+            System.out.println("  bot pool " + f + ": " + ok + " playable of " + pool.size());
+            check(ok >= 8, "bot pool " + f + " has " + ok + " playable decks");
+        }
+
         // seeding on a copy of the real data dir (old "Forge: ..." starter decks, the player's own decks)
         File real = new File("../../data"), tmp = java.nio.file.Files.createTempDirectory("queuecheck").toFile();
         if (new File(real, "decks").isDirectory()) {

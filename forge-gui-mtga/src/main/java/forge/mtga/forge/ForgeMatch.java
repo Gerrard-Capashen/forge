@@ -24,8 +24,9 @@ import java.util.Map;
  */
 public final class ForgeMatch {
     /** What a seat plays: display name, deck by Forge card name, the printings the player chose (card name -> GrpId). */
-    public record Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard) {
-        public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides) { this(name, deck, overrides, Map.of()); }
+    public record Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion) {
+        public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard) { this(name, deck, overrides, sideboard, null); }
+        public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides) { this(name, deck, overrides, Map.of(), null); }
     }
 
     /** Games a seat must win to take the match: 1 = a single game, 2 = best of three (the human sideboards between games). */
@@ -201,7 +202,14 @@ public final class ForgeMatch {
         Map<String, Integer>[] main = new Map[2];
         for (int i = 0; i < 2; i++) {
             main[i] = new LinkedHashMap<>(seats[i].deck());
-            RegisteredPlayer rp = new RegisteredPlayer(ForgeSmoke.deck(i == 0 ? "You" : "Opponent", seats[i].deck()));
+            forge.deck.Deck deck = ForgeSmoke.deck(i == 0 ? "You" : "Opponent", seats[i].deck());
+            // a companion waits in the sideboard; Forge's Match moves it to the command zone before the first game (Player.assignCompanion)
+            String companion = seats[i].companion();
+            if (companion != null && !companion.isBlank()) {
+                forge.item.PaperCard pc = forge.StaticData.instance().getCommonCards().getUniqueByName(companion);
+                if (pc != null) deck.getOrCreate(forge.deck.DeckSection.Sideboard).add(pc, 1);
+            }
+            RegisteredPlayer rp = new RegisteredPlayer(deck);
             rp.setPlayer(humans[i] != null ? humans[i].newLobbyPlayer() : GamePlayerUtil.createAiPlayer(aiName, 1, ""));
             players.add(rp);
         }
@@ -212,6 +220,7 @@ public final class ForgeMatch {
             for (int i = 0; i < 2; i++) {
                 for (String n : main[i].keySet()) grpByName.put(n, db.grpId(n));
                 for (String n : seats[i].sideboard().keySet()) grpByName.put(n, db.grpId(n));
+                if (seats[i].companion() != null) grpByName.put(seats[i].companion(), db.grpId(seats[i].companion()));
             }
             Game game = match.createGame();
             this.game = game;

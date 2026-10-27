@@ -1,0 +1,47 @@
+1 Abrade
+1 Ancestral Recall
+1 Black Lotus
+3 Flame of Anor
+1 Flooded Strand
+3 Flow State
+1 Flusterstorm
+3 Force of Negation
+4 Force of Will
+1 Forth Eorlingas!
+1 Gitaxian Probe
+1 Island
+3 Lorien Revealed
+1 Mana Drain
+1 Mental Misstep
+1 Prismatic Ending
+3 Misty Rainforest
+1 Mox Jet
+1 Mox Pearl
+1 Mox Ruby
+1 Mox Sapphire
+3 Polluted Delta
+1 Scalding Tarn
+1 Snapcaster Mage
+1 Sol Ring
+3 Stock Up
+1 Strip Mine
+3 Swords to Plowshares
+4 Thundertrap Trainer
+1 Time Walk
+2 Tundra
+1 Urza's Saga
+1 Vexing Bauble
+2 Volcanic Island
+1 Pithing Needle
+1 Pithing Needle
+
+1 Mindbreak Trap
+1 Stony Silence
+2 Containment Priest
+1 Swords to Plowshares
+4 Pyroblast
+1 Soul-Guide Lantern
+1 Null Rod
+2 Consign to Memory
+1 Lurrus of the Dream-Den
+1 Soul-Guide Lantern

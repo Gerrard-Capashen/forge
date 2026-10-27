@@ -57,7 +57,10 @@ public final class CosmeticCatalog {
     public List<String> stickers() { return stickers; }
     public List<Title> titles() { return titles; }
 
-    public boolean isDefaultAvatar(String id) { return defaultAvatars.contains(id); }
+    /** The one avatar every player owns (the client shows a DefaultLoginGrant avatar as selectable, so no other may carry the flag). */
+    public boolean isDefaultAvatar(String id) { return Mastery.DEFAULT_AVATAR.equals(id); }
+    /** The classic avatars an AI opponent picks from (they are not owned by players: mastery track rewards). */
+    public List<String> aiAvatars() { return avatars.stream().filter(defaultAvatars::contains).toList(); }
     public boolean isDefaultSleeve(String id) { return Profile.DEFAULT_SLEEVE.equals(id); }
     public boolean isDefaultEmote(String id) { return Profile.DEFAULT_EMOTES.contains(id); }
     public boolean isSticker(String id) { return id != null && id.startsWith("Sticker_"); }

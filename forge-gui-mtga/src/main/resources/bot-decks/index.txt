@@ -1,0 +1,65 @@
+Legacy/Azorius Tempo.txt
+Legacy/Beanstalk Control.txt
+Legacy/Boros Energy.txt
+Legacy/Death and Taxes.txt
+Legacy/Dimir Tempo.txt
+Legacy/Eldrazi.txt
+Legacy/Izzet Delver.txt
+Legacy/Lands.txt
+Modern/Affinity.txt
+Modern/Azorius Control.txt
+Modern/Boros Energy.txt
+Modern/Domain Zoo.txt
+Modern/Eldrazi Ramp.txt
+Modern/Eldrazi.txt
+Modern/Esper Blink.txt
+Modern/Izzet Prowess.txt
+Modern/Jeskai Energy.txt
+Modern/Rakdos Midrange.txt
+Modern/Tron.txt
+Pauper/Blue Terror.txt
+Pauper/Bogles.txt
+Pauper/Dimir Faeries.txt
+Pauper/Elves.txt
+Pauper/Esper Affinity.txt
+Pauper/Golgari Gardens.txt
+Pauper/Grixis Affinity.txt
+Pauper/Grixis Control.txt
+Pauper/Jund Wildfire.txt
+Pauper/Mono Red Madness.txt
+Pauper/Mono Red Rally.txt
+Pauper/Tron.txt
+Pioneer/Azorius Control.txt
+Pioneer/Dimir Aggro.txt
+Pioneer/Golgari Midrange.txt
+Pioneer/Izzet Aggro.txt
+Pioneer/Izzet Phoenix.txt
+Pioneer/Izzet Prowess.txt
+Pioneer/Jund Artifact Sacrifice.txt
+Pioneer/Jund Sacrifice.txt
+Pioneer/Mono-Red Prowess.txt
+Pioneer/Nykthos Ramp.txt
+Pioneer/Rakdos Sacrifice.txt
+Pioneer/Selesnya Company.txt
+Standard/4c Control.txt
+Standard/Azorius Control.txt
+Standard/Azorius Momo.txt
+Standard/Boros Dragons.txt
+Standard/Dimir Midrange.txt
+Standard/Izzet Prowess.txt
+Standard/Izzet Spellementals.txt
+Standard/Jeskai Artifacts.txt
+Standard/Jund Sacrifice.txt
+Standard/Lifegain.txt
+Standard/Mono-Green Landfall.txt
+Standard/Rakdos Lizards.txt
+Standard/Selesnya Landfall.txt
+Vintage/Counter Vine.txt
+Vintage/Dimir Lurrus Control.txt
+Vintage/Esper Lurrus Control.txt
+Vintage/Jeskai Lurrus.txt
+Vintage/Jewel Shops.txt
+Vintage/Mono-White Initiative.txt
+Vintage/Raker Shops.txt
+Vintage/Sphere Shops.txt
+Vintage/Stiflenought.txt

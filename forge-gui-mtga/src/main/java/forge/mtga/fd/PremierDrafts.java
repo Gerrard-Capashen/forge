@@ -503,7 +503,7 @@ final class PremierDrafts {
         /** Offline (or alone at the table): seven bots sit down at once, then the ready check. */
         void botTable() {
             List<PublicProfile> ps = new ArrayList<>();
-            for (int i = 0; i < POD; i++) ps.add(i == seat ? profile.self() : profile.forAi("Forge Bot " + (i < seat ? i + 1 : i)));
+            for (int i = 0; i < POD; i++) ps.add(i == seat ? profile.self() : profile.forAi());
             players = ps;
             for (int n = 1; n <= POD; n++) {
                 int filled = n;

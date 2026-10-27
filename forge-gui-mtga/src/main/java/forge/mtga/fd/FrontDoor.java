@@ -588,8 +588,24 @@ public final class FrontDoor {
     }
 
     /** A client-JSON deck as Forge card names with counts and the client printing each name has (cards Forge does not know are left out). */
-    record Cards(Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard) {
-        Cards(Map<String, Integer> human, Map<String, Integer> printing) { this(human, printing, Map.of()); }
+    record Cards(Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard, String companion) {
+        Cards(Map<String, Integer> human, Map<String, Integer> printing) { this(human, printing, Map.of(), null); }
+    }
+
+    /** The deck's companion (first card of its Companions pile) as a Forge card name, or null; its printing is added to {@code printing}. */
+    private String companionOf(JsonObject deck, Map<String, Integer> printing) {
+        JsonArray pile = deck.has("Companions") && deck.get("Companions").isJsonArray() ? deck.getAsJsonArray("Companions") : null;
+        if (pile == null) return null;
+        for (JsonElement e : pile) {
+            JsonObject c = e.getAsJsonObject();
+            if (!c.has("cardId") || c.get("quantity").getAsInt() <= 0) continue;
+            int grp = c.get("cardId").getAsInt();
+            String name = db.name(grp);
+            if (name == null || StaticData.instance().getCommonCards().getUniqueByName(name) == null) continue;
+            printing.putIfAbsent(name, grp);
+            return name;
+        }
+        return null;
     }
 
     Cards cardsOf(JsonObject deck) {
@@ -618,7 +634,7 @@ public final class FrontDoor {
                 printing.putIfAbsent(name, grp);
             }
         }
-        return new Cards(human, printing, sideboard);
+        return new Cards(human, printing, sideboard, companionOf(deck, printing));
     }
 
     /** EventEnterPairing: a Bot Play / Casual Play queue starts its match; for a draft event play the course's deck against one of the bots' drafted decks. */
@@ -646,7 +662,7 @@ public final class FrontDoor {
                 }
             }
             return startOnlineMatch(s, str(course.getAsJsonObject("CourseDeckSummary"), "Name"), cards.human(), cards.printing(),
-                    profile.forDeck(course.getAsJsonObject("CourseDeckSummary")), eventName, p, session);
+                    profile.forDeck(course.getAsJsonObject("CourseDeckSummary")), eventName, p, session, cards.companion());
         }
         Map<String, Integer> bot = events.botDeck(eventName);
         forge.mtga.AiDecks.Choice ai = bot == null ? null : new forge.mtga.AiDecks.Choice("draft bot", bot);
@@ -716,6 +732,7 @@ public final class FrontDoor {
                 printing.putIfAbsent(name, grp);
             }
         }
+        String companion = companionOf(deck, printing);
         if (human.isEmpty()) return new Err(7000, "deck '" + deckName + "' has no cards Forge knows");
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
 
@@ -728,7 +745,7 @@ public final class FrontDoor {
         }
         if (mode == PlayQueues.Mode.CASUAL) {
             if (peer == null) return new Err(7000, "Casual Play needs online matchmaking, which is switched off in this start (-Dmtga.p2p=off)");
-            return startPeerMatch(s, deckName, human, printing, me, eventId);
+            return startPeerMatch(s, deckName, human, printing, me, eventId, companion);
         }
         if (mode == PlayQueues.Mode.RANKED) {
             Peer p = peer;
@@ -742,22 +759,23 @@ public final class FrontDoor {
                 System.out.println("[mtga] FD ranked: cannot sign in (" + e.getMessage() + ")");
                 return new Err(7000, "Can't sign in to the matchmaking server, so Ranked is not available right now. Check your internet connection and try again.");
             }
-            return startOnlineMatch(s, deckName, human, printing, me, eventId, p, session);
+            return startOnlineMatch(s, deckName, human, printing, me, eventId, p, session, companion);
         }
         forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(mode == PlayQueues.Mode.BOT ? queueFormat : deckFormat(summary));
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
-        String aiName = "Forge AI";
+        PublicProfile opponent = profile.forAi();
+        String aiName = opponent.name();
         boolean event = DraftEvents.isDraftEvent(eventId);
         lastEvent = event ? eventId : null;
         int gamesToWin = PlayQueues.gamesToWin(eventId);
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName, null,
-                event ? won -> events.recordResult(eventId, won) : null, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin));
+                event ? won -> events.recordResult(eventId, won) : null, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin, companion, ai.companion()));
         int total = human.values().stream().mapToInt(Integer::intValue).sum();
         botMatches.put(matchId, eventId);
         System.out.println("[mtga] FD bot match " + matchId + " (" + eventId + "): '" + deckName + "' (" + total + " cards) vs AI deck '" + ai.name() + "'");
         Capture.log("FD bot match " + matchId + " deck '" + deckName + "' vs '" + ai.name() + "'");
 
-        pushMatchCreated(s, matchId, me, profile.forAi(aiName + " (" + ai.name() + ")"), eventId);
+        pushMatchCreated(s, matchId, me, opponent, eventId);
         return GSON.toJson(matchId);
     }
 
@@ -767,19 +785,19 @@ public final class FrontDoor {
      * Either way the client's own Match Door connection (127.0.0.1) is what it plays on. The two servers swap the PUBLIC part
      * of the players' profiles in the peer handshake, so each client draws the other's avatar, sleeve, pet, title and emotes.
      */
-    private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId) {
+    private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, String companion) {
         Peer p = peer;
-        if (p.coordinator() != null) return startOnlineMatch(s, deckName, human, printing, me, eventId, p, null);
+        if (p.coordinator() != null) return startOnlineMatch(s, deckName, human, printing, me, eventId, p, null, companion);
         if (p.host() != null) {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
             forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
-            forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing));
+            forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing, Map.of(), companion));
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
             System.out.println("[mtga] FD P2P host: '" + deckName + "' waits for a guest (match " + matchId + ")");
             p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), eventId)));
             return GSON.toJson(matchId);
         }
-        forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join(p.joinHost(), p.joinPort(), p.key(), p.fingerprint(), eventId, me, human, printing);
+        forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join(p.joinHost(), p.joinPort(), p.key(), p.fingerprint(), eventId, me, human, printing, Map.of(), companion);
         if (j.error() != null) return new Err(7000, "P2P: " + j.error());
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
         System.out.println("[mtga] FD P2P guest: '" + deckName + "' vs " + j.host().name() + " (match " + j.matchId() + ")");
@@ -800,7 +818,7 @@ public final class FrontDoor {
      * queue (event) and card database. The one who waited longest hosts: its engine runs the game and the other server joins
      * through the coordinator's relay room instead of a TCP connection; from there it is the same as a P2P match.
      */
-    private Object startOnlineMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p, String session) {
+    private Object startOnlineMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p, String session, String companion) {
         leaveOnlineQueue();
         forge.mtga.peer.Coordinator.Ticket ticket = forge.mtga.peer.Coordinator.queue(p.coordinator(), eventId, p.fingerprint(),
                 forge.mtga.peer.PeerGuest.VERSION, me.playerId(), me.name(), p.friendCode(), session);
@@ -819,7 +837,7 @@ public final class FrontDoor {
                 if (!ticket.result().isCancelled()) System.out.println("[mtga] FD online: no match (" + err.getMessage() + ")");
                 return;
             }
-            Thread t = new Thread(() -> playOnline(s, paired, human, printing, me, eventId, p), "online-match");
+            Thread t = new Thread(() -> playOnline(s, paired, human, printing, Map.of(), 1, -1, me, eventId, p, companion), "online-match");
             t.setDaemon(true);
             t.start();
         });
@@ -827,7 +845,12 @@ public final class FrontDoor {
     }
 
     void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
-        playOnline(s, paired, human, printing, Map.of(), 1, -1, me, eventId, p);
+        playOnline(s, paired, human, printing, Map.of(), 1, -1, me, eventId, p, null);
+    }
+
+    void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing,
+                    Map<String, Integer> sideboard, int gamesToWin, int firstSeat, PublicProfile me, String eventId, Peer p) {
+        playOnline(s, paired, human, printing, sideboard, gamesToWin, firstSeat, me, eventId, p, null);
     }
 
     /**
@@ -835,7 +858,7 @@ public final class FrontDoor {
      * {@code firstSeat} (host's engine only): 0 = the host (challenge owner) plays first in game 1, 1 = the guest does, -1 = coin toss.
      */
     void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing,
-                    Map<String, Integer> sideboard, int gamesToWin, int firstSeat, PublicProfile me, String eventId, Peer p) {
+                    Map<String, Integer> sideboard, int gamesToWin, int firstSeat, PublicProfile me, String eventId, Peer p, String companion) {
         String matchId = paired.match();
         System.out.println("[mtga] FD online: paired with " + paired.opponent() + " as " + paired.role() + ", match " + matchId);
         onlineMatches.put(matchId, eventId);
@@ -843,7 +866,7 @@ public final class FrontDoor {
         try {
             if (paired.host()) {
                 forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
-                forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing, sideboard));
+                forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing, sideboard, companion));
                 room.setGamesToWin(gamesToWin);
                 room.setFirstSeat(firstSeat);
                 forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
@@ -854,7 +877,7 @@ public final class FrontDoor {
                 return;
             }
             link = forge.mtga.peer.Coordinator.openRoom(paired);
-            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.joinOnline(link, p.fingerprint(), eventId, me, human, printing, sideboard);
+            forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.joinOnline(link, p.fingerprint(), eventId, me, human, printing, sideboard, companion);
             if (j.error() != null) {
                 System.out.println("[mtga] FD online: join failed: " + j.error());
                 return;
@@ -1089,11 +1112,12 @@ public final class FrontDoor {
             if (given.contains(name)) continue;
             try {
                 if (have.contains(name)) given.add(name);
-                else if (playable(d) && saveDeck(name, d.format(), d.main(), d.side())) { given.add(name); made++; }
+                else if (playable(d) && saveDeck(name, d.format(), d.main(), d.side(), d.companion())) { given.add(name); made++; }
             } catch (Exception e) {
                 System.out.println("[mtga] FD: cannot seed " + d.name() + ": " + e);
             }
         }
+        moveCompanions();
         if (given.size() != before || !ledgerFile.isFile()) {
             try {
                 ledgerFile.getParentFile().mkdirs();
@@ -1103,6 +1127,40 @@ public final class FrontDoor {
             }
         }
         System.out.println("[mtga] FD built-in decks: " + made + " seeded now, " + given.size() + " of " + forge.mtga.DefaultDecks.all().size() + " given");
+    }
+
+    /**
+     * Decks seeded before companions were a pile of their own hold the companion in the sideboard: move it to Companions (only a
+     * built-in deck's own companion, only while its Companions pile is empty).
+     */
+    private void moveCompanions() {
+        for (forge.mtga.DefaultDecks.Entry d : forge.mtga.DefaultDecks.all()) {
+            if (d.companion() == null || db.grpId(d.companion()) == 0) continue;
+            String name = d.name() + " (" + d.format() + ")";
+            int grp = db.grpId(d.companion());
+            for (JsonObject saved : decks.all()) {
+                JsonObject summary = saved.getAsJsonObject("Summary"), deck = saved.getAsJsonObject("Deck");
+                if (!name.equals(str(summary, "Name")) || !deck.has("Sideboard") || (deck.has("Companions") && deck.getAsJsonArray("Companions").size() > 0)) continue;
+                JsonArray side = deck.getAsJsonArray("Sideboard"), rest = new JsonArray();
+                JsonObject found = null;
+                for (JsonElement e : side) {
+                    JsonObject c = e.getAsJsonObject();
+                    if (found == null && c.has("cardId") && db.primaryPrinting(c.get("cardId").getAsInt()) == db.primaryPrinting(grp)) found = c; else rest.add(c);
+                }
+                if (found == null) continue;
+                JsonArray companions = new JsonArray();
+                companions.add(obj("cardId", found.get("cardId").getAsInt(), "quantity", 1));
+                deck.add("Sideboard", rest);
+                deck.add("Companions", companions);
+                summary.addProperty("IsCompanionValid", true);
+                try {
+                    decks.put(str(summary, "DeckId"), summary, deck);
+                    System.out.println("[mtga] FD " + name + ": " + d.companion() + " is now its companion");
+                } catch (java.io.IOException ex) {
+                    System.out.println("[mtga] FD: cannot update " + name + ": " + ex);
+                }
+            }
+        }
     }
 
     private static String lastUpdated(JsonObject summary) {
@@ -1150,10 +1208,11 @@ public final class FrontDoor {
     }
 
     /** Store a deck given by Forge card names, in the same JSON shape the client writes (DeckUpsertDeckV3). */
-    private boolean saveDeck(String name, String format, Map<String, Integer> cards, Map<String, Integer> side) throws java.io.IOException {
+    private boolean saveDeck(String name, String format, Map<String, Integer> cards, Map<String, Integer> side, String companion) throws java.io.IOException {
         int[] totals = new int[2];   // cards, tile
         JsonArray main = cardList(cards, name, totals);
         JsonArray sideboard = cardList(side, name, new int[2]);
+        JsonArray companions = companion == null ? new JsonArray() : cardList(Map.of(companion, 1), name, new int[2]);
         int total = totals[0], tile = totals[1];
         if (total < 40) return false;
         String id = java.util.UUID.randomUUID().toString();
@@ -1166,11 +1225,11 @@ public final class FrontDoor {
         attrs.add(obj("name", "IsFavorite", "value", "false"));
         attrs.add(obj("name", "Format", "value", format));
         JsonObject summary = obj("DeckId", id, "Mana", "", "Name", name, "Attributes", attrs, "Description", null,
-                "DeckTileId", tile, "DeckArtId", db.artId(tile), "IsCompanionValid", false,
+                "DeckTileId", tile, "DeckArtId", db.artId(tile), "IsCompanionValid", companions.size() > 0,
                 "PreferredCosmetics", obj("Avatar", "", "Sleeve", "", "Pet", "", "Title", "", "Emotes", new JsonArray()),
                 "NetDeckFolderId", null, "IsNetDeck", false, "checkInbox", false);
         JsonObject deck = obj("MainDeck", main, "Sideboard", sideboard, "CommandZone", new JsonArray(),
-                "Companions", new JsonArray(), "CardSkins", new JsonArray());
+                "Companions", companions, "CardSkins", new JsonArray());
         decks.put(id, summary, deck);
         return true;
     }

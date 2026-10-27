@@ -189,7 +189,9 @@ public final class PeerHost {
             }
         }
         String name = str(h, "name");
-        return new ForgeMatch.Seat(name.isBlank() ? "Guest" : name, deck, printing, side);
+        String companion = str(h, "companion");       // a guest of an older build sends none
+        if (companion.isBlank() || StaticData.instance().getCommonCards().getUniqueByName(companion) == null || db.grpId(companion) == 0) companion = null;
+        return new ForgeMatch.Seat(name.isBlank() ? "Guest" : name, deck, printing, side, companion);
     }
 
     private static String str(JsonObject o, String k) { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : ""; }

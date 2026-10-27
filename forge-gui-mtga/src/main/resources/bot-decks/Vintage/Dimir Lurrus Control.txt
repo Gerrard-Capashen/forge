@@ -1,0 +1,47 @@
+1 Thoughtseize
+1 Ancestral Recall
+4 Bilbo, Thief in the Night
+1 Black Lotus
+1 Swamp
+1 Daze
+2 Spell Pierce
+1 Dig Through Time
+1 Mental Misstep
+3 Fatal Push
+1 Flooded Strand
+3 Flow State
+4 Force of Negation
+1 Lorien Revealed
+1 Gush
+1 Gitaxian Probe
+4 Force of Will
+1 Dismember
+1 Mox Jet
+1 Mox Sapphire
+4 Polluted Delta
+4 Psychic Frog
+1 Demonic Tutor
+1 Strip Mine
+1 Brainstorm
+1 Aether Spellbomb
+1 Time Walk
+1 Treasure Cruise
+1 Undercity Sewers
+4 Underground Sea
+1 Urza's Saga
+1 Vexing Bauble
+1 Wasteland
+3 Wasteland
+1 Island
+
+3 Consign to Memory
+1 Snuff Out
+1 Fatal Push
+1 Lurrus of the Dream-Den
+1 Nihil Spellbomb
+3 Null Rod
+1 Pithing Needle
+1 Dismember
+1 The Tabernacle at Pendrell Vale
+1 Tormod's Crypt
+1 Toxic Deluge

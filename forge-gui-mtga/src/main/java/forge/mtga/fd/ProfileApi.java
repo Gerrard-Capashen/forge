@@ -10,6 +10,7 @@ import com.wizards.mtga.fd.CosmeticsAvatarEntry;
 import com.wizards.mtga.fd.CosmeticsClient;
 import com.wizards.mtga.fd.CosmeticsSleeveEntry;
 import com.wizards.mtga.fd.PreferredCosmetics;
+import forge.mtga.profile.BotNames;
 import forge.mtga.profile.CosmeticCatalog;
 import forge.mtga.profile.Mastery;
 import forge.mtga.profile.Profile;
@@ -263,11 +264,26 @@ public final class ProfileApi {
 
     private static String ownedIf(String id, List<String> owned) { return id != null && owned.contains(id) ? id : ""; }
 
-    /** What an AI opponent looks like: a random default avatar, the default sleeve, the classic emotes (it never uses them). */
+    private static final java.util.Random BOT_RND = new java.util.Random();
+    private static final String[] BOT_CLASSES = {"Bronze", "Silver", "Silver", "Gold", "Gold", "Gold", "Platinum", "Platinum", "Diamond", "Mythic"};
+
+    /**
+     * An AI opponent that reads like a person: a screen name, any avatar and sleeve of the catalogue (an AI shows what it likes,
+     * whether or not a player could own it), a rank of the usual spread, the classic emotes (it never uses them).
+     */
+    PublicProfile forAi() {
+        java.util.Random r = BOT_RND;
+        List<String> avatars = catalog.avatars(), sleeves = catalog.sleeves();
+        String avatar = avatars.isEmpty() ? Profile.DEFAULT_AVATAR : avatars.get(r.nextInt(avatars.size()));
+        String sleeve = sleeves.isEmpty() ? Profile.DEFAULT_SLEEVE : sleeves.get(r.nextInt(sleeves.size()));
+        String rankClass = BOT_CLASSES[r.nextInt(BOT_CLASSES.length)];
+        return new PublicProfile("forge-ai", BotNames.next(r), avatar, sleeve, "", "", Profile.DEFAULT_EMOTES, rankClass, 1 + r.nextInt(4));
+    }
+
+    /** An AI opponent with a given label (tests, logs). */
     PublicProfile forAi(String name) {
-        List<String> defaults = catalog.avatars().stream().filter(catalog::isDefaultAvatar).toList();
-        String avatar = defaults.isEmpty() ? Profile.DEFAULT_AVATAR : defaults.get(Math.floorMod(name.hashCode() + (int) (System.nanoTime() >> 20), defaults.size()));
-        return new PublicProfile("forge-ai", name, avatar, Profile.DEFAULT_SLEEVE, "", "", Profile.DEFAULT_EMOTES, "Bronze", 4);
+        PublicProfile p = forAi();
+        return new PublicProfile(p.playerId(), name, p.avatar(), p.sleeve(), "", "", Profile.DEFAULT_EMOTES, p.rankClass(), p.rankTier());
     }
 
     /**

@@ -1,0 +1,32 @@
+2 Swamp
+4 Thoughtseize
+1 Arid Mesa
+4 Lightning Bolt
+1 Fatal Push
+1 Nihil Spellbomb
+1 Blood Moon
+4 Street Wraith
+2 Troll of Khazad-dum
+1 Mountain
+4 Dark Matter Manipulator
+1 Verdant Catacombs
+4 Moonshadow
+4 Mishra's Bauble
+4 Fear of Missing Out
+4 Nethergoyf
+2 Raucous Theater
+4 Detective's Phoenix
+2 Unholy Heat
+3 Blood Crypt
+4 Bloodstained Mire
+3 Marsh Flats
+
+1 Fatal Push
+1 Surgical Extraction
+1 Nihil Spellbomb
+1 Blood Moon
+3 Inquisition of Kozilek
+3 Obsidian Charmaw
+1 Grafdigger's Cage
+2 Meltdown
+2 Glistening Deluge

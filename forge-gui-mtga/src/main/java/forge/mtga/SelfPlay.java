@@ -35,8 +35,17 @@ public final class SelfPlay {
         GuiBase.setInterface(new HeadlessGui(guiDir));
         FModel.initialize(null, null);
         CardDb db = new CardDb(CardDb.findDatabase(clientDir));
+        TITLE_DB = db;
 
         Map<String, Integer>[] decks = ForgeMtgaMain.decks(System.getProperty("mtga.deck"), System.getProperty("mtga.rig"));
+        if (Boolean.getBoolean("selfplay.probes")) {      // no land at all: Gitaxian Probe must still be offered (2 life)
+            decks[0] = new LinkedHashMap<>();
+            decks[0].put("Gitaxian Probe", 40);
+        }
+        if (Boolean.getBoolean("selfplay.needle")) {      // card names (Pithing Needle), Phyrexian pips (Gitaxian Probe)
+            decks[0] = new LinkedHashMap<>();
+            decks[0].put("Island", 18); decks[0].put("Pithing Needle", 12); decks[0].put("Gitaxian Probe", 10);
+        }
         String aiKind = System.getProperty("selfplay.ai", "bolt");
         if (!"plains".equals(aiKind)) {
             decks[1] = new LinkedHashMap<>();
@@ -72,7 +81,10 @@ public final class SelfPlay {
             }
             boolean bo3 = Boolean.getBoolean("selfplay.bo3");
             ForgeBackend backend;
-            if (bo3) {
+            if (builtin != null && !bo3) {      // built-in decks may come with a companion
+                DefaultDecks.Entry a = builtin.get(2 * g % builtin.size()), b = builtin.get((2 * g + 1) % builtin.size());
+                backend = new ForgeBackend(db, new MatchSetup("selfplay-" + g, d0, d1, Map.of(), "Forge AI", null, null, Map.of(), 1, a.companion(), b.companion()));
+            } else if (bo3) {
                 // sideboard: copies of a card the AI plays (else of the first main deck card), so the fake client can swap one in
                 final Map<String, Integer> mine = d0;
                 String pick = d1.keySet().stream().filter(n -> !mine.containsKey(n)).findFirst().orElse(d0.keySet().iterator().next());
@@ -113,7 +125,10 @@ public final class SelfPlay {
         System.out.println("added-card grpIds seen: " + added);
         System.out.println("states with cards displayed under a permanent: " + UNDER_SEEN.get());
         System.out.println("states with an attached equipment / aura: " + ATTACH_SEEN.get());
+        System.out.println("companion: states with the card in the sideboard zone " + COMPANION_SHOWN.get() + ", with the designation " + COMPANION_DESIGNATED.get() + ", special actions taken " + COMPANION_ACTIONS.get());
         System.out.println("face-down objects seen (object x state): " + FACEDOWN_SEEN.get());
+        System.out.println("card names chosen: " + CARD_NAMES.get());
+        System.out.println("Phyrexian pips answered: " + PHYREXIAN_LIFE.get() + " with life, " + PHYREXIAN_MANA.get() + " with mana");
         System.out.println(failed == 0 ? "SELFPLAY OK" : "SELFPLAY FAILED games=" + failed);
         System.exit(failed == 0 ? 0 : 1);
     }
@@ -301,7 +316,9 @@ public final class SelfPlay {
             ForgeMatch room = new ForgeMatch(db, "peer-" + g);
             boolean bo3 = Boolean.getBoolean("selfplay.bo3");
             if (bo3) room.setGamesToWin(2);
-            ForgeBackend mine = new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of(), bo3 ? sideboardFor(decks[0], decks[1]) : Map.of()));
+            // both seats bring a companion (cheap permanents only in the default decks, so Lurrus is legal): the guest's travels in its hello
+            String companion = System.getProperty("selfplay.format") == null && System.getProperty("selfplay.builtin") == null ? "Lurrus of the Dream-Den" : null;
+            ForgeBackend mine = new ForgeBackend(db, room, 0, new ForgeMatch.Seat("Alice", decks[0], Map.of(), bo3 ? sideboardFor(decks[0], decks[1]) : Map.of(), companion));
             CountDownLatch joined = new CountDownLatch(1);
             java.util.concurrent.atomic.AtomicReference<PublicProfile> hostSaw = new java.util.concurrent.atomic.AtomicReference<>();
             PublicProfile alice = new PublicProfile("id-alice", "Alice", "Avatar_Basic_JaceBeleren", "CardBack_Default", "AFR_Dragon.Skin1",
@@ -309,7 +326,7 @@ public final class SelfPlay {
             PublicProfile bob = new PublicProfile("id-bob", "Bob", "Avatar_Basic_LilianaVess", "CardBack_Basic_Streamer", "", "", List.of("Phrase_Basic_GoodGame"), "Mythic", 1);
             host.offer(new forge.mtga.peer.PeerHost.Offer(room.matchId(), room, alice, guest -> { hostSaw.set(guest); joined.countDown(); }));
             forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", "", bob, decks[1], Map.of(),
-                    bo3 ? sideboardFor(decks[1], decks[0]) : Map.of());
+                    bo3 ? sideboardFor(decks[1], decks[0]) : Map.of(), companion);
             if (j.error() != null || !joined.await(5, TimeUnit.SECONDS)) {
                 System.out.println("  PROBLEM: guest could not join: " + j.error());
                 failed++;
@@ -347,6 +364,8 @@ public final class SelfPlay {
         forge.mtga.peer.PeerGuest.Joined idle = forge.mtga.peer.PeerGuest.join("127.0.0.1", port, "k", "selfplay-db", eve(), decks[1], Map.of());
         System.out.println("rejected (host not waiting): " + idle.error());
         if (idle.error() == null || !idle.error().contains("not waiting")) failed++;
+        System.out.println("companion: states with the card in the sideboard zone " + COMPANION_SHOWN.get() + ", with the designation " + COMPANION_DESIGNATED.get() + ", special actions taken " + COMPANION_ACTIONS.get());
+        if (System.getProperty("selfplay.format") == null && System.getProperty("selfplay.builtin") == null && (COMPANION_SHOWN.get() == 0 || COMPANION_DESIGNATED.get() == 0)) { System.out.println("  PROBLEM: no companion was shown in the peer match"); failed++; }
         System.out.println(failed == 0 ? "SELFPLAY PEER OK" : "SELFPLAY PEER FAILED games=" + failed);
         return failed == 0 ? 0 : 1;
     }
@@ -552,6 +571,10 @@ public final class SelfPlay {
     static final Set<Integer> ADDED_SEEN = Collections.synchronizedSet(new TreeSet<>());
     static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger ATTACH_SEEN = new java.util.concurrent.atomic.AtomicInteger();
+    static CardDb TITLE_DB;
+    static final java.util.concurrent.atomic.AtomicInteger CARD_NAMES = new java.util.concurrent.atomic.AtomicInteger();
+    static final java.util.concurrent.atomic.AtomicInteger COMPANION_SHOWN = new java.util.concurrent.atomic.AtomicInteger(), COMPANION_DESIGNATED = new java.util.concurrent.atomic.AtomicInteger(), COMPANION_ACTIONS = new java.util.concurrent.atomic.AtomicInteger();
+    static final java.util.concurrent.atomic.AtomicInteger PHYREXIAN_LIFE = new java.util.concurrent.atomic.AtomicInteger(), PHYREXIAN_MANA = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger OPP_HAND_VISIBLE = new java.util.concurrent.atomic.AtomicInteger();
     /** Opponent library cards a look-at browser showed (allowed: the rules show them to this player). */
     static final java.util.concurrent.atomic.AtomicInteger OPP_LIBRARY_SHOWN = new java.util.concurrent.atomic.AtomicInteger();
@@ -684,7 +707,12 @@ public final class SelfPlay {
                     }
                     acts.removeIf(a -> a.getActionType() == ActionType.ActionType_Pass);
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_PerformActionResp);
-                    if (!acts.isEmpty() && rnd.nextInt(10) < 7) r.getPerformActionRespBuilder().addActions(withChosenColor(acts.get(rnd.nextInt(acts.size()))));
+                    Action special = acts.stream().filter(a -> a.getActionType() == ActionType.ActionType_Special).findFirst().orElse(null);
+                    if (special != null) {      // the companion's move to hand: always taken
+                        COMPANION_ACTIONS.incrementAndGet();
+                        if (special.getAbilityGrpId() == 0 || special.getManaCostCount() == 0) problem("special action without ability or cost");
+                        r.getPerformActionRespBuilder().addActions(withChosenColor(special));
+                    } else if (!acts.isEmpty() && rnd.nextInt(10) < 7) r.getPerformActionRespBuilder().addActions(withChosenColor(acts.get(rnd.nextInt(acts.size()))));
                     else r.getPerformActionRespBuilder().addActions(Action.newBuilder().setActionType(ActionType.ActionType_Pass));
                     reply(r);
                 }
@@ -736,6 +764,22 @@ public final class SelfPlay {
                         reply(r);
                         break;
                     }
+                    if (opts.stream().allMatch(o -> o.getCastingTimeOptionType() == CastingTimeOptionType.CastingTimeOptionType_ManaType)) {
+                        // Phyrexian pips: like the client's selector, one answer per pip (the color or Phyrexian = life)
+                        if (opts.get(0).getManaCostCount() == 0) problem("Phyrexian selector without the mana cost");
+                        ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_CastingTimeOptionsResp);
+                        for (CastingTimeOptionReq o : opts) {
+                            List<com.wizards.mtga.gre.ManaColor> colors = o.getSelectManaTypeReq().getManaColorsList();
+                            if (!colors.contains(com.wizards.mtga.gre.ManaColor.ManaColor_Phyrexian) || colors.size() != 2) problem("Phyrexian selector options " + colors);
+                            com.wizards.mtga.gre.ManaColor c = colors.get(rnd.nextBoolean() ? 0 : colors.size() - 1);
+                            if (c == com.wizards.mtga.gre.ManaColor.ManaColor_Phyrexian) PHYREXIAN_LIFE.incrementAndGet(); else PHYREXIAN_MANA.incrementAndGet();
+                            r.getCastingTimeOptionsRespBuilder().addCastingTimeOptionResps(com.wizards.mtga.gre.CastingTimeOptionResp.newBuilder().setCtoId(o.getCtoId())
+                                    .setCastingTimeOptionType(CastingTimeOptionType.CastingTimeOptionType_ManaType)
+                                    .setSelectManaTypeResp(com.wizards.mtga.gre.SelectManaTypeResp.newBuilder().setManaColor(c)));
+                        }
+                        reply(r);
+                        break;
+                    }
                     CastingTimeOptionReq pick = opts.get(rnd.nextInt(opts.size()));
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_CastingTimeOptionsResp);
                     r.getCastingTimeOptionsRespBuilder().getCastingTimeOptionRespBuilder().setCtoId(pick.getCtoId())
@@ -759,6 +803,15 @@ public final class SelfPlay {
                 case GREMessageType_SelectNReq -> {
                     requests++;
                     SelectNReq sn = g.getSelectNReq();
+                    if (sn.getStaticList() == com.wizards.mtga.gre.StaticList.StaticList_CardNames) {      // "choose a card name": the answer is a title id
+                        if (!g.hasPrompt() || sn.getMinSel() != 1) problem("card name request without prompt / one choice");
+                        int tid = sn.getIdsCount() > 0 ? sn.getIds(rnd.nextInt(sn.getIdsCount())) : TITLE_DB.titleId(TITLE_DB.grpId("Lightning Bolt"));
+                        CARD_NAMES.incrementAndGet();
+                        ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_SelectNResp);
+                        r.getSelectNRespBuilder().addIds(tid);
+                        reply(r);
+                        break;
+                    }
                     if (sn.getIdType() == IdType.IdType_InstanceId) offered.addAll(sn.getIdsList());
                     if (!g.hasPrompt()) problem("SelectNReq without prompt (the client NREs in SelectNWorkflowTranslation)");
                     List<Integer> ids = new ArrayList<>(sn.getIdsList());
@@ -921,15 +974,19 @@ public final class SelfPlay {
 
         /** Opponent library cards the last state showed this client, and every instance id a browser request (SelectN/Group) offered. */
         private final Set<Integer> libSeen = new HashSet<>(), offered = new HashSet<>();
+        private final Map<Integer, Integer> libSeenGrp = new HashMap<>();      // id -> grpId when it was seen
 
         /**
          * An opponent's library card may reach this client only when the rules show it to this player: a look-at / reveal browser
          * lists it in the request that follows its state. Any other one is a leak.
          */
+        private final Set<Integer> revealedGrp = new HashSet<>();      // grpIds of the RevealedCard objects seen so far
+
         private void checkLibReveals() {
             for (int id : libSeen) {
                 if (offered.contains(id)) OPP_LIBRARY_SHOWN.incrementAndGet();
-                else problem("opponent library card visible to the client");
+                else if (revealedGrp.contains(libSeenGrp.getOrDefault(id, -1))) OPP_LIBRARY_SHOWN.incrementAndGet();       // a revealed card on top of the library
+                else problem("opponent library card visible to the client: " + debugName(id) + " grp " + libSeenGrp.getOrDefault(id, -1));
             }
             libSeen.clear();
         }
@@ -984,6 +1041,9 @@ public final class SelfPlay {
             }
 
             checkLibReveals();
+            if (zone(34).getObjectInstanceIdsCount() > 0) COMPANION_SHOWN.incrementAndGet();
+            if (persistent.values().stream().anyMatch(a -> a.getTypeList().contains(com.wizards.mtga.gre.AnnotationType.AnnotationType_Designation)
+                    && a.getDetailsList().stream().anyMatch(d -> d.getKey().equals("DesignationType") && d.getValueInt32List().contains(com.wizards.mtga.gre.Designation.Designation_Companion_VALUE)))) COMPANION_DESIGNATED.incrementAndGet();
             // structural consistency
             Map<Integer, Integer> seen = new HashMap<>();
             for (ZoneInfo z : zones.values()) {
@@ -992,16 +1052,17 @@ public final class SelfPlay {
                     GameObjectInfo o = objs.get(id);
                     boolean hiddenZone = z.getType() == ZoneType.ZoneType_Library || (z.getType() == ZoneType.ZoneType_Hand && z.getOwnerSeatId() != 1);
                     if (o == null && !hiddenZone) problem("public zone " + z.getType() + " lists id without object");
-                    if (o != null && o.getZoneId() != z.getZoneId()) problem("object zoneId differs from listing zone");
+                    if (o != null && o.getZoneId() != z.getZoneId() && o.getType() != GameObjectType.GameObjectType_RevealedCard) problem("object zoneId differs from listing zone");
                     // player vs player: what the opponent holds must not reach this client (a revealed hand card is allowed, counted)
                     if (o != null && z.getOwnerSeatId() == 2 && o.getGrpId() != 0) {
-                        if (z.getType() == ZoneType.ZoneType_Library) libSeen.add(id);     // judged by checkLibReveals (a look-at browser may show it)
+                        if (z.getType() == ZoneType.ZoneType_Library) { libSeen.add(id); libSeenGrp.put(id, o.getGrpId()); }     // judged by checkLibReveals (a look-at browser may show it)
                         else if (z.getType() == ZoneType.ZoneType_Hand) OPP_HAND_VISIBLE.incrementAndGet();
                     }
                 }
             }
             for (GameObjectInfo o : objs.values()) {
-                if (!seen.containsKey(o.getInstanceId())) problem("object not listed by any zone (" + o.getType() + ")");
+                if (o.getType() == GameObjectType.GameObjectType_RevealedCard) revealedGrp.add(o.getGrpId());
+                else if (!seen.containsKey(o.getInstanceId())) problem("object not listed by any zone (" + o.getType() + ")");
                 if (o.getVisibility() != Visibility.Visibility_Hidden && o.getGrpId() == 0) problem("visible object without grpId: " + debugName(o.getInstanceId()));
                 if (o.getIsFacedown()) FACEDOWN_SEEN.incrementAndGet();
                 if (o.getType() == GameObjectType.GameObjectType_Card && o.getGrpId() >= CardDbBuilder.GRP_BASE && ADDED_SEEN.add(o.getGrpId())) {
@@ -1010,11 +1071,11 @@ public final class SelfPlay {
                 }
             }
             for (AnnotationInfo p : persistent.values()) {
-                boolean attachment = p.getType(0) == AnnotationType.AnnotationType_Attachment;
+                boolean attachment = p.getType(0) == AnnotationType.AnnotationType_Attachment || p.getType(0) == AnnotationType.AnnotationType_Designation;      // a player designation (companion) names the seat
                 for (int id : p.getAffectedIdsList()) {
                     if (!objs.containsKey(id) && !(attachment && id <= 2)) problem("persistent annotation on missing object " + p.getType(0));      // a curse is attached to a player
                 }
-                if (attachment) {      // equipment / aura -> the permanent it is attached to, both on the battlefield
+                if (p.getType(0) == AnnotationType.AnnotationType_Attachment) {      // equipment / aura -> the permanent it is attached to, both on the battlefield
                     ATTACH_SEEN.incrementAndGet();
                     for (int id : List.of(p.getAffectorId(), p.getAffectedIds(0))) {
                         GameObjectInfo o = objs.get(id);
@@ -1149,7 +1210,7 @@ public final class SelfPlay {
                     problem("tap state changed without TappedUntappedPermanent");
                 }
                 if (old == null && !transferred.contains(o.getInstanceId()) && !created.contains(o.getInstanceId())
-                        && !inAnyZone(oldZones, o.getInstanceId()) && o.getZoneId() != 25) {
+                        && !inAnyZone(oldZones, o.getInstanceId()) && o.getType() != GameObjectType.GameObjectType_RevealedCard) {
                     problem("new object without ZoneTransfer/TokenCreated/AbilityInstanceCreated (zone " + o.getZoneId() + " " + debugName(o.getInstanceId()) + ")");
                 }
             }

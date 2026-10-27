@@ -38,12 +38,18 @@ public final class PeerGuest {
 
     public static Joined join(String host, int port, String key, String fingerprint, String queue, PublicProfile me,
                               Map<String, Integer> deck, Map<String, Integer> printing, Map<String, Integer> sideboard) {
+        return join(host, port, key, fingerprint, queue, me, deck, printing, sideboard, null);
+    }
+
+    /** With the deck's companion (a card name or null), which the host's engine plays for this seat. */
+    public static Joined join(String host, int port, String key, String fingerprint, String queue, PublicProfile me,
+                              Map<String, Integer> deck, Map<String, Integer> printing, Map<String, Integer> sideboard, String companion) {
         PeerLink link = null;
         try {
             Socket socket = new Socket();
             socket.connect(new InetSocketAddress(host, port), 5000);
             link = new PeerLink(socket);
-            return join(link, host + ":" + port, fingerprint, key, queue, me, deck, printing, sideboard);
+            return join(link, host + ":" + port, fingerprint, key, queue, me, deck, printing, sideboard, companion);
         } catch (Exception e) {
             return fail(link, "could not reach the host " + host + ":" + port + " (" + e.getMessage() + ")");
         }
@@ -58,11 +64,16 @@ public final class PeerGuest {
     /** With the sideboard the guest plays between the games of a best-of-three (the host decides how many games there are). */
     public static Joined joinOnline(PeerLink link, String fingerprint, String queue, PublicProfile me,
                                     Map<String, Integer> deck, Map<String, Integer> printing, Map<String, Integer> sideboard) {
-        return join(link, "the coordinator room", fingerprint, "", queue, me, deck, printing, sideboard);
+        return joinOnline(link, fingerprint, queue, me, deck, printing, sideboard, null);
+    }
+
+    public static Joined joinOnline(PeerLink link, String fingerprint, String queue, PublicProfile me,
+                                    Map<String, Integer> deck, Map<String, Integer> printing, Map<String, Integer> sideboard, String companion) {
+        return join(link, "the coordinator room", fingerprint, "", queue, me, deck, printing, sideboard, companion);
     }
 
     private static Joined join(PeerLink link, String where, String fingerprint, String key, String queue, PublicProfile me,
-                               Map<String, Integer> deck, Map<String, Integer> printing, Map<String, Integer> sideboard) {
+                               Map<String, Integer> deck, Map<String, Integer> printing, Map<String, Integer> sideboard, String companion) {
         try {
             link.setReadTimeout(15_000);
             JsonObject hello = new JsonObject();
@@ -75,6 +86,7 @@ public final class PeerGuest {
             hello.add("deck", GSON.toJsonTree(deck));
             hello.add("printing", GSON.toJsonTree(printing));
             hello.add("sideboard", GSON.toJsonTree(sideboard));
+            if (companion != null && !companion.isBlank()) hello.addProperty("companion", companion);
             link.sendText(PeerLink.HELLO, hello.toString());
             PeerLink.Frame f = link.read();
             if (f == null) return fail(link, "the host closed the connection");

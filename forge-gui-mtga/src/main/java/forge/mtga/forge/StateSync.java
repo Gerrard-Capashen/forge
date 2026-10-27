@@ -27,6 +27,7 @@ import com.wizards.mtga.gre.Visibility;
 import com.wizards.mtga.gre.ZoneInfo;
 import forge.game.Game;
 import forge.game.card.Card;
+import forge.game.card.CardCollectionView;
 import forge.game.card.CardView;
 import forge.card.CardStateName;
 import forge.game.event.GameEvent;
@@ -484,25 +485,150 @@ public final class StateSync {
         addZone(s, ZoneType.Battlefield, 0, game.getCardsIn(ZoneType.Battlefield));
         addStack(s);
         addZone(s, ZoneType.Exile, 0, game.getCardsIn(ZoneType.Exile));
-        addZone(s, ZoneType.Command, 0, game.getCardsIn(ZoneType.Command));
+        findCompanions();
+        List<Card> command = new ArrayList<>();
+        for (Card c : game.getCardsIn(ZoneType.Command)) if (!isCompanionCard(c)) command.add(c);
+        addZone(s, ZoneType.Command, 0, command);
         addExiledUnder(s);
         addAttachments(s);
         for (Map.Entry<String, AnnotationInfo.Builder> e : extraPersistent.entrySet()) s.persistent.put(e.getKey(), e.getValue());
         s.zones.put(Z_LIMBO, ZoneInfo.newBuilder().setZoneId(Z_LIMBO).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Limbo)
                 .setVisibility(Visibility.Visibility_Public).build());
-        s.zones.put(Z_REVEALED, ZoneInfo.newBuilder().setZoneId(Z_REVEALED).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Revealed)
-                .setVisibility(Visibility.Visibility_Public).setOwnerSeatId(HUMAN_SEAT).build());
+        long now = System.currentTimeMillis();
+        revealedCards.removeIf(r -> r.until() < now || r.card().getGame() != game);
+        announceReveals.removeIf(id -> revealedCards.stream().noneMatch(r -> r.iid() == id));
+        ZoneInfo.Builder revealedMine = ZoneInfo.newBuilder().setZoneId(Z_REVEALED).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Revealed)
+                .setVisibility(Visibility.Visibility_Public).setOwnerSeatId(HUMAN_SEAT);
+        ZoneInfo.Builder revealedTheirs = ZoneInfo.newBuilder().setZoneId(Z_REVEALED_OPP).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Revealed)
+                .setVisibility(Visibility.Visibility_Public).setOwnerSeatId(AI_SEAT);
+        for (Revealed r : revealedCards) {
+            int zid = revealedZone(r.card());
+            GameObjectInfo.Builder o = objectInfo(s, r.card(), r.iid(), zid, ZoneType.Exile, false).toBuilder()
+                    .setType(GameObjectType.GameObjectType_RevealedCard).setVisibility(Visibility.Visibility_Public).clearViewers();
+            s.objs.put(r.iid(), o.build());
+            (zid == Z_REVEALED ? revealedMine : revealedTheirs).addObjectInstanceIds(r.iid());
+        }
+        Set<Integer> stillKnown = new HashSet<>();
+        for (Integer id : new ArrayList<>(knownCards)) {
+            Card c = game.findById(id);
+            boolean topOfLibrary = c != null && keptRevealed(c);
+            boolean theirHand = c != null && c.isInZone(ZoneType.Hand) && seatOf(c.getOwner()) != HUMAN_SEAT;
+            if (!topOfLibrary && !theirHand) { knownCards.remove(id); continue; }
+            if (!theirHand) continue;
+            int iid = knownIid.computeIfAbsent(id, k -> { int n = fresh(); usedIids.add(n); return n; });
+            stillKnown.add(id);
+            s.objs.put(iid, objectInfo(s, c, iid, zoneId(ZoneType.Hand, seatOf(c.getOwner())), ZoneType.Exile, false).toBuilder()
+                    .setType(GameObjectType.GameObjectType_RevealedCard).setVisibility(Visibility.Visibility_Public).clearViewers().build());
+        }
+        knownIid.keySet().retainAll(stillKnown);
+        s.zones.put(Z_REVEALED, revealedMine.build());
         // zones the client looks up unconditionally (LocalSideboard in library searches, OpponentRevealed, PhasedOut)
-        s.zones.put(Z_REVEALED_OPP, ZoneInfo.newBuilder().setZoneId(Z_REVEALED_OPP).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Revealed)
-                .setVisibility(Visibility.Visibility_Public).setOwnerSeatId(AI_SEAT).build());
+        s.zones.put(Z_REVEALED_OPP, revealedTheirs.build());
         s.zones.put(Z_PHASED_OUT, ZoneInfo.newBuilder().setZoneId(Z_PHASED_OUT).setType(com.wizards.mtga.gre.ZoneType.ZoneType_PhasedOut)
                 .setVisibility(Visibility.Visibility_Public).build());
-        s.zones.put(Z_SIDEBOARD, ZoneInfo.newBuilder().setZoneId(Z_SIDEBOARD).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Sideboard)
-                .setVisibility(Visibility.Visibility_Private).setOwnerSeatId(HUMAN_SEAT).addViewers(HUMAN_SEAT).build());
-        s.zones.put(Z_SIDEBOARD_OPP, ZoneInfo.newBuilder().setZoneId(Z_SIDEBOARD_OPP).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Sideboard)
-                .setVisibility(Visibility.Visibility_Private).setOwnerSeatId(AI_SEAT).addViewers(AI_SEAT).build());
+        // a companion is revealed information: both seats see the card in its owner's sideboard zone (the client draws it by that player's hand)
+        for (Player p : new Player[] {human, ai}) {
+            int zid = seatOf(p) == HUMAN_SEAT ? Z_SIDEBOARD : Z_SIDEBOARD_OPP;
+            ZoneInfo.Builder sideboard = ZoneInfo.newBuilder().setZoneId(zid).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Sideboard)
+                    .setVisibility(Visibility.Visibility_Public).setOwnerSeatId(seatOf(p));
+            Card c = companionOf.get(p);
+            if (isCompanionCard(c)) {
+                int iid = track(s, c, zid);
+                sideboard.addObjectInstanceIds(iid);
+                s.objs.put(iid, objectInfo(s, c, iid, zid, ZoneType.Sideboard, false));
+                // the client keeps the card next to the hand (AltCardHolderCalculator) when the card itself carries the designation
+                s.persistent.put("companion-card:" + seatOf(p), AnnotationInfo.newBuilder().setAffectorId(seatOf(p)).addAffectedIds(iid)
+                        .addType(AnnotationType.AnnotationType_Designation)
+                        .addDetails(intDetail("DesignationType", com.wizards.mtga.gre.Designation.Designation_Companion_VALUE))
+                        .addDetails(intDetail("grpid", grpIdOf(c))));
+            }
+            s.zones.put(zid, sideboard.build());
+        }
+        for (Player p : new Player[] {human, ai}) {       // the designation names the card even once it is in the hand
+            Card c = companionOf.get(p);
+            if (c == null) continue;
+            s.persistent.put("companion:" + seatOf(p), AnnotationInfo.newBuilder().setAffectorId(seatOf(p)).addAffectedIds(seatOf(p))
+                    .addType(AnnotationType.AnnotationType_Designation)
+                    .addDetails(intDetail("DesignationType", com.wizards.mtga.gre.Designation.Designation_Companion_VALUE))
+                    .addDetails(intDetail("grpid", grpIdOf(c))));
+        }
         s.turn = turnInfo();
         return s;
+    }
+
+    // ---- revealed cards ------------------------------------------------------------------------------------------
+    // Arena shows a reveal without asking anything: each revealed card gets a RevealedCard object (own instance id, in the Revealed zone
+    // of the card's owner) and a CardRevealed annotation naming it; the client plays the reveal and nobody has to dismiss it. The objects
+    // go away again a few seconds later (the next diff after that), which the client sees as RevealedCardDeleted.
+
+    private static final long REVEAL_MS = 3500;
+
+    private record Revealed(Card card, int iid, int sourceZone, long until) { }
+
+    private final List<Revealed> revealedCards = new ArrayList<>();
+    private final List<Integer> announceReveals = new ArrayList<>();      // iids whose CardRevealed annotation has not gone out yet
+    private int revealSourceSeat;
+    // A revealed card stays known while it is in the opponent's hand (the client shows it face-up there: a RevealedCard object in the
+    // hand's zone, RevealedCardCreated/Deleted for the client) or on top of a library (the top object is shown to this client); it is
+    // forgotten when it goes anywhere else. The same card keeps its object while it stays; moving library -> hand makes the hand one.
+    private final Set<Integer> knownCards = new HashSet<>();
+    private final Map<Integer, Integer> knownIid = new HashMap<>();      // forge card id -> iid of its hand RevealedCard object
+    private final Set<Integer> createdReveals = new HashSet<>();      // hand RevealedCard objects whose RevealedCardCreated went out
+
+    /** A revealed card on top of a library keeps showing its face to this client. */
+    private boolean keptRevealed(Card c) {
+        if (!knownCards.contains(c.getId()) || !c.isInZone(ZoneType.Library)) return false;
+        CardCollectionView lib = c.getOwner().getCardsIn(ZoneType.Library);
+        return !lib.isEmpty() && lib.get(0).getId() == c.getId();
+    }
+
+    /** Reveals these cards (hand, library...) to this client with Arena's non-blocking mechanism; {@code revealer}: the player who reveals them. */
+    public void revealNow(Iterable<Card> cards, Player revealer) {
+        long until = System.currentTimeMillis() + REVEAL_MS;
+        revealSourceSeat = seatOf(revealer);
+        for (Card c : cards) {
+            int src = c.isInZone(ZoneType.Hand) ? zoneId(ZoneType.Hand, seatOf(c.getOwner())) : c.isInZone(ZoneType.Library) ? zoneId(ZoneType.Library, seatOf(c.getOwner())) : zoneId(c.getZone().getZoneType(), seatOf(c.getOwner()));
+            int iid = fresh();
+            usedIids.add(iid);
+            revealedCards.add(new Revealed(c, iid, src, until));
+            announceReveals.add(iid);
+            knownCards.add(c.getId());
+        }
+    }
+
+    private int revealedZone(Card c) { return seatOf(c.getOwner()) == HUMAN_SEAT ? Z_REVEALED : Z_REVEALED_OPP; }
+
+    // ---- companions ----------------------------------------------------------------------------------------------
+    // A companion waits in the player's command zone in Forge. Arena keeps it in the player's Sideboard zone, marks the player with a
+    // Companion designation (the card's grpId) and offers the {3} move to hand as a special action on the card; the client then draws
+    // the card next to the hand (AltCardHolderCalculator). The opponent's companion is only the designation.
+
+    private final Map<Player, Card> companionOf = new HashMap<>();
+
+    /** A companion card in the command zone (not Forge's effect card). */
+    private static boolean isCompanionCard(Card c) {
+        return c != null && !c.isImmutable() && c.isInZone(ZoneType.Command) && c.hasKeyword(forge.game.keyword.Keyword.COMPANION);
+    }
+
+    /** Remembers each player's companion once it shows up; it stays the player's companion after it went to the hand. */
+    private void findCompanions() {
+        for (Player p : new Player[] {human, ai}) {
+            Card known = companionOf.get(p);
+            if (known != null && known.getGame() != game) companionOf.remove(p);
+            if (companionOf.containsKey(p)) continue;
+            for (Card c : p.getCardsIn(ZoneType.Command)) if (isCompanionCard(c)) { companionOf.put(p, c); break; }
+        }
+    }
+
+    /** The "{3}: put the companion into your hand" ability of a companion in the command zone. */
+    public boolean isCompanionMove(SpellAbility sa) {
+        return sa != null && isCompanionCard(sa.getHostCard()) && sa.getApi() == forge.game.ability.ApiType.ChangeZone;
+    }
+
+    /** The card's own Companion ability (the client's id of "Companion — ..."), the special action's ability. */
+    public int companionAbilityId(Card c) {
+        for (CardDb.Ability a : db.abilities(grpIdOf(c))) if (a.text() != null && a.text().startsWith("Companion")) return a.id();
+        return 202;
     }
 
     private static ZoneInfo.Builder zoneHeader(ZoneType t, int seat, int zid) {
@@ -530,7 +656,7 @@ public final class StateSync {
             if (c.isImmutable()) continue;       // Forge effect/emblem cards have no client representation
             int iid = track(s, c, zid);
             z.addObjectInstanceIds(iid);
-            s.objs.put(iid, objectInfo(s, c, iid, zid, t, hidden && !revealed.contains(c.getId())));
+            s.objs.put(iid, objectInfo(s, c, iid, zid, t, hidden && !revealed.contains(c.getId()) && !keptRevealed(c)));
         }
         s.zones.put(zid, z.build());
     }
@@ -932,7 +1058,7 @@ public final class StateSync {
         if (!force && inTransit(s) && ++unstable < 50) return null;
         unstable = 0;
         GameStateMessage.Builder m = GameStateMessage.newBuilder().setType(GameStateType.GameStateType_Diff);
-        boolean changed = playStage || pendingResults != null || !earlyAnns.isEmpty() || !lateAnns.isEmpty();
+        boolean changed = playStage || pendingResults != null || !earlyAnns.isEmpty() || !lateAnns.isEmpty() || !announceReveals.isEmpty();
         // The client replaces its GameInfo with whatever a diff carries (MatchManager reads MatchState, format, variant
         // from it), so a diff's GameInfo is always complete: a bare {stage=Play} reset MatchState to None, which hid
         // the Concede button for the whole game.
@@ -1042,6 +1168,25 @@ public final class StateSync {
             }
         }
         out.addAll(earlyAnns);
+        if (!announceReveals.isEmpty()) {
+            Map<Integer, List<Integer>> bySource = new LinkedHashMap<>();
+            for (Revealed r : revealedCards) if (announceReveals.contains(r.iid())) bySource.computeIfAbsent(r.sourceZone(), k -> new ArrayList<>()).add(r.iid());
+            for (Map.Entry<Integer, List<Integer>> e : bySource.entrySet()) {
+                AnnotationInfo.Builder a = ann(AnnotationType.AnnotationType_CardRevealed, revealSourceSeat, e.getValue().get(0));
+                for (int i = 1; i < e.getValue().size(); i++) a.addAffectedIds(e.getValue().get(i));
+                out.add(a.addDetails(intDetail("source_zone", e.getKey())).build());
+            }
+            announceReveals.clear();
+        }
+        // a revealed card that stays face-up in the opponent's hand: the client creates the reveal from this annotation (its generator for
+        // new RevealedCard objects only serves undo); the object it names is the one with the hand as its zone
+        createdReveals.retainAll(s.objs.keySet());
+        for (GameObjectInfo o : s.objs.values()) {
+            if (o.getType() != GameObjectType.GameObjectType_RevealedCard || (o.getZoneId() != 42 && o.getZoneId() != 32)) continue;
+            if (createdReveals.add(o.getInstanceId())) {
+                out.add(ann(AnnotationType.AnnotationType_RevealedCardCreated, o.getInstanceId(), o.getInstanceId()).build());
+            }
+        }
         for (IdChange ch : s.idChanges) {
             GameObjectInfo now = s.objs.get(ch.newId());
             out.add(ann(AnnotationType.AnnotationType_ObjectIdChanged, 0, ch.oldId())

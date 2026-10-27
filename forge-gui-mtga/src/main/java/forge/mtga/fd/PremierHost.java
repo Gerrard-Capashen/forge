@@ -186,10 +186,9 @@ final class PremierHost implements TableLink.Listener {
             seatOf.put(0, seats.get(0));
             for (int i = 0; i < guests.size(); i++) seatOf.put(guests.get(i), seats.get(i + 1));
             List<PublicProfile> ps = new ArrayList<>();
-            int bot = 0;
             for (int s = 0; s < PremierDrafts.POD; s++) {
                 Integer slot = slotAt(s);
-                if (slot == null) ps.add(premier.profile.forAi("Forge Bot " + ++bot));
+                if (slot == null) ps.add(premier.profile.forAi());
                 else ps.add(slot == 0 ? premier.profile.self() : hellos.get(slot));
             }
             players = ps;

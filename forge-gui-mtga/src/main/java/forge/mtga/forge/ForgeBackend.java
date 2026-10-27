@@ -102,9 +102,9 @@ public final class ForgeBackend implements GameBackend {
     /** A human (seat 1) against Forge's AI. */
     public ForgeBackend(CardDb db, forge.mtga.MatchSetup setup) {
         this(db, new ForgeMatch(db, setup.matchId() == null ? DEFAULT_MATCH_ID : setup.matchId()), 0,
-                new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides(), setup.humanSideboard()));
+                new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides(), setup.humanSideboard(), setup.humanCompanion()));
         room.setGamesToWin(setup.gamesToWin());
-        room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of()), setup.aiName() == null ? "Forge AI" : setup.aiName());
+        room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of(), Map.of(), setup.aiCompanion()), setup.aiName() == null ? "Forge AI" : setup.aiName());
         this.onResult = setup.onResult();
     }
 
@@ -1361,6 +1361,48 @@ public final class ForgeBackend implements GameBackend {
         askSelectCards(cards, 0, 0, com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution, 0, null, source);      // min = max = 0 and no unfiltered ids: the client's view-and-dismiss browser
     }
 
+    private Map<Integer, String> titleNames;
+
+    /**
+     * "Choose a card name" (Pithing Needle, Meddling Mage...): the client's own name selector (SelectN, static list CardNames; an empty id
+     * list offers every card, {@code only} restricts it to those names). The answer is the title id of the chosen card. Null = no answer.
+     */
+    String askCardName(Card source, java.util.Collection<String> only, String message) {
+        if (titleNames == null) {
+            Map<Integer, String> m = new HashMap<>();
+            for (Map.Entry<Integer, String> e : db.namesByGrp().entrySet()) {
+                int t = db.titleId(e.getKey());
+                if (t != 0) m.putIfAbsent(t, e.getValue());
+            }
+            titleNames = m;
+        }
+        String text = message == null ? "" : message.toLowerCase();
+        int prompt = text.contains("nonartifact") ? 5208 : text.contains("nonbasic land") ? 5250 : text.contains("artifact") ? 5216 : text.contains("any card") ? 5245 : 5209;
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(1).setMaxSel(1)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setOptionContext(com.wizards.mtga.gre.OptionContext.OptionContext_Resolution)
+                .setListType(only == null ? com.wizards.mtga.gre.SelectionListType.SelectionListType_Static : com.wizards.mtga.gre.SelectionListType.SelectionListType_StaticSubset)
+                .setStaticList(com.wizards.mtga.gre.StaticList.StaticList_CardNames);
+        if (only != null) for (String n : only) { int t = db.titleId(db.grpId(n)); if (t != 0) sn.addIds(t); }
+        if (source != null) sn.setSourceId(iid(source));
+        com.wizards.mtga.gre.Prompt.Builder pb = sn.getPromptBuilder().setPromptId(prompt);
+        req.getPromptBuilder().setPromptId(prompt);
+        if (source != null) {
+            pb.addParameters(numberParam("CardId", iid(source)));
+            req.getPromptBuilder().addParameters(numberParam("CardId", iid(source)));
+        }
+        System.out.println("[mtga] asking a card name for " + source + (only == null ? "" : " among " + only.size()));
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        System.out.println("[mtga] client card name reply " + r.toString().replace("\n", " "));
+        for (int id : r.getSelectNResp().getIdsList()) {
+            String name = titleNames.get(id);
+            if (name != null) return name;
+        }
+        return null;
+    }
+
     /** Cards of a looked-at set (Forge's DelayedReveal) that are not among the valid choices. */
     private List<Card> notChoosable(forge.game.player.DelayedReveal dr, java.util.Collection<Card> valid) {
         List<Card> out = new ArrayList<>();
@@ -1426,15 +1468,18 @@ public final class ForgeBackend implements GameBackend {
         for (SpellAbility sa : playable) {
             Card host = sa.getHostCard();
             boolean canAfford = sa.isLandAbility() || affordable(sa, me);
-            boolean elsewhere = !host.isInZone(ZoneType.Hand) && !host.isInZone(ZoneType.Battlefield);
+            boolean companion = sync.isCompanionMove(sa);
+            boolean elsewhere = !companion && !host.isInZone(ZoneType.Hand) && !host.isInZone(ZoneType.Battlefield);
             if (!canAfford && !elsewhere) continue;
             if (!elsewhere && !sa.isLandAbility() && !hasLegalTargets(sa)) continue;      // Dismember with no creature around
-            ActionType at = sa.isLandAbility() ? ActionType.ActionType_Play : sa.isAdventure() ? ActionType.ActionType_CastAdventure
+            ActionType at = companion ? ActionType.ActionType_Special : sa.isLandAbility() ? ActionType.ActionType_Play : sa.isAdventure() ? ActionType.ActionType_CastAdventure
                     : sa.isSpell() ? ActionType.ActionType_Cast : ActionType.ActionType_Activate;
             int iid = iid(host);
             int abilityGrp = 0;
             if (at == ActionType.ActionType_Activate || (at == ActionType.ActionType_Cast && sa.getAlternativeCost() != null)) {
                 abilityGrp = abilities.abilityId(sa, grp(host));
+            } else if (companion) {
+                abilityGrp = sync.companionAbilityId(host);      // "Companion — {3}: put it into your hand" is a special action on the card
             }
             String key = iid + ":" + at + ":" + abilityGrp;
             if (offered.containsKey(key)) continue;
@@ -1858,6 +1903,11 @@ public final class ForgeBackend implements GameBackend {
     }
 
     private static List<com.wizards.mtga.gre.ManaRequirement> manaRequirements(forge.card.mana.ManaCost mc, int objectId) {
+        return manaRequirements(mc, objectId, false);
+    }
+
+    /** {@code phyrexianPips}: a Phyrexian pip as [color, Phyrexian] (the actions' cost and the Phyrexian selector's cost; the manual payment screen keeps the plain color). */
+    private static List<com.wizards.mtga.gre.ManaRequirement> manaRequirements(forge.card.mana.ManaCost mc, int objectId, boolean phyrexianPips) {
         List<com.wizards.mtga.gre.ManaRequirement> out = new ArrayList<>();
         if (mc == null || mc.isNoCost()) return out;
         int generic = mc.getGenericCost();
@@ -1866,6 +1916,7 @@ public final class ForgeBackend implements GameBackend {
                     .addColor(com.wizards.mtga.gre.ManaColor.ManaColor_Generic).setCount(generic).setObjectId(objectId).build());
         }
         Map<com.wizards.mtga.gre.ManaColor, Integer> counts = new java.util.EnumMap<>(com.wizards.mtga.gre.ManaColor.class);
+        Map<com.wizards.mtga.gre.ManaColor, Integer> phyrexian = new java.util.EnumMap<>(com.wizards.mtga.gre.ManaColor.class);
         for (forge.card.mana.ManaCostShard shard : mc) {
             int mask = shard.getColorMask();
             com.wizards.mtga.gre.ManaColor c = (mask & forge.card.MagicColor.WHITE) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_White
@@ -1875,12 +1926,69 @@ public final class ForgeBackend implements GameBackend {
                     : (mask & forge.card.MagicColor.GREEN) != 0 ? com.wizards.mtga.gre.ManaColor.ManaColor_Green
                     : shard == forge.card.mana.ManaCostShard.COLORLESS ? com.wizards.mtga.gre.ManaColor.ManaColor_Colorless
                     : shard == forge.card.mana.ManaCostShard.X ? com.wizards.mtga.gre.ManaColor.ManaColor_X : null;
-            if (c != null) counts.merge(c, 1, Integer::sum);
+            if (c != null) (phyrexianPips && shard.isPhyrexian() ? phyrexian : counts).merge(c, 1, Integer::sum);
         }
         for (Map.Entry<com.wizards.mtga.gre.ManaColor, Integer> e : counts.entrySet()) {
             out.add(com.wizards.mtga.gre.ManaRequirement.newBuilder().addColor(e.getKey()).setCount(e.getValue()).setObjectId(objectId).build());
         }
+        // a Phyrexian symbol is the color plus ManaColor_Phyrexian (the client draws {B/P} and offers life for it)
+        for (Map.Entry<com.wizards.mtga.gre.ManaColor, Integer> e : phyrexian.entrySet()) {
+            out.add(com.wizards.mtga.gre.ManaRequirement.newBuilder().addColor(e.getKey()).addColor(com.wizards.mtga.gre.ManaColor.ManaColor_Phyrexian)
+                    .setCount(e.getValue()).setObjectId(objectId).build());
+        }
         return out;
+    }
+
+    /** The spell with the Phyrexian pips the player pays with life taken out of its mana cost; {@code life} = 2 per such pip. */
+    private record PhyrexianPlan(SpellAbility sa, int life) { }
+
+    /**
+     * Phyrexian mana: the client's own selector (CastingTimeOptionType_ManaType, one option per pip, the color or Phyrexian = 2 life)
+     * decides each pip. Returns null when every pip is paid with mana (the default, or nothing to choose).
+     */
+    private PhyrexianPlan askPhyrexian(SpellAbility sa) {
+        forge.card.mana.ManaCost mc = sa.getPayCosts().getTotalMana();
+        if (mc == null || mc.isNoCost()) return null;
+        Card host = sa.getHostCard();
+        List<forge.card.mana.ManaCostShard> pips = new ArrayList<>();
+        for (forge.card.mana.ManaCostShard shard : mc) if (shard.isPhyrexian()) pips.add(shard);
+        if (pips.isEmpty()) return null;
+        if (!human.canPayLife(2, false, sa)) return null;
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_CastingTimeOptionsReq);
+        List<com.wizards.mtga.gre.ManaRequirement> cost = manaRequirements(mc, iid(host), true);
+        int cto = 0;
+        for (forge.card.mana.ManaCostShard pip : pips) {
+            com.wizards.mtga.gre.ManaColor color = com.wizards.mtga.gre.ManaColor.ManaColor_Colorless;
+            for (int i = 0; i < COLOR_MASKS.length; i++) if ((pip.getColorMask() & COLOR_MASKS[i]) != 0) { color = COLOR_ENUMS[i]; break; }
+            com.wizards.mtga.gre.CastingTimeOptionReq.Builder o = com.wizards.mtga.gre.CastingTimeOptionReq.newBuilder().setCtoId(++cto)
+                    .setCastingTimeOptionType(com.wizards.mtga.gre.CastingTimeOptionType.CastingTimeOptionType_ManaType)
+                    .setAffectorId(iid(host)).setAffectedId(iid(host)).setPlayerIdToPrompt(StateSync.HUMAN_SEAT).setGrpId(grp(host))
+                    .setSelectManaTypeReq(com.wizards.mtga.gre.SelectManaTypeReq.newBuilder().addManaColors(color)
+                            .addManaColors(com.wizards.mtga.gre.ManaColor.ManaColor_Phyrexian).setSourceId(iid(host)));
+            if (cto == 1) o.addAllManaCost(cost);       // the client reads the cost from the first option
+            req.getCastingTimeOptionsReqBuilder().addCastingTimeOptionReq(o);
+        }
+        System.out.println("[mtga] asking Phyrexian mana for " + host + ": " + pips);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_CastingTimeOptionsResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        System.out.println("[mtga] client Phyrexian choice " + r.toString().replace("\n", " "));
+        if (r.getType() != ClientMessageType.ClientMessageType_CastingTimeOptionsResp) return null;
+        List<com.wizards.mtga.gre.CastingTimeOptionResp> resps = new ArrayList<>(r.getCastingTimeOptionsResp().getCastingTimeOptionRespsList());
+        if (r.getCastingTimeOptionsResp().hasCastingTimeOptionResp()) resps.add(r.getCastingTimeOptionsResp().getCastingTimeOptionResp());
+        forge.game.mana.ManaCostBeingPaid reduced = new forge.game.mana.ManaCostBeingPaid(mc);
+        int life = 0;
+        for (com.wizards.mtga.gre.CastingTimeOptionResp resp : resps) {
+            int i = resp.getCtoId() - 1;
+            if (i < 0 || i >= pips.size() || resp.getSelectManaTypeResp().getManaColor() != com.wizards.mtga.gre.ManaColor.ManaColor_Phyrexian) continue;
+            if (!human.canPayLife(life + 2, false, sa)) break;
+            reduced.decreaseShard(pips.get(i), 1);
+            life += 2;
+        }
+        if (life == 0) return null;
+        SpellAbility copy = sa.copy();
+        copy.setPayCosts(sa.getPayCosts().copyWithDefinedMana(reduced.toManaCost()));
+        for (int i = 0; i < life; i += 2) copy.setSpendPhyrexianMana(true);
+        return new PhyrexianPlan(copy, life);
     }
 
     private static final String[] COLOR_CODES = {"W", "U", "B", "R", "G"};
@@ -2053,10 +2161,28 @@ public final class ForgeBackend implements GameBackend {
     private static boolean affordable(SpellAbility sa, Player me) {
         try {
             sa.setActivatingPlayer(me);
-            return forge.ai.ComputerUtilMana.canPayManaCost(sa, me, 0, false);
+            return forge.ai.ComputerUtilMana.canPayManaCost(sa, me, 0, false) || affordableWithLife(sa, me);
         } catch (RuntimeException e) {
             return true;
         }
+    }
+
+    /** Phyrexian pips can be paid with 2 life each: is the rest of the cost payable once as many as the life total allows are taken out? */
+    private static boolean affordableWithLife(SpellAbility sa, Player me) {
+        if (sa.getPayCosts() == null) return false;
+        forge.card.mana.ManaCost mc = sa.getPayCosts().getTotalMana();
+        if (mc == null || mc.isNoCost()) return false;
+        List<forge.card.mana.ManaCostShard> pips = new ArrayList<>();
+        for (forge.card.mana.ManaCostShard shard : mc) if (shard.isPhyrexian()) pips.add(shard);
+        int n = 0;
+        while (n < pips.size() && me.canPayLife(2 * (n + 1), false, sa)) n++;
+        if (n == 0) return false;
+        forge.game.mana.ManaCostBeingPaid reduced = new forge.game.mana.ManaCostBeingPaid(mc);
+        for (int i = 0; i < n; i++) reduced.decreaseShard(pips.get(i), 1);
+        SpellAbility copy = sa.copy();
+        copy.setPayCosts(sa.getPayCosts().copyWithDefinedMana(reduced.toManaCost()));
+        copy.setActivatingPlayer(me);
+        return forge.ai.ComputerUtilMana.canPayManaCost(copy, me, 0, false);
     }
 
     private static final String[] MANA_CODES = {"W", "U", "B", "R", "G"};
@@ -2101,7 +2227,9 @@ public final class ForgeBackend implements GameBackend {
 
     private static void addManaCost(Action.Builder ab, SpellAbility sa, int objectId) {
         if (sa.getPayCosts() == null) return;
-        ab.addAllManaCost(manaRequirements(sa.getPayCosts().getTotalMana(), objectId));
+        // a Phyrexian pip is [color, Phyrexian]: with no auto-tap solution the client still lets a cost made only of such pips be cast
+        // (ActionExtensions.CanAffordToCast), which is how {U/P} is castable for 2 life with no blue source
+        ab.addAllManaCost(manaRequirements(sa.getPayCosts().getTotalMana(), objectId, true));
     }
 
     // ---- the human's Forge controller --------------------------------------------------------------------------
@@ -2237,6 +2365,28 @@ public final class ForgeBackend implements GameBackend {
         }
 
         @Override
+        public String chooseCardName(SpellAbility sa, java.util.function.Predicate<forge.card.ICardFace> cpp, String valid, String message) {
+            if (!live()) return super.chooseCardName(sa, cpp, valid, message);
+            for (int tries = 0; tries < 3; tries++) {
+                String name = askCardName(sa == null ? null : sa.getHostCard(), null, message);
+                if (name == null) break;
+                forge.card.ICardFace face = forge.StaticData.instance().getCommonCards().getFaceByName(name);
+                if (face != null && (cpp == null || cpp.test(face))) return face.getName();
+            }
+            return super.chooseCardName(sa, cpp, valid, message);
+        }
+
+        @Override
+        public String chooseCardName(SpellAbility sa, List<forge.card.ICardFace> faces, String message) {
+            if (!live() || faces == null || faces.isEmpty()) return super.chooseCardName(sa, faces, message);
+            List<String> names = new ArrayList<>();
+            for (forge.card.ICardFace f : faces) if (db.grpId(f.getName()) != 0) names.add(f.getName());
+            if (names.isEmpty()) return super.chooseCardName(sa, faces, message);
+            String name = askCardName(sa == null ? null : sa.getHostCard(), names, message);
+            return name != null && names.contains(name) ? name : super.chooseCardName(sa, faces, message);
+        }
+
+        @Override
         public boolean payManaCost(forge.card.mana.ManaCost toPay, forge.game.cost.CostPartMana costPartMana, SpellAbility sa,
                                    String prompt, forge.game.mana.ManaConversionMatrix matrix, boolean effect) {
             if (!settings.manualMana()) return super.payManaCost(toPay, costPartMana, sa, prompt, matrix, effect);
@@ -2253,6 +2403,16 @@ public final class ForgeBackend implements GameBackend {
         @Override
         public boolean playChosenSpellAbility(SpellAbility sa) {
             if (sa.isLandAbility()) return super.playChosenSpellAbility(sa);
+            int phyrexianLife = 0;
+            if (live() && sa.getPayCosts() != null && sa.getPayCosts().hasManaCost()) {
+                PhyrexianPlan plan = askPhyrexian(sa);
+                if (plan != null) {
+                    sa = plan.sa();
+                    phyrexianLife = plan.life();
+                    pendingTaps = null;      // the preview paid the whole cost with mana
+                    pendingTapColors = null;
+                }
+            }
             // tap what the client previewed (MTGA pays with the shown solution); the mana floats and Forge's payment uses it first
             List<SpellAbility> taps = pendingTaps;
             Map<SpellAbility, String> tapColors = pendingTapColors == null ? Map.of() : pendingTapColors;
@@ -2292,6 +2452,7 @@ public final class ForgeBackend implements GameBackend {
                     }
                 }
             });
+            if (played && phyrexianLife > 0) player.payLife(phyrexianLife, sa, false);      // the pips paid with life
             // Forge's failure path (ComputerUtil "AI failed to play") leaves a spell cast from hand lying in the stack
             // zone without a stack item, which froze the game: put it back where it was cast from.
             if (!played && castFrom != null && castFrom != ZoneType.Stack) {
@@ -2453,9 +2614,13 @@ public final class ForgeBackend implements GameBackend {
         public void reveal(CardCollectionView cards, ZoneType zone, Player owner, String messagePrefix, boolean addSuffix) {
             super.reveal(cards, zone, owner, messagePrefix, addSuffix);
             if (!live() || cards.isEmpty()) return;
-            List<Card> hidden = new ArrayList<>();
-            for (Card c : cards) if (c.isInZone(ZoneType.Library) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
-            if (!hidden.isEmpty() && player == human) askLookAt(hidden, null);
+            if (player != human) return;
+            // Arena's own way: the cards are shown as revealed objects and nobody has to dismiss anything (the revealer's game does not wait)
+            List<Card> shown = new ArrayList<>();
+            for (Card c : cards) if (c.isInZone(ZoneType.Library) || c.isInZone(ZoneType.Hand)) shown.add(c);
+            if (shown.isEmpty()) return;
+            sync.revealNow(shown, owner);
+            sendDiff(false, false);      // not forced: a reveal in the middle of a move waits for the next diff (the objects stay announced)
         }
 
         @Override
@@ -2541,6 +2706,8 @@ public final class ForgeBackend implements GameBackend {
         public <T extends GameEntity> T chooseSingleEntityForEffect(forge.util.collect.FCollectionView<T> optionList, forge.game.player.DelayedReveal delayedReveal,
                                                                     SpellAbility sa, String title, boolean isOptional, Player relatedPlayer, Map<String, Object> params) {
             if (!live() || optionList.isEmpty()) return super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);
+            // the companion was named when the deck was built: nothing to ask at the start of the game
+            if (sa != null && sa.getApi() == forge.game.ability.ApiType.CompanionChoose) return optionList.get(0);
             // a forced choice of one (Equip resolving onto its only target) is not a question on Arena
             if (!isOptional && delayedReveal == null && optionList.size() == 1) return optionList.get(0);
             List<Card> cards = new ArrayList<>();
