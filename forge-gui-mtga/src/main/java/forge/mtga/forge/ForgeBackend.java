@@ -956,9 +956,16 @@ public final class ForgeBackend implements GameBackend {
     /** Generic "select N of these cards" prompt (discard, search, choose); returns the chosen cards (may be fewer than min on error). */
     CardCollection askSelectCards(List<Card> options, int min, int max, com.wizards.mtga.gre.SelectionContext context,
                                   int promptId, String promptParam, Card source) {
+        return askSelectCards(options, List.of(), min, max, context, promptId, promptParam, source);
+    }
+
+    /** As above; {@code shownOnly} cards (the rest of a looked-at set) are listed in the browser as unfiltered ids: visible, not selectable. */
+    CardCollection askSelectCards(List<Card> options, List<Card> shownOnly, int min, int max, com.wizards.mtga.gre.SelectionContext context,
+                                  int promptId, String promptParam, Card source) {
         Map<Integer, Card> byId = new HashMap<>();
         List<Card> hidden = new ArrayList<>();
         for (Card c : options) if (c.isInZone(ZoneType.Library) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
+        for (Card c : shownOnly) if (c.isInZone(ZoneType.Library) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
         sync.reveal(hidden);
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
         com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(min).setMaxSel(max).setContext(context)
@@ -969,6 +976,7 @@ public final class ForgeBackend implements GameBackend {
             byId.put(iid(c), c);
             sn.addIds(iid(c));
         }
+        for (Card c : shownOnly) if (!byId.containsKey(iid(c))) sn.addUnfilteredIds(iid(c));
         if (promptId == 0) promptId = max == 2 ? PROMPT_CHOOSE_TWO : PROMPT_CHOOSE_CARD;      // the client NREs on a SelectNReq without prompt
         {
             com.wizards.mtga.gre.Prompt.Builder pb = sn.getPromptBuilder().setPromptId(promptId);
@@ -1350,7 +1358,18 @@ public final class ForgeBackend implements GameBackend {
      * "Look at" effects (Mishra's Bauble, ...): the human sees hidden cards in a selection browser, nothing is chosen.
      */
     void askLookAt(List<Card> cards, Card source) {
-        askSelectCards(cards, 0, 1, com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution, 0, null, source);
+        askSelectCards(cards, 0, 0, com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution, 0, null, source);      // min = max = 0 and no unfiltered ids: the client's view-and-dismiss browser
+    }
+
+    /** Cards of a looked-at set (Forge's DelayedReveal) that are not among the valid choices. */
+    private List<Card> notChoosable(forge.game.player.DelayedReveal dr, java.util.Collection<Card> valid) {
+        List<Card> out = new ArrayList<>();
+        if (dr == null) return out;
+        for (forge.game.card.CardView cv : dr.getCards()) {
+            Card c = game.findById(cv.getId());
+            if (c != null && !valid.contains(c)) out.add(c);
+        }
+        return out;
     }
 
     /**
@@ -2468,7 +2487,7 @@ public final class ForgeBackend implements GameBackend {
                                                    forge.game.player.DelayedReveal delayedReveal, String selectPrompt, Player decider) {
             if (!live() || fetchList.isEmpty()) return super.chooseCardsForZoneChange(destination, origin, sa, fetchList, min, max, delayedReveal, selectPrompt, decider);
             int m = Math.min(max, fetchList.size());
-            return askSelectCards(new ArrayList<>(fetchList), Math.min(min, m), m, com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution,
+            return askSelectCards(new ArrayList<>(fetchList), notChoosable(delayedReveal, fetchList), Math.min(min, m), m, com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution,
                     zoneChangePrompt(selectPrompt, destination, origin, m), null, sa == null ? null : sa.getHostCard());
         }
 
@@ -2476,7 +2495,7 @@ public final class ForgeBackend implements GameBackend {
         public Card chooseSingleCardForZoneChange(ZoneType destination, List<ZoneType> origin, SpellAbility sa, CardCollection fetchList,
                                                   forge.game.player.DelayedReveal delayedReveal, String selectPrompt, boolean isOptional, Player decider) {
             if (!live() || fetchList.isEmpty()) return super.chooseSingleCardForZoneChange(destination, origin, sa, fetchList, delayedReveal, selectPrompt, isOptional, decider);
-            CardCollection chosen = askSelectCards(new ArrayList<>(fetchList), isOptional ? 0 : 1, 1, com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution,
+            CardCollection chosen = askSelectCards(new ArrayList<>(fetchList), notChoosable(delayedReveal, fetchList), isOptional ? 0 : 1, 1, com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution,
                     zoneChangePrompt(selectPrompt, destination, origin, 1), null, sa == null ? null : sa.getHostCard());
             if (chosen.isEmpty()) return isOptional ? null : fetchList.get(0);
             return chosen.get(0);

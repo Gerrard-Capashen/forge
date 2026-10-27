@@ -43,6 +43,13 @@ public final class ForgeFormats {
      */
     public static final String DRAFT_DECK = "Draft";
 
+    /**
+     * The format of a new deck before the player picks one (the Decks page's "All Decks" tab creates "Ambiguous"; the client
+     * falls back to its default format, Standard, when the name is unknown, which hid every non-Standard card). Every card, 60+ cards.
+     * Not in the format groups, so it is no sort-order default.
+     */
+    public static final String AMBIGUOUS = "Ambiguous";
+
     /** Draft-type client formats: Limited and its direct-challenge alias (the client may save a copied deck under either). */
     public static boolean isDraftType(String format) {
         if (LIMITED.equals(format)) return true;
@@ -61,6 +68,7 @@ public final class ForgeFormats {
             new Spec("Historic", "Historic", 60, 250, 15, 0, 0, false, true),
             new Spec("Alchemy", null, 60, 250, 15, 0, 0, false, true),
             new Spec("Timeless", null, 60, 250, 15, 0, 0, false, false),
+            new Spec(AMBIGUOUS, null, 60, 250, 15, 0, 0, false, false),
             new Spec(DRAFT_DECK, null, 40, 250, 250, 0, 0, false, false),
             new Spec(LIMITED, null, 40, 250, 250, 0, 0, false, false));
 
@@ -186,7 +194,7 @@ public final class ForgeFormats {
                 b.addFormats(f.clone().setName(alias));
                 legal.put(alias, allowed);
             }
-            if (!LIMITED.equals(s.name())) order.add(s.name());
+            if (!LIMITED.equals(s.name()) && !AMBIGUOUS.equals(s.name())) order.add(s.name());
             System.out.println("[mtga] FD format " + s.name() + ": " + names.size() + " legal cards (" + allowed.size() + " titles), "
                     + banned + " banned, " + restricted + " restricted, " + filterSets.size() + " Arena sets");
         }
