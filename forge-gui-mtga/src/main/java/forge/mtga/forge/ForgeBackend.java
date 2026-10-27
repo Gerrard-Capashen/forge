@@ -555,6 +555,16 @@ public final class ForgeBackend implements GameBackend {
      */
     boolean askMulligan(int toBottom) {
         sync.setMulliganCount(human, mulligans);
+        CardCollectionView drawn = human.getCardsIn(ZoneType.Hand);
+        if (introSent && toBottom > 0 && toBottom >= drawn.size()) {
+            // mulliganed down to zero: nothing left to keep or mulligan, the whole hand goes back and the game starts with no cards
+            for (Card c : new CardCollection(drawn)) game.getAction().moveToLibrary(c, -1, null);
+            mulliganAsked = false;
+            room.setMulliganPending(human, false, false);
+            sendDiff(false);
+            room.refreshOthers(this);
+            return true;
+        }
         if (!introSent) {
             if (System.getProperty("mtga.rig") != null) rigHand(human);
             room.introduceOthers(this);      // a second human gets its ConnectResp, opening state and question too: both decide at once
