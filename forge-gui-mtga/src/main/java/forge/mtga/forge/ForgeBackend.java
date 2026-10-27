@@ -1523,6 +1523,9 @@ public final class ForgeBackend implements GameBackend {
             List<Action> now = new ArrayList<>();
             for (Action a : fromOtherZones) if (a.getInstanceId() == k) now.add(a);
             if (!now.isEmpty()) otherZoneActions.put(k, now);
+            else if (otherZoneActions.get(k).stream().allMatch(a -> a.getActionType() == ActionType.ActionType_Play)) {
+                otherZoneActions.remove(k);      // a land is playable from there only while its permission lasts (Icetill Explorer died, land drop spent)
+            }
         }
         List<Action> hypothetical = new ArrayList<>();
         for (List<Action> l : otherZoneActions.values()) hypothetical.addAll(l);
