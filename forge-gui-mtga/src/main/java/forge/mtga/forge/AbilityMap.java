@@ -19,22 +19,49 @@ final class AbilityMap {
 
     /** Client ability id for sa on a card with the given grpId; 0 if nothing plausible. */
     int abilityId(SpellAbility sa, int cardGrp) {
-        int id = match(sa, cardGrp);
-        if (id != 0 || sa == null) return id;
+        if (sa == null) return 0;
         // an ability granted by another card (Black Mage's Rod: "equipped creature has 'Whenever you cast...'" on its Hero
-        // token) is printed on the granting card, not on its holder
+        // token; Tabernacle of Pendrell Vale's upkeep trigger on every creature) is printed on the granting card, not on its holder
         Card host = sa.getHostCard(), from = sa.getOriginalHost();
-        if (from == null && sa.isTrigger() && sa.getTrigger() != null) from = sa.getTrigger().getOriginalHost();
-        return from == null || from == host ? 0 : match(sa, db.grpId(from.getName()));
+        if (sa.isTrigger() && sa.getTrigger() != null && sa.getTrigger().getOriginalHost() != null) from = sa.getTrigger().getOriginalHost();
+        if (from != null && from != host && !from.getName().equals(host.getName())) {
+            int id = match(sa, db.grpId(from.getName()), true);
+            if (id != 0) return id;
+        }
+        int id = match(sa, cardGrp, false);
+        // a mana ability granted by a land type (Yavimaya, Cradle of Growth: every land is a Forest) is not one of the card's own
+        if (id != 0 && sa.isManaAbility() && !db.abilities(cardGrp).isEmpty() && !ownManaText(id, cardGrp)) {
+            int basic = basicManaAbility(sa);
+            if (basic != 0) return basic;
+        }
+        return id;
     }
 
-    private int match(SpellAbility sa, int cardGrp) {
+    private boolean ownManaText(int id, int cardGrp) {
+        for (CardDb.Ability a : db.abilities(cardGrp)) {
+            if (a.id() == id) return a.text() != null && a.text().toLowerCase().contains("add ");
+        }
+        return false;
+    }
+
+    private int match(SpellAbility sa, int cardGrp, boolean strict) {
         if (sa == null || cardGrp == 0) return 0;
         List<CardDb.Ability> abs = db.abilities(cardGrp);
         if (abs.isEmpty()) return sa.isManaAbility() ? basicManaAbility(sa) : 0;
         String desc = describe(sa);
         String loyalty = loyaltyPrefix(desc);
         Set<String> words = words(desc, sa.getHostCard());
+        if (strict) {
+            // the granting card prints it as a static ("All creatures have '...'", category 3), so any category counts:
+            // only a close text match is trusted
+            int found = 0;
+            double top = 0.3;
+            for (CardDb.Ability a : abs) {
+                double s = overlap(words, words(a.text(), null));
+                if (s > top) { top = s; found = a.id(); }
+            }
+            return found;
+        }
         int want = sa.isTrigger() ? 2 : sa.isSpell() ? 4 : 1;
         int best = 0;
         double bestScore = -1;

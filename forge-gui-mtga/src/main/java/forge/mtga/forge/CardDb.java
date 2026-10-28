@@ -152,6 +152,25 @@ public final class CardDb {
         return out;
     }
 
+    /** Art id of every non-primary row (game pieces CardDbBuilder added) at or above {@code minArtId} whose title is one of {@code titles}. */
+    public Map<Integer, String> pieceArtIds(int minArtId, java.util.Collection<String> titles) throws Exception {
+        Map<Integer, String> out = new HashMap<>();
+        try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(
+                "select c.ArtId, coalesce(p.Loc, f.Loc) from Cards c "
+                        + "left join Localizations_enUS p on p.LocId = c.TitleId and p.Formatted = 0 "
+                        + "left join Localizations_enUS f on f.LocId = c.TitleId and f.Formatted = 1 "
+                        + "where c.ArtId >= ? and c.IsPrimaryCard = 0")) {
+            ps.setInt(1, minArtId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String title = rs.getString(2) == null ? null : plainTitle(rs.getString(2));
+                    if (title != null && titles.contains(title)) out.put(rs.getInt(1), title);
+                }
+            }
+        }
+        return out;
+    }
+
     private Connection connect() throws Exception {
         return DriverManager.getConnection("jdbc:sqlite:" + file.getAbsolutePath());
     }

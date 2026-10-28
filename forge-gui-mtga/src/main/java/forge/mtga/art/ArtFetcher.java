@@ -64,6 +64,14 @@ final class ArtFetcher extends ImageFetcher {
         return result;
     }
 
+    /** A fixed image URL (art Forge has no printing for) saved at {@code dest}: from the cache, else downloaded once; null when it fails. */
+    File direct(String url, File dest) {
+        if (dest.isFile()) return dest;
+        synchronized (this) {
+            return dest.isFile() || download(url, dest) ? dest : null;
+        }
+    }
+
     @Override
     protected Runnable getDownloadTask(String[] urls, String destPath, Runnable notifyObservers) {
         CompletableFuture<File> result = fetches.get(destPath);

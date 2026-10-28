@@ -36,9 +36,18 @@ public final class ArtServer {
         return this;
     }
 
+    /**
+     * Art of the command-zone pieces CardDbBuilder adds (no Forge printing behind them): the Undercity dungeon and the
+     * Initiative designation both show the art on the back of Scryfall's Undercity // The Initiative token (TCLB 20).
+     */
+    private static final String INITIATIVE_ART = "https://cards.scryfall.io/art_crop/back/2/c/2c65185b-6cf0-451d-985e-56aa45d9a57d.jpg";
+    private static final java.util.Set<String> INITIATIVE_PIECES = java.util.Set.of("Undercity", "The Initiative");
+    private final Map<Integer, String> pieceArt;
+
     public ArtServer(CardDb db, int port) throws Exception {
         this.port = port;
         this.refs = db.generatedArt(MIN_ART_ID);
+        this.pieceArt = db.pieceArtIds(MIN_ART_ID, INITIATIVE_PIECES);
     }
 
     public void start() throws Exception {
@@ -61,7 +70,9 @@ public final class ArtServer {
             String id = ex.getRequestURI().getPath().substring("/art/".length());
             CardDb.ArtRef ref = id.matches("\\d{1,9}") ? refs.get(Integer.parseInt(id)) : null;
             PaperCard pc = ref == null ? null : printing(ref);
-            if (pc != null) {
+            if (ref == null && id.matches("\\d{1,9}") && pieceArt.containsKey(Integer.parseInt(id))) {
+                file = fetcher.direct(INITIATIVE_ART, new File(forge.localinstance.properties.ForgeConstants.CACHE_CARD_PICS_DIR, "MTGA/initiative.artcrop.jpg"));
+            } else if (pc != null) {
                 try {
                     file = fetcher.artCrop(pc, ref.back()).get(WAIT_SECONDS, TimeUnit.SECONDS);
                 } catch (Exception e) {

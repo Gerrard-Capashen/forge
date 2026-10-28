@@ -745,6 +745,12 @@ public final class StateSync {
         List<Integer> abilityIds = new ArrayList<>();
         for (CardDb.Ability a : db.abilities(grp)) abilityIds.add(a.id());
         if (abilityIds.isEmpty() && c.isLand()) abilityIds.addAll(AbilityMap.basicLandAbilities(c));      // intrinsic: not in the card DB
+        else if (c.isLand() && t == ZoneType.Battlefield) {      // land types granted by an effect (Yavimaya, Cradle of Growth) add their mana ability
+            forge.card.CardTypeView printedType = c.getState(forge.card.CardStateName.Original).getType();
+            for (int id : AbilityMap.basicLandAbilities(c)) {
+                if (!abilityIds.contains(id) && !printedType.hasSubtype(new String[]{"Plains", "Island", "Swamp", "Mountain", "Forest"}[id - 1001])) abilityIds.add(id);
+            }
+        }
         if (t == ZoneType.Battlefield && hasNoAbilities(c)) abilityIds.clear();      // "loses all abilities" (Oko's Elk...)
         for (int id : abilityIds) {
             printed.add(id);
