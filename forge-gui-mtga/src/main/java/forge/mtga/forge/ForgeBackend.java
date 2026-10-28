@@ -1015,11 +1015,20 @@ public final class ForgeBackend implements GameBackend {
      * EffectCostResp{costSelection=SelectNResp} (or CancelActionReq). Empty result = cancelled.
      */
     CardCollection askCostSelection(List<Card> options, int amount, int promptId, Card source) {
+        return askCostSelection(options, amount, amount, promptId, source, null, 0);
+    }
+
+    /**
+     * As above for weighted picks (collect evidence N): the client sums the per-card weights and only enables Submit once the
+     * total reaches minWeight (SelectNReq weights, parallel to ids; a weighted request opens the sum-aware workflow).
+     */
+    CardCollection askCostSelection(List<Card> options, int min, int max, int promptId, Card source, List<Integer> weights, int minWeight) {
+        int amount = max;
         Map<Integer, Card> byId = new HashMap<>();
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_PayCostsReq);
         com.wizards.mtga.gre.EffectCostReq.Builder ec = req.getPayCostsReqBuilder().getEffectCostReqBuilder()
                 .setEffectCostType(com.wizards.mtga.gre.EffectCostType.EffectCostType_Select);
-        com.wizards.mtga.gre.SelectNReq.Builder sn = ec.getCostSelectionBuilder().setMinSel(amount).setMaxSel(amount)
+        com.wizards.mtga.gre.SelectNReq.Builder sn = ec.getCostSelectionBuilder().setMinSel(min).setMaxSel(max)
                 .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_NonMana_Payment)
                 .setOptionContext(com.wizards.mtga.gre.OptionContext.OptionContext_Payment)
                 .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Static)
@@ -1029,6 +1038,7 @@ public final class ForgeBackend implements GameBackend {
             byId.put(iid(c), c);
             sn.addIds(iid(c));
         }
+        if (weights != null) sn.addAllWeights(weights).setMinWeight(minWeight).setMaxWeight(Integer.MAX_VALUE);
         if (promptId == 0) promptId = amount == 2 ? PROMPT_CHOOSE_TWO : PROMPT_CHOOSE_CARD;
         sn.getPromptBuilder().setPromptId(promptId);
         req.getPromptBuilder().setPromptId(promptId);
@@ -2343,6 +2353,20 @@ public final class ForgeBackend implements GameBackend {
         }
 
         @Override
+        public forge.game.cost.PaymentDecision visit(forge.game.cost.CostCollectEvidence cost) {
+            int need = cost.getAbilityAmount(ability);
+            List<Card> v = new ArrayList<>(forge.game.card.CardLists.filter(player.getCardsIn(ZoneType.Graveyard), forge.game.card.CardPredicates.canExiledBy(ability, isEffect())));
+            if (need <= 0 || forge.game.card.CardLists.getTotalCMC(v) < need) return super.visit(cost);
+            // Arena's weighted selection: each graveyard card weighs its mana value, Submit unlocks at the evidence amount
+            List<Integer> weights = new ArrayList<>();
+            for (Card c : v) weights.add(c.getCMC());
+            CardCollection chosen = askCostSelection(v, 1, v.size(), PROMPT_CHOOSE_CARD, source, weights, need);
+            if (chosen.isEmpty()) return null;      // cancelled
+            // the client already enforces the total; a short answer is treated as a cancel rather than paying with the wrong cards
+            return forge.game.card.CardLists.getTotalCMC(chosen) >= need ? forge.game.cost.PaymentDecision.card(chosen) : null;
+        }
+
+        @Override
         public forge.game.cost.PaymentDecision visit(forge.game.cost.CostExile cost) {
             if (!cost.payCostFromSource() && cost.getFrom().size() == 1 && !cost.getType().equals("All") && !cost.getAmount().equals("All")) {
                 List<Card> v = valid(player.getCardsIn(cost.getFrom().get(0)), cost.getType());
@@ -2733,7 +2757,16 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public CardCollection chooseCardsToDiscardFrom(Player playerDiscard, SpellAbility sa, CardCollection valid, int min, int max, CardCollectionView visibleToChooser) {
-            if (!live() || valid.isEmpty() || playerDiscard != player) return super.chooseCardsToDiscardFrom(playerDiscard, sa, valid, min, max, visibleToChooser);
+            if (!live() || valid.isEmpty()) return super.chooseCardsToDiscardFrom(playerDiscard, sa, valid, min, max, visibleToChooser);
+            if (playerDiscard != player) {
+                // Thoughtseize and friends: this seat picks the card the other player discards from their revealed hand
+                int n = Math.min(max, valid.size());
+                List<Card> shown = new ArrayList<>();
+                if (visibleToChooser != null) for (Card c : visibleToChooser) if (!valid.contains(c)) shown.add(c);
+                CardCollection picked = askSelectCards(new ArrayList<>(valid), shown, Math.min(min, n), n,
+                        com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution, PROMPT_CHOOSE_CARD, null, sa == null ? null : sa.getHostCard());
+                return picked.size() >= Math.min(min, n) ? picked : super.chooseCardsToDiscardFrom(playerDiscard, sa, valid, min, max, visibleToChooser);
+            }
             int m = Math.min(max, valid.size());
             CardCollection chosen = askSelectCards(new ArrayList<>(valid), Math.min(min, m), m, com.wizards.mtga.gre.SelectionContext.SelectionContext_Discard,
                     PROMPT_DISCARD, "count", sa == null ? null : sa.getHostCard());
