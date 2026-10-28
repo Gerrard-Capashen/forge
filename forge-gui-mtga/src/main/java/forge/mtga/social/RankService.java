@@ -57,6 +57,45 @@ public final class RankService {
 
     // ---- the client's rank calls ----------------------------------------------------------------------------------
 
+    /** A ranked-queue bot match started: tell the coordinator (its result only counts after the minimum length). Fire and forget. */
+    public void botStartAsync(String matchId, String queue) {
+        if (accounts == null) return;
+        Thread t = new Thread(() -> {
+            try {
+                accounts.call("POST", "/me/rank/bot", botBody(matchId, queue, "start", null));
+            } catch (IOException e) {
+                System.out.println("[mtga] rank: bot match start not recorded (" + e.getMessage() + ")");
+            }
+        }, "rank-bot-start");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** The result of a ranked-queue bot match; the rank change when the coordinator applied it, else null. */
+    public JsonObject botResult(String matchId, String queue, Boolean won) {
+        if (accounts == null) return null;
+        try {
+            JsonObject r = accounts.call("POST", "/me/rank/bot", botBody(matchId, queue, "result", won == null ? "draw" : won ? "win" : "loss"));
+            if (!r.has("applied") || !r.get("applied").getAsBoolean()) {
+                System.out.println("[mtga] rank: bot match " + matchId + " not counted (" + str(r, "reason", "?") + ")");
+                return null;
+            }
+            return r.getAsJsonObject("rank");
+        } catch (IOException e) {
+            System.out.println("[mtga] rank: bot match result not recorded (" + e.getMessage() + ")");
+            return null;
+        }
+    }
+
+    private static JsonObject botBody(String matchId, String queue, String phase, String result) {
+        JsonObject b = new JsonObject();
+        b.addProperty("match", matchId.length() > 80 ? matchId.substring(0, 80) : matchId);
+        b.addProperty("queue", queue);
+        b.addProperty("phase", phase);
+        if (result != null) b.addProperty("result", result);
+        return b;
+    }
+
     /** RankGetCombinedRankInfo (PlayerRankingInfo). */
     public JsonObject combinedRankInfo() {
         if (accounts != null && System.currentTimeMillis() - fetchedAt > STALE_MS) refreshAsync();

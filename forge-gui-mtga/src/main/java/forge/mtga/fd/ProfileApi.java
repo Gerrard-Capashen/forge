@@ -280,6 +280,12 @@ public final class ProfileApi {
         return new PublicProfile("forge-ai", BotNames.next(r), avatar, sleeve, "", "", Profile.DEFAULT_EMOTES, rankClass, 1 + r.nextInt(4));
     }
 
+    /** A human-looking AI opponent of a given rank (the ranked-queue fallback plays at the player's own rank). */
+    PublicProfile forAi(String rankClass, int rankTier) {
+        PublicProfile p = forAi();
+        return new PublicProfile(p.playerId(), p.name(), p.avatar(), p.sleeve(), "", "", Profile.DEFAULT_EMOTES, rankClass, rankTier);
+    }
+
     /** An AI opponent with a given label (tests, logs). */
     PublicProfile forAi(String name) {
         PublicProfile p = forAi();

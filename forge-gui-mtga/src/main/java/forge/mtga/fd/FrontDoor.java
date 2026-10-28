@@ -416,6 +416,8 @@ public final class FrontDoor {
 
     /** Local bot matches of this run: match id -> event (the quests count the format of the queue). */
     private final Map<String, String> botMatches = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Ranked-queue bot matches that ended with a winner: match id -> the player won, empty = a draw (a quit leaves no entry: the coordinator counts an abandoned match as a loss). */
+    private final Map<String, java.util.Optional<Boolean>> botRankedWins = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** Online matches of this run (match id -> event) and, per finished match, the wait for what it earned (started by the first report request). */
     private final Map<String, String> onlineMatches = new java.util.concurrent.ConcurrentHashMap<>();
@@ -444,6 +446,15 @@ public final class FrontDoor {
                 JsonObject earned = new JsonObject();
                 if (bot) {
                     earned.addProperty("xp", ms.botMatch(id));
+                    java.util.Optional<Boolean> won = botRankedWins.remove(id);
+                    if (won != null && event != null && PlayQueues.isRanked(event)) {
+                        JsonObject change = rs.botResult(id, event, won.orElse(null));
+                        if (change != null) {
+                            change.addProperty("oldPercentile", before);
+                            rs.onMatch(change);
+                            earned.add("rank", change);
+                        }
+                    }
                 } else {
                     JsonObject verdict = ms.awaitVerdict(id, 5_000);
                     if (verdict != null) {
@@ -762,14 +773,22 @@ public final class FrontDoor {
             return startOnlineMatch(s, deckName, human, printing, me, eventId, p, session, companion);
         }
         forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(mode == PlayQueues.Mode.BOT ? queueFormat : deckFormat(summary));
+        return launchBotMatch(s, deckName, human, printing, sideboard, companion, ai, profile.forAi(), me, eventId);
+    }
+
+    /** The local match against the Forge AI: set up the engine seat, remember it as a bot match and push MatchCreated. */
+    private Object launchBotMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard,
+                                  String companion, forge.mtga.AiDecks.Choice ai, PublicProfile opponent, PublicProfile me, String eventId) {
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
-        PublicProfile opponent = profile.forAi();
         String aiName = opponent.name();
         boolean event = DraftEvents.isDraftEvent(eventId);
         lastEvent = event ? eventId : null;
         int gamesToWin = PlayQueues.gamesToWin(eventId);
+        boolean ranked = PlayQueues.isRanked(eventId);
+        java.util.function.Consumer<Boolean> onResult = event ? won -> { if (won != null) events.recordResult(eventId, won); } : ranked ? won -> botRankedWins.put(matchId, won == null ? java.util.Optional.empty() : java.util.Optional.of(won)) : null;
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName, null,
-                event ? won -> events.recordResult(eventId, won) : null, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin, companion, ai.companion()));
+                onResult, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin, companion, ai.companion()));
+        if (ranked) rank.botStartAsync(matchId, eventId);
         int total = human.values().stream().mapToInt(Integer::intValue).sum();
         botMatches.put(matchId, eventId);
         System.out.println("[mtga] FD bot match " + matchId + " (" + eventId + "): '" + deckName + "' (" + total + " cards) vs AI deck '" + ai.name() + "'");
@@ -832,6 +851,7 @@ public final class FrontDoor {
             return new Err(7000, "Can't reach the matchmaking server. Check your internet connection and try again.");
         }
         System.out.println("[mtga] FD online: '" + deckName + "' queues in " + eventId + (p.friendCode().isBlank() ? "" : " with friend code " + p.friendCode()));
+        scheduleRankedBot(s, ticket, deckName, human, printing, companion, me, eventId);
         ticket.result().whenComplete((paired, err) -> {
             if (err != null) {
                 if (!ticket.result().isCancelled()) System.out.println("[mtga] FD online: no match (" + err.getMessage() + ")");
@@ -842,6 +862,31 @@ public final class FrontDoor {
             t.start();
         });
         return GSON.toJson("online-" + System.currentTimeMillis() + "-" + (++matchCounter));
+    }
+
+    /** Until the player base is there: Bronze..Gold ranked queues that find nobody for 25-45 s play a human-looking bot of the player's own rank (no rank change). */
+    static final int RANKED_BOT_MIN_SECS = 25, RANKED_BOT_MAX_SECS = 45;
+
+    static boolean rankedBotClass(String rankClass) {
+        return "Bronze".equals(rankClass) || "Silver".equals(rankClass) || "Gold".equals(rankClass);
+    }
+
+    private void scheduleRankedBot(FdSession s, forge.mtga.peer.Coordinator.Ticket ticket, String deckName, Map<String, Integer> human, Map<String, Integer> printing,
+                                   String companion, PublicProfile me, String eventId) {
+        if (!PlayQueues.isRanked(eventId) || !rankedBotClass(me.rankClass()) || Boolean.getBoolean("mtga.ranked.nobots")) return;
+        int secs = RANKED_BOT_MIN_SECS + java.util.concurrent.ThreadLocalRandom.current().nextInt(RANKED_BOT_MAX_SECS - RANKED_BOT_MIN_SECS + 1);
+        LATER.schedule(() -> {
+            if (onlineTicket != ticket || !ticket.result().cancel(false)) return;   // left the queue, or a human was paired first
+            ticket.cancel();
+            onlineTicket = null;
+            try {
+                forge.mtga.AiDecks.Choice ai = aiDeck(PlayQueues.formatOf(eventId));
+                System.out.println("[mtga] FD ranked: nobody in " + eventId + " after " + secs + " s, bot of rank " + me.rankClass() + " " + me.rankTier());
+                launchBotMatch(s, deckName, human, printing, Map.of(), companion, ai, profile.forAi(me.rankClass(), me.rankTier()), me, eventId);
+            } catch (RuntimeException e) {
+                System.out.println("[mtga] FD ranked: bot fallback failed: " + e);
+            }
+        }, secs, java.util.concurrent.TimeUnit.SECONDS);
     }
 
     void playOnline(FdSession s, forge.mtga.peer.Coordinator.Paired paired, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p) {
