@@ -175,7 +175,7 @@ public final class ForgeBackend implements GameBackend {
                  ClientMessageType_DeclareAttackersResp, ClientMessageType_SubmitAttackersReq,
                  ClientMessageType_DeclareBlockersResp, ClientMessageType_SubmitBlockersReq,
                  ClientMessageType_SelectTargetsResp, ClientMessageType_SubmitTargetsReq, ClientMessageType_CancelActionReq,
-                 ClientMessageType_GroupResp, ClientMessageType_SelectNResp, ClientMessageType_OptionalActionResp,
+                 ClientMessageType_GroupResp, ClientMessageType_SelectNResp, ClientMessageType_OptionalActionResp, ClientMessageType_SelectReplacementResp,
                  ClientMessageType_NumericInputResp, ClientMessageType_OrderResp, ClientMessageType_CastingTimeOptionsResp,
                  ClientMessageType_EffectCostResp, ClientMessageType_EnterSideboardingReq, ClientMessageType_SubmitDeckResp,
                  ClientMessageType_ChooseStartingPlayerResp -> inbox.add(msg);
@@ -1118,6 +1118,26 @@ public final class ForgeBackend implements GameBackend {
         } finally {
             sync.clearRevealed();
         }
+    }
+
+    /**
+     * Dredge as MTGA shows it: SelectReplacementReq (AllDredge) offering the dredging card as an ability card in the
+     * browser (click it to dredge), with a "Draw" button to decline. Picking the card = yes.
+     */
+    boolean askDredge(Card dredger, int abilityGrpId) {
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectReplacementReq);
+        req.getSelectReplacementReqBuilder().setIsOptional(true)
+                .setReplacementsType(com.wizards.mtga.gre.SelectReplacementsType.SelectReplacementsType_AllDredge)
+                .addReplacements(com.wizards.mtga.gre.ReplacementEffect.newBuilder().setObjectInstance(iid(dredger))
+                        .setAbilityGrpId(abilityGrpId).setAffectedObject(iid(dredger)).setReplacementEffectId(iid(dredger))
+                        .setConferringObjectZcid(iid(dredger)));
+        System.out.println("[mtga] asking dredge: " + dredger);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectReplacementResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        boolean yes = r.getType() == ClientMessageType.ClientMessageType_SelectReplacementResp
+                && r.getSelectReplacementResp().getReplacement().getObjectInstance() != 0;
+        System.out.println("[mtga] dredge answer " + yes);
+        return yes;
     }
 
     /** Numeric choice (X costs, "choose a number"). */
@@ -2568,7 +2588,20 @@ public final class ForgeBackend implements GameBackend {
         @Override
         public boolean confirmReplacementEffect(forge.game.replacement.ReplacementEffect re, SpellAbility effectSA, GameEntity affected, String question) {
             if (!live()) return super.confirmReplacementEffect(re, effectSA, affected, question);
-            return askOptional(re.getHostCard(), promptFor(question), List.of(), question);
+            Card src = re.getHostCard();
+            // Dredge: the question comes from the card in the graveyard, so tag it with its own Dredge ability, which lets the
+            // client frame that card in the prompt (a bare "Take action" left the player guessing which card was offering)
+            if (question != null && question.contains("Dredge") && src != null) {
+                // the card's own Dredge keyword ability (matched by its "Dredge N" text), else any fuzzy match
+                int dredgeAbility = 0;
+                for (CardDb.Ability a : db.abilities(grp(src))) {
+                    if (a.text() != null && a.text().toLowerCase().contains("dredge")) { dredgeAbility = a.id(); break; }
+                }
+                if (dredgeAbility == 0) dredgeAbility = abilities.abilityByText(grp(src), "Dredge", src);
+                return askDredge(src, dredgeAbility);
+            }
+            int reAbility = 0;
+            return askOptional(src, promptFor(question), List.of(), question, reAbility);
         }
 
         @Override
