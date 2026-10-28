@@ -483,7 +483,7 @@ public final class StateSync {
             s.players.put(seat, pi.build());
         }
         addZone(s, ZoneType.Battlefield, 0, game.getCardsIn(ZoneType.Battlefield));
-        addStack(s);
+        if (!hideStack) addStack(s);
         addZone(s, ZoneType.Exile, 0, game.getCardsIn(ZoneType.Exile));
         findCompanions();
         List<Card> command = new ArrayList<>();
@@ -1327,10 +1327,23 @@ public final class StateSync {
      * itself (damage, deaths, life, counters go out together), and zone moves into the graveyard or exile, or out of the
      * graveyard, while an effect resolves (the whole graveyard leaving is one diff).
      */
+    private boolean heldCombat, hideStack;
+
+    /**
+     * Diff of the held combat damage without the stack, for a trigger that goes on the stack right after it (Ragavan): the
+     * damage frame plays first, the trigger follows in the next diff. Null when no combat damage is waiting.
+     */
+    public GameStateMessage.Builder diffHeldCombatWithoutStack() {
+        if (!heldCombat) return null;
+        heldCombat = false;
+        hideStack = true;
+        try { return diff(false, false); } finally { hideStack = false; }
+    }
+
     public boolean holdForBatch(GameEvent ev) {
         if (ev instanceof forge.game.event.GameEventTurnPhase || ev instanceof forge.game.event.GameEventTurnBegan
                 || ev instanceof forge.game.event.GameEventGameFinished || ev instanceof forge.game.event.GameEventGameOutcome) return false;
-        if (inCombatDamage()) return true;
+        if (inCombatDamage()) { heldCombat = true; return true; }
         if (ev instanceof forge.game.event.GameEventCardChangeZone e && game.getStack().isResolving()) {
             ZoneType from = e.from() == null ? null : e.from().zoneType(), to = e.to() == null ? null : e.to().zoneType();
             return from == ZoneType.Graveyard || to == ZoneType.Exile || to == ZoneType.Graveyard && from != ZoneType.Stack;

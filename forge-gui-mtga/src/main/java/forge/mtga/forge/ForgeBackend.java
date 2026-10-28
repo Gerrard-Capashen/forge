@@ -289,7 +289,7 @@ public final class ForgeBackend implements GameBackend {
         int winner = matchWinner();
         java.util.function.Consumer<Boolean> cb = onResult;
         onResult = null;
-        if (cb != null && winner != 0) cb.accept(winner == StateSync.HUMAN_SEAT);
+        if (cb != null) cb.accept(winner == 0 ? null : winner == StateSync.HUMAN_SEAT);   // null = a draw
         tellOutcome(winner == 0 ? "draw" : winner == StateSync.HUMAN_SEAT ? "win" : "loss");
     }
 
@@ -442,6 +442,14 @@ public final class ForgeBackend implements GameBackend {
         // The deaths that follow (and life changes, counters...) belong to the same frame; mass moves out of the graveyard
         // or into exile during a resolving effect ("exile all graveyards") are one diff too, not one per card.
         if (sync.holdForBatch(ev)) return;
+        if (ev instanceof forge.game.event.GameEventSpellAbilityCast && !game.getStack().isEmpty()) {
+            // a trigger of the combat damage (Ragavan) must not appear together with the damage animation
+            GameStateMessage.Builder dmg = sync.diffHeldCombatWithoutStack();
+            if (dmg != null) {
+                session.sendGre(gameState(dmg));
+                try { Thread.sleep(TRIGGER_AFTER_COMBAT_MS); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+            }
+        }
         GameStateMessage.Builder d = sync.diff(false, false);
         if (d == null) return;
         session.sendGre(gameState(d));
@@ -452,6 +460,9 @@ public final class ForgeBackend implements GameBackend {
     }
 
     /** Pause after each step change the client did not stop at (-Dmtga.stepdelay=ms, ForgeMtgaMain default 150). */
+    /** Time for the combat damage frame to play before a trigger of it appears on the stack. */
+    static final int TRIGGER_AFTER_COMBAT_MS = Integer.getInteger("mtga.triggerdelay", 1500);
+
     static final int STEP_DELAY_MS = Integer.getInteger("mtga.stepdelay", 0);
 
     private static boolean hasStepChange(GameStateMessage.Builder d) {
@@ -1495,7 +1506,11 @@ public final class ForgeBackend implements GameBackend {
         boolean stop = settings.stopAt(phase, myTurn) && game.getStack().isEmpty();
         boolean respond = !game.getStack().isEmpty();
         List<SpellAbility> playable = new ArrayList<>();
-        for (Card c : me.getCardsIn(List.of(ZoneType.Hand, ZoneType.Battlefield, ZoneType.Graveyard, ZoneType.Exile, ZoneType.Command))) {
+        List<Card> candidates = new ArrayList<>(me.getCardsIn(List.of(ZoneType.Hand, ZoneType.Battlefield, ZoneType.Graveyard, ZoneType.Exile, ZoneType.Command)));
+        for (Player other : game.getPlayers()) {      // Ragavan / Gonti: the card is in the opponent's exile but we may cast it
+            if (other != me) candidates.addAll(other.getCardsIn(ZoneType.Exile));
+        }
+        for (Card c : candidates) {
             for (SpellAbility sa : c.getAllPossibleAbilities(me, true)) {
                 if (!sa.isManaAbility()) playable.add(sa);
             }
@@ -1546,7 +1561,9 @@ public final class ForgeBackend implements GameBackend {
         // keep a card listed while it stays where it is (e.g. on an adventure during the opponent's turn, when timing hides it)
         otherZoneActions.keySet().removeIf(k -> {
             Card c = sync.card(k);
-            return c == null || iid(c) != k || c.isInZone(ZoneType.Hand) || c.isInZone(ZoneType.Battlefield) || c.isInZone(ZoneType.Stack);
+            if (c == null || iid(c) != k || c.isInZone(ZoneType.Hand) || c.isInZone(ZoneType.Battlefield) || c.isInZone(ZoneType.Stack)) return true;
+            // a temporary permission (Ragavan: until end of turn) is gone with its effect; adventure / foretold cards stay castable
+            return c.isInZone(ZoneType.Exile) && !c.isOnAdventure() && !c.isForetold() && c.getMayPlay().isEmpty();
         });
         for (Action a : fromOtherZones) otherZoneActions.putIfAbsent(a.getInstanceId(), new ArrayList<>());
         for (Integer k : new ArrayList<>(otherZoneActions.keySet())) {
