@@ -753,6 +753,22 @@ public final class ForgeBackend implements GameBackend {
         return bottom;
     }
 
+    /** Rig helper: a fresh copy of a card by name straight into a zone (planeswalkers get the given loyalty), not taken from the deck. */
+    private void rigAdd(Player p, String name, ZoneType zone, int loyalty) {
+        forge.item.PaperCard pc = forge.StaticData.instance().getCommonCards().getUniqueByName(name);
+        if (pc == null) { System.out.println("[mtga] rig: no card " + name); return; }
+        Card c = Card.fromPaperCard(pc, p);
+        c.setGameTimestamp(game.getNextTimestamp());
+        if (zone == ZoneType.Battlefield) {
+            game.getAction().moveTo(zone, c, null, forge.game.ability.AbilityKey.newMap());
+            if (loyalty > 0) c.setCounters(forge.game.card.CounterEnumType.LOYALTY, loyalty);
+            c.setSickness(false);
+        } else {
+            p.getZone(zone).add(c);
+        }
+        System.out.println("[mtga] rig: " + name + " instance " + iid(c));
+    }
+
     /** Test aid (-Dmtga.rig=...): deterministic opening setups for the scripted regression recipes. */
     private void rigHand(Player p) {
         if ("dv".equals(System.getProperty("mtga.rig"))) {      // devourer deck: Wastes x7 in play, Devourer of Destiny in hand,
@@ -776,6 +792,15 @@ public final class ForgeBackend implements GameBackend {
                 System.out.println("[mtga] rig: AI Grizzly Bears instance " + iid(c));
                 break;
             }
+            return;
+        }
+        if ("ascend".equals(System.getProperty("mtga.rig"))) {      // Ascend + emblems: you hold 9 Plains, Ocelot Pride (hand) and two 99-loyalty planeswalkers; the AI has 9 Plains + Ocelot Pride in play
+            for (int i = 0; i < 9; i++) rigAdd(p, "Plains", ZoneType.Battlefield, 0);
+            rigAdd(p, "Ocelot Pride", ZoneType.Hand, 0);
+            rigAdd(p, "Ajani, Sleeper Agent", ZoneType.Battlefield, 99);        // DMU: -6 emblem
+            rigAdd(p, "Sarkhan, the Dragonspeaker", ZoneType.Battlefield, 99);  // KTK: -6 emblem
+            for (int i = 0; i < 9; i++) rigAdd(opponent, "Plains", ZoneType.Battlefield, 0);
+            rigAdd(opponent, "Ocelot Pride", ZoneType.Battlefield, 0);
             return;
         }
         if ("menace".equals(System.getProperty("mtga.rig"))) {      // my 2 Bears vs the AI's Moonshadow (full 7/7 menace, ready to attack)

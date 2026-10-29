@@ -259,6 +259,26 @@ public final class CardDb {
         return out;
     }
 
+    /** The emblem's own ability ids of a card that says "You get an emblem with ..." (Abilities.HiddenAbilityIds of that ability); empty if none. */
+    public synchronized List<Integer> emblemAbilityIds(int grpId) {
+        List<Integer> out = new ArrayList<>();
+        try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(
+                "select a.HiddenAbilityIds from Abilities a join Localizations_enUS l on l.LocId = a.TextId "
+                        + "where a.Id = ? and l.Loc like 'You get an emblem%' limit 1")) {
+            for (Ability ab : abilities(grpId)) {
+                ps.setInt(1, ab.id());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next() || rs.getString(1) == null) continue;
+                    for (String part : rs.getString(1).split(",")) if (!part.isBlank()) out.add(Integer.parseInt(part.trim()));
+                }
+                if (!out.isEmpty()) break;
+            }
+        } catch (Exception e) {
+            System.out.println("[mtga] emblem ability lookup failed for " + grpId + ": " + e);
+        }
+        return out;
+    }
+
     /** Text of any ability id (modal children are not in a card's AbilityIds list). */
     public synchronized Ability ability(int abilityId) {
         try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(

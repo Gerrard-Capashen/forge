@@ -363,6 +363,11 @@ public final class StateSync {
             int face = db.linkedFace(db.grpId(c.getState(forge.card.CardStateName.Original).getName()));
             if (face != 0) return face;
         }
+        if (c.isEmblem()) {      // the client builds an emblem from the card that made it (objectSourceGrpId); 0 = nothing to show
+            Card src = visibleSource(c);
+            int sg = src == null || src == c ? 0 : grpIdOf(src);
+            return sg != 0 && !db.emblemAbilityIds(sg).isEmpty() ? sg : 0;
+        }
         if (c.isToken()) {
             return tokenGrp.computeIfAbsent(c.getId(), k -> {
                 SpellAbility src = c.getTokenSpawningAbility();
@@ -479,6 +484,25 @@ public final class StateSync {
                 Card src = pm.mana().getSourceCard();
                 pi.addManaPool(com.wizards.mtga.gre.ManaInfo.newBuilder().setManaId(pm.id()).setColor(manaColor(pm.mana().getColor())).setCount(1)
                         .setSrcInstanceId(src == null ? 0 : idInOrZero(src)));
+            }
+            Map<Integer, Integer> pc = new LinkedHashMap<>();       // energy, poison, experience, rad...: counters on the player
+            for (forge.game.card.CounterType ct : p.getCounters().elementSet()) {
+                int n = p.getCounters().count(ct);
+                int type = counterType(ct);
+                if (n > 0 && type != 0) pc.merge(type, n, Integer::sum);
+            }
+            if (!pc.isEmpty()) {
+                s.counters.put(seat, pc);
+                for (Map.Entry<Integer, Integer> e : pc.entrySet()) {
+                    s.persistent.put("counter:" + seat + ":" + e.getKey(), AnnotationInfo.newBuilder().setAffectorId(seat).addAffectedIds(seat)
+                            .addType(AnnotationType.AnnotationType_Counter)
+                            .addDetails(intDetail("count", e.getValue())).addDetails(intDetail("counter_type", e.getKey())));
+                }
+            }
+            if (p.hasBlessing()) {      // Ascend: the client draws the city's blessing emblem from this designation
+                s.persistent.put("blessing:" + seat, AnnotationInfo.newBuilder().setAffectorId(seat).addAffectedIds(seat)
+                        .addType(AnnotationType.AnnotationType_Designation)
+                        .addDetails(intDetail("DesignationType", com.wizards.mtga.gre.Designation.Designation_CitysBlessing_VALUE)));
             }
             s.players.put(seat, pi.build());
         }
@@ -653,7 +677,7 @@ public final class StateSync {
         ZoneInfo.Builder z = zoneHeader(t, seat, zid);
         boolean hidden = (t == ZoneType.Library) || (t == ZoneType.Hand && seat != HUMAN_SEAT);
         for (Card c : cards) {
-            if (c.isImmutable()) continue;       // Forge effect/emblem cards have no client representation
+            if (c.isImmutable() && !(c.isEmblem() && grpIdOf(c) != 0)) continue;       // Forge effect cards have no client representation; emblems do (built from the card that made them)
             int iid = track(s, c, zid);
             z.addObjectInstanceIds(iid);
             s.objs.put(iid, objectInfo(s, c, iid, zid, t, hidden && !revealed.contains(c.getId()) && !keptRevealed(c)));
@@ -738,12 +762,14 @@ public final class StateSync {
         int grp = grpIdOf(c);
         o.setGrpId(grp).setOverlayGrpId(grp);
         if (c.isFaceDown()) o.setIsFacedown(true);
+        if (c.isEmblem()) o.setType(GameObjectType.GameObjectType_Emblem).setObjectSourceGrpId(grp);
         int title = db.titleId(grp);
         if (title != 0) o.setName(title);
         // the client builds a card's abilities (rules text, activation buttons, loyalty) only from uniqueAbilities
         Set<Integer> printed = new HashSet<>();
         List<Integer> abilityIds = new ArrayList<>();
-        for (CardDb.Ability a : db.abilities(grp)) abilityIds.add(a.id());
+        if (c.isEmblem()) abilityIds.addAll(db.emblemAbilityIds(grp));      // the emblem's own text, not the planeswalker's
+        else for (CardDb.Ability a : db.abilities(grp)) abilityIds.add(a.id());
         if (abilityIds.isEmpty() && c.isLand()) abilityIds.addAll(AbilityMap.basicLandAbilities(c));      // intrinsic: not in the card DB
         else if (c.isLand() && t == ZoneType.Battlefield) {      // land types granted by an effect (Yavimaya, Cradle of Growth) add their mana ability
             forge.card.CardTypeView printedType = c.getState(forge.card.CardStateName.Original).getType();
@@ -1235,12 +1261,12 @@ public final class StateSync {
         }
         for (Map.Entry<Integer, Map<Integer, Integer>> e : s.counters.entrySet()) {
             Map<Integer, Integer> before = sentCounters.getOrDefault(e.getKey(), Map.of());
-            if (!sentObjs.containsKey(e.getKey())) continue;
+            if (!sentObjs.containsKey(e.getKey()) && !isSeat(e.getKey())) continue;
             for (Map.Entry<Integer, Integer> c : e.getValue().entrySet()) counterDelta(out, e.getKey(), c.getKey(), c.getValue() - before.getOrDefault(c.getKey(), 0));
             for (Map.Entry<Integer, Integer> c : before.entrySet()) if (!e.getValue().containsKey(c.getKey())) counterDelta(out, e.getKey(), c.getKey(), -c.getValue());
         }
         for (Map.Entry<Integer, Map<Integer, Integer>> e : sentCounters.entrySet()) {
-            if (s.counters.containsKey(e.getKey()) || !s.objs.containsKey(e.getKey())) continue;
+            if (s.counters.containsKey(e.getKey()) || (!s.objs.containsKey(e.getKey()) && !isSeat(e.getKey()))) continue;
             for (Map.Entry<Integer, Integer> c : e.getValue().entrySet()) counterDelta(out, e.getKey(), c.getKey(), -c.getValue());
         }
         for (PlayerInfo p : s.players.values()) {
@@ -1270,6 +1296,8 @@ public final class StateSync {
         for (IdChange ch : s.idChanges) if (ch.oldId() == id) return true;
         return false;
     }
+
+    private static boolean isSeat(int id) { return id == HUMAN_SEAT || id == AI_SEAT; }
 
     private void counterDelta(List<AnnotationInfo> out, int iid, int type, int delta) {
         if (delta == 0) return;
