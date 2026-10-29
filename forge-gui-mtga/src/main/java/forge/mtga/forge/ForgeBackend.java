@@ -778,6 +778,22 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("menace".equals(System.getProperty("mtga.rig"))) {      // my 2 Bears vs the AI's Moonshadow (full 7/7 menace, ready to attack)
+            for (Player pl : game.getPlayers()) {
+                String name = pl == p ? "Grizzly Bears" : "Moonshadow";
+                int n = pl == p ? 2 : 1;
+                for (Card c : new ArrayList<>(pl.getCardsIn(ZoneType.Library))) {
+                    if (n == 0) break;
+                    if (!c.getName().equals(name)) continue;
+                    n--;
+                    game.getAction().moveToPlay(c, null, forge.game.ability.AbilityKey.newMap());
+                    c.setSickness(false);
+                    if (pl != p) c.clearCounters();
+                    System.out.println("[mtga] rig: battlefield " + name + " instance " + iid(c));
+                }
+            }
+            return;
+        }
         if ("block".equals(System.getProperty("mtga.rig"))) {      // my Elves vs the AI's Bears, both already in play
             for (Player pl : game.getPlayers()) {
                 String name = pl == p ? "Llanowar Elves" : "Grizzly Bears";
@@ -1700,7 +1716,30 @@ public final class ForgeBackend implements GameBackend {
             if (chosen != null) bb.addSelectedAttackerInstanceIds(iid(chosen));
             req.getDeclareBlockersReqBuilder().addBlockers(bb);
         }
+        // the client lets the pick stand but greys out Submit (warning icon + tooltip) while a block is illegal, like the GRE
+        Map<Card, Integer> perAttacker = new HashMap<>();
+        for (Card a : assignment.values()) perAttacker.merge(a, 1, Integer::sum);
+        for (Map.Entry<Card, Integer> e : perAttacker.entrySet()) {
+            if (!forge.game.combat.CombatUtil.canAttackerBeBlockedWithAmount(e.getKey(), e.getValue(), game.getCombat().getDefenderPlayerByAttacker(e.getKey()))) {
+                req.getDeclareBlockersReqBuilder().addBlockWarnings(com.wizards.mtga.gre.BlockWarning.newBuilder()
+                        .setInstanceId(iid(e.getKey())).setType(com.wizards.mtga.gre.BlockWarningType.BlockWarningType_InsufficientBlockers)
+                        .setWarningPromptId(117));
+            }
+        }
+        if (assignment.size() == 1) {
+            Card only = assignment.keySet().iterator().next();
+            if (only.hasKeyword("CARDNAME can't attack or block alone.") || only.hasKeyword("CARDNAME can't block alone.")) {
+                req.getDeclareBlockersReqBuilder().addBlockWarnings(com.wizards.mtga.gre.BlockWarning.newBuilder()
+                        .setInstanceId(iid(only)).setType(com.wizards.mtga.gre.BlockWarningType.BlockWarningType_CannotBlockAlone)
+                        .setWarningPromptId(119));
+            }
+        }
         return req;
+    }
+
+    private static void applyAssignment(forge.game.combat.Combat combat, List<Card> blockers, Map<Card, Card> assignment) {
+        for (Card b : blockers) combat.undoBlockingAssignment(b);
+        for (Map.Entry<Card, Card> e : assignment.entrySet()) combat.addBlocker(e.getValue(), e.getKey());
     }
 
     void askBlockers(Player me, forge.game.combat.Combat combat) {
@@ -1730,13 +1769,20 @@ public final class ForgeBackend implements GameBackend {
                         if (attacker != null && attackers.contains(attacker)) assignment.put(blocker, attacker);
                     }
                 }
+                // the picks live in the combat while choosing: the state diff makes the client space the blockers and draw the lines
+                applyAssignment(combat, blockers, assignment);
                 // the client locks its UI until the server echoes the selection back
                 sendRequest(blockersReq(blockers, attackers, assignment));
                 continue;
             }
-            break;
+            // menace, "can't block alone", lures...: an illegal set of blocks is undone and the client is asked again
+            String illegal = forge.game.combat.CombatUtil.validateBlocks(combat, me);
+            if (illegal == null) break;
+            System.out.println("[mtga] illegal blocks rejected: " + illegal);
+            assignment.clear();
+            applyAssignment(combat, blockers, assignment);
+            sendRequest(blockersReq(blockers, attackers, assignment));
         }
-        for (Map.Entry<Card, Card> e : assignment.entrySet()) combat.addBlocker(e.getValue(), e.getKey());
         session.sendGre(req(GREMessageType.GREMessageType_SubmitBlockersResp));
     }
 
@@ -2431,7 +2477,7 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public Player chooseStartingPlayer(boolean isFirstGame) {
-            if ("block".equals(System.getProperty("mtga.rig"))) return opponent;      // test rig: let the AI attack first
+            if ("block".equals(System.getProperty("mtga.rig")) || "menace".equals(System.getProperty("mtga.rig"))) return opponent;      // test rig: let the AI attack first
             if (isFirstGame && room.forcedStarter() != null) return room.forcedStarter();      // a challenge's "play first" setting
             if (!isFirstGame && room.gamesToWin() > 1) return askStartingPlayer();      // best of three: the loser chooses
             if ("playtest".equals(System.getProperty("mtga.deck"))) return player;      // solo sandbox: you start

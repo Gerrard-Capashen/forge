@@ -288,6 +288,15 @@ public final class ForgeMtgaMain {
             red.put("Grizzly Bears", 24);
         }
 
+        if ("menace".equals(rig)) {      // my 2 Grizzly Bears vs the AI's Moonshadow (menace), the AI attacks first
+            green.clear();
+            green.put("Forest", 16);
+            green.put("Grizzly Bears", 24);
+            red.clear();
+            red.put("Swamp", 16);
+            red.put("Moonshadow", 24);
+        }
+
         return new Map[] {green, red};
     }
 }

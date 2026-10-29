@@ -801,6 +801,10 @@ public final class StateSync {
                 forge.game.GameEntity def = game.getCombat().getDefenderByAttacker(c);
                 int target = def instanceof Player dp ? seatOf(dp) : def instanceof Card dc ? idIn(s, dc) : seatOf(c.getController()) == HUMAN_SEAT ? AI_SEAT : HUMAN_SEAT;
                 o.getAttackInfoBuilder().setTargetId(target);
+                // the client spaces the blockers, draws the combat line and highlights from the attacker's ordered blockers
+                for (Card b : game.getCombat().getBlockers(c)) {
+                    o.getAttackInfoBuilder().addOrderedBlockers(com.wizards.mtga.gre.OrderedDamageAssignment.newBuilder().setInstanceId(idIn(s, b)));
+                }
             }
             if (game.getCombat() != null && game.getCombat().isBlocking(c)) {
                 o.setBlockState(com.wizards.mtga.gre.BlockState.BlockState_Blocking);
