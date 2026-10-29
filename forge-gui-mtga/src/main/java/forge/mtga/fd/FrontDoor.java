@@ -1316,7 +1316,10 @@ public final class FrontDoor {
                 .setCardMetadataInfo(CardMetadataInfo.getDefaultInstance())
                 .setServerTimeInternal(Timestamp.newBuilder().setSeconds(now / 1000).setNanos((int) (now % 1000) * 1_000_000));
         // The decks MUST come with StartHook: the client initializes its deck cache from this list and considers it
-        // fresh (it only calls DeckGetDeckSummariesV3 after something marks it dirty).
+        // fresh (it only calls DeckGetDeckSummariesV3 after something marks it dirty). The cache version must change with
+        // the decks: the client re-runs StartHook after a match and keeps its cached list when the version is unchanged,
+        // which hid every deck saved or imported since the first StartHook until the client restarted.
+        int version = decks.version();
         int n = 0;
         for (JsonObject d : decks.all()) {
             try {
@@ -1328,7 +1331,7 @@ public final class FrontDoor {
                 System.out.println("[mtga] FD: skipping unreadable deck " + d.get("Summary") + ": " + e);
             }
         }
-        b.setDeckSummariesCacheVersion(1).setDecksCacheVersion(1);
+        b.setDeckSummariesCacheVersion(version).setDecksCacheVersion(version);
         // the draft events' prize for winning out (an Event-type token: the rewards panel shows it with the EventToken model)
         b.setTokenDefinitionsCacheVersion(1).addTokenDefinitions(TokenDefinition.newBuilder().setTokenId(DraftEvents.PRIZE_TOKEN)
                 .setExpirationDateInternal(Timestamp.newBuilder().setSeconds(4070908800L))   // 2099: the client hides expired tokens

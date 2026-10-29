@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Player decks as JSON files ({@code <dir>/<deckId>.json} = {"Summary": DTO_DeckSummaryV3, "Deck": Deck}), stored
@@ -18,6 +19,9 @@ import java.util.List;
  */
 public final class DeckStore {
     private final File dir;
+    // StartHook's deck cache version: the client reuses the decks it cached while the version it got last equals the one sent now,
+    // so every change bumps it (seeded from the clock so a restarted server never repeats the version of an earlier run)
+    private final AtomicInteger version = new AtomicInteger((int) (System.currentTimeMillis() / 1000L));
 
     public DeckStore(File dir) {
         this.dir = dir;
@@ -25,6 +29,8 @@ public final class DeckStore {
     }
 
     public File dir() { return dir; }
+
+    public int version() { return version.get(); }
 
     public synchronized List<JsonObject> all() {
         File[] files = dir.listFiles((d, n) -> n.endsWith(".json"));
@@ -48,11 +54,14 @@ public final class DeckStore {
         o.add("Summary", summary);
         o.add("Deck", deck);
         Files.writeString(file(deckId).toPath(), o.toString(), StandardCharsets.UTF_8);
+        version.incrementAndGet();
     }
 
     public synchronized boolean delete(String deckId) {
         File f = file(deckId);
-        return f.isFile() && f.delete();
+        boolean deleted = f.isFile() && f.delete();
+        if (deleted) version.incrementAndGet();
+        return deleted;
     }
 
     private File file(String deckId) {
