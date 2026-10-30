@@ -974,6 +974,11 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("nyk".equals(rig)) {      // Nykthos autotap: in play Nykthos, Forest x3, Plains, Gigantosaurus x2 (devotion to green 10); hand: Craterhoof Behemoth ({5}{G}{G}{G}: only affordable through Nykthos)
+            for (String name : List.of("Nykthos, Shrine to Nyx", "Forest", "Forest", "Forest", "Plains", "Gigantosaurus", "Gigantosaurus")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            rigAdd(p, "Craterhoof Behemoth", ZoneType.Hand, 0);
+            return;
+        }
         if ("pte".equals(rig)) {      // playtest deck: explore + blight. In play: Forest x2, Overgrown Tomb, Watery Grave, Llanowar Elves; hand: Jadelight Ranger, Requiting Hex
             for (String name : List.of("Forest", "Forest", "Overgrown Tomb", "Watery Grave", "Llanowar Elves", "Jadelight Ranger", "Requiting Hex")) {
                 Card pick = null;
@@ -1564,6 +1569,10 @@ public final class ForgeBackend implements GameBackend {
         for (SpellAbility sa : playable) {
             Card host = sa.getHostCard();
             boolean canAfford = sa.isLandAbility() || affordable(sa, me);
+            if (!canAfford && sa.getPayCosts() != null && sa.getPayCosts().hasManaCost() && hasDevotionSource(me)) {
+                autoTap(sa, me, new ArrayList<>(), new java.util.IdentityHashMap<>());      // Forge's payer does not know Nykthos' devotion mana
+                canAfford = lastAutoTapDevotion;
+            }
             boolean companion = sync.isCompanionMove(sa);
             boolean elsewhere = !companion && !host.isInZone(ZoneType.Hand) && !host.isInZone(ZoneType.Battlefield);
             if (!canAfford && !elsewhere) continue;
@@ -2138,12 +2147,121 @@ public final class ForgeBackend implements GameBackend {
     }
 
     com.wizards.mtga.gre.AutoTapSolution autoTap(SpellAbility sa, Player me, List<SpellAbility> chosenSources, Map<SpellAbility, String> colors) {
+        lastAutoTapDevotion = false;
+        com.wizards.mtga.gre.AutoTapSolution base = autoTapCore(sa, me, chosenSources, colors, java.util.Set.of(), 0, 0);
+        boolean baseOk = lastAutoTapComplete;
+        int baseTaps = base == null ? 0 : base.getAutoTapActionsCount();
+        forge.card.mana.ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
+        if (cost == null || cost.isNoCost() || cost.getCMC() == 0) return base;
+        boolean tapsHost = sa.getPayCosts().hasTapCost();
+        // Nykthos, Shrine to Nyx: {2},{T}: add mana of one color equal to your devotion to it. Worth it when it pays the cost with fewer permanents
+        // than tapping the lands normally (or pays what they cannot). The {2} comes from floating mana of lands tapped first.
+        for (Card n : me.getCardsIn(ZoneType.Battlefield)) {
+            if (n.isTapped() || (tapsHost && n == sa.getHostCard())) continue;
+            SpellAbility dev = devotionAbility(n);
+            if (dev == null) continue;
+            int fee = dev.getPayCosts().getTotalMana().getCMC();
+            List<Card> payers = new ArrayList<>();
+            for (Card c : me.getCardsIn(ZoneType.Battlefield)) {
+                if (c == n || c.isTapped() || (tapsHost && c == sa.getHostCard()) || freeManaAbility(c, me, sa) == null) continue;
+                payers.add(c);
+            }
+            if (payers.size() < fee) continue;
+            payers.sort(java.util.Comparator.<Card>comparingInt(c -> neededColor(c, cost, me, sa) ? 1 : 0)
+                    .thenComparingInt(c -> colorCount(java.util.List.of(freeManaAbility(c, me, sa)))));
+            List<Card> paying = new ArrayList<>(payers.subList(0, fee));
+            java.util.Set<Card> excluded = new java.util.HashSet<>(paying);
+            excluded.add(n);
+            for (int i = 0; i < 5; i++) {
+                int d = StateSync.devotionTo(me, (byte) COLOR_MASKS[i]);
+                if (d < 1) continue;
+                List<SpellAbility> chosen2 = new ArrayList<>();
+                Map<SpellAbility, String> colors2 = new java.util.IdentityHashMap<>();
+                com.wizards.mtga.gre.AutoTapSolution alt = autoTapCore(sa, me, chosen2, colors2, excluded, COLOR_MASKS[i], d);
+                if (!lastAutoTapComplete) continue;
+                int total = (alt == null ? 0 : alt.getAutoTapActionsCount()) + fee + 1;
+                if (baseOk && total >= baseTaps) continue;
+                com.wizards.mtga.gre.AutoTapSolution.Builder out = com.wizards.mtga.gre.AutoTapSolution.newBuilder();
+                chosenSources.clear();
+                colors.clear();
+                for (Card c : paying) {
+                    SpellAbility ma = freeManaAbility(c, me, sa);
+                    out.addAutoTapActions(tapAction(c, ma, com.wizards.mtga.gre.ManaColor.ManaColor_Generic));
+                    chosenSources.add(ma);
+                }
+                com.wizards.mtga.gre.AutoTapAction.Builder da = tapAction(n, dev, COLOR_ENUMS[i]).toBuilder();
+                da.getManaPaymentOptionBuilder().getManaBuilder(0).setCount(d);
+                out.addAutoTapActions(da);
+                chosenSources.add(dev);
+                colors.put(dev, COLOR_CODES[i]);
+                if (alt != null) out.addAllAutoTapActions(alt.getAutoTapActionsList());
+                chosenSources.addAll(chosen2);
+                colors.putAll(colors2);
+                lastAutoTapDevotion = true;
+                System.out.println("[mtga] autotap for " + sa + " uses " + n + " for " + d + " " + COLOR_CODES[i] + " with " + paying);
+                return out.build();
+            }
+        }
+        return base;
+    }
+
+    private boolean lastAutoTapComplete, lastAutoTapDevotion;
+
+    private static boolean hasDevotionSource(Player me) {
+        for (Card c : me.getCardsIn(ZoneType.Battlefield)) if (!c.isTapped() && devotionAbility(c) != null) return true;
+        return false;
+    }
+
+    /** The devotion mana ability of a permanent like Nykthos ({N},{T}: choose a color, add mana equal to your devotion to it), else null. */
+    private static SpellAbility devotionAbility(Card c) {
+        for (SpellAbility s : c.getSpellAbilities()) {
+            if (s.getApi() != forge.game.ability.ApiType.ChooseColor || s.getPayCosts() == null || !s.getPayCosts().hasTapCost()) continue;
+            forge.card.mana.ManaCost m = s.getPayCosts().getTotalMana();
+            if (m == null || m.getCMC() != m.getGenericCost() || m.getCMC() == 0) continue;
+            SpellAbility sub = s.getSubAbility();
+            if (sub == null || sub.getApi() != forge.game.ability.ApiType.Mana || !"Chosen".equals(sub.getParam("Produced"))) continue;
+            String amount = sub.getParam("Amount");
+            String x = amount == null ? null : c.getSVar(amount);
+            if (x != null && x.startsWith("Count$Devotion")) return s;
+        }
+        return null;
+    }
+
+    /** A mana ability of the card that costs nothing and adds mana now (what the normal autotap taps), else null. */
+    private SpellAbility freeManaAbility(Card c, Player me, SpellAbility sa) {
+        for (SpellAbility ma : c.getManaAbilities()) {
+            ma.setActivatingPlayer(me);
+            boolean allowed = ma.getManaPart() == null || ma.getManaPart().meetsManaRestrictions(sa);
+            if (allowed && ma.canPlay() && producesMana(ma) && (ma.getPayCosts() == null || ma.getPayCosts().getTotalMana().getCMC() == 0)) return ma;
+        }
+        return null;
+    }
+
+    /** Whether the card makes a color the cost asks for (it should stay out of the generic fee). */
+    private boolean neededColor(Card c, forge.card.mana.ManaCost cost, Player me, SpellAbility sa) {
+        SpellAbility ma = freeManaAbility(c, me, sa);
+        if (ma == null || ma.getManaPart() == null) return false;
+        for (forge.card.mana.ManaCostShard shard : cost) {
+            for (int i = 0; i < 5; i++) {
+                if ((shard.getColorMask() & COLOR_MASKS[i]) != 0 && ma.getManaPart().canProduce(COLOR_CODES[i], ma)) return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The greedy solution. {@code excluded} permanents are not used as sources; {@code creditAmount} mana of {@code creditMask}'s color is
+     * assumed to be available already (Nykthos' devotion mana): it pays shards of that color first, then generic.
+     */
+    private com.wizards.mtga.gre.AutoTapSolution autoTapCore(SpellAbility sa, Player me, List<SpellAbility> chosenSources, Map<SpellAbility, String> colors,
+                                                           java.util.Set<Card> excluded, int creditMask, int creditAmount) {
+        lastAutoTapComplete = false;
         forge.card.mana.ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
         if (cost == null || cost.isNoCost() || cost.getCMC() == 0) return null;
         boolean tapsHost = sa.getPayCosts().hasTapCost();
         Map<Card, List<SpellAbility>> sources = new LinkedHashMap<>();      // untapped source -> its free mana abilities
         for (Card c : me.getCardsIn(ZoneType.Battlefield)) {
-            if (c.isTapped() || (tapsHost && c == sa.getHostCard())) continue;
+            if (c.isTapped() || (tapsHost && c == sa.getHostCard()) || excluded.contains(c)) continue;
             for (SpellAbility ma : c.getManaAbilities()) {
                 ma.setActivatingPlayer(me);
                 // restricted mana (Eldrazi Temple's {C}{C}: colorless Eldrazi only) is only a source for what it may pay
@@ -2164,6 +2282,13 @@ public final class ForgeBackend implements GameBackend {
         List<StateSync.PoolMana> pool = new ArrayList<>();
         for (StateSync.PoolMana pm : sync.pool(me)) if (pm.mana().meetsManaRestrictions(sa)) pool.add(pm);
         int generic = cost.getGenericCost();
+        int credit = creditAmount;
+        for (java.util.Iterator<forge.card.mana.ManaCostShard> it = colored.iterator(); credit > 0 && it.hasNext(); ) {
+            if ((it.next().getColorMask() & creditMask) == 0) continue;
+            it.remove();
+            credit--;
+        }
+        generic = Math.max(0, generic - credit);
         for (java.util.Iterator<forge.card.mana.ManaCostShard> it = colored.iterator(); it.hasNext(); ) {      // floating mana pays first
             forge.card.mana.ManaCostShard shard = it.next();
             for (StateSync.PoolMana pm : pool) {
@@ -2248,6 +2373,7 @@ public final class ForgeBackend implements GameBackend {
         // a preview that does not cover the cost is only shown: pre-tapping it left Forge's payer with nothing
         // untapped (Sire of Seven Deaths tapped 4 for {7} and was not cast), so Forge picks the sources itself
         if (missing > 0 || colorless > 0 || generic > 0) chosenSources.clear();
+        else lastAutoTapComplete = true;
         if (taps.isEmpty()) return null;
         return com.wizards.mtga.gre.AutoTapSolution.newBuilder().addAllAutoTapActions(taps).build();
     }
@@ -2476,6 +2602,9 @@ public final class ForgeBackend implements GameBackend {
 
         private boolean live() { return introSent && session != null; }
 
+        /** The color the previewed Nykthos activation was planned with. */
+        private byte forcedColor;
+
         @Override
         public forge.game.cost.CostDecisionMakerBase getCostDecisionMaker(Player p, SpellAbility ability, boolean effect, String prompt) {
             return live() && p == human ? new MtgaCostDecision(p, ability, effect) : super.getCostDecisionMaker(p, ability, effect, prompt);
@@ -2572,8 +2701,14 @@ public final class ForgeBackend implements GameBackend {
                         ma.getManaPart().clearExpressChoice();
                         String color = tapColors.get(ma);
                         if (color != null) ma.getManaPart().setExpressChoice(color);
+                    } else if (ma.getApi() == forge.game.ability.ApiType.ChooseColor && tapColors.get(ma) != null) {
+                        forcedColor = forge.card.MagicColor.fromName(tapColors.get(ma));
                     }
-                    forge.game.player.PlaySpellAbility.playSpellAbility(this, player, ma);
+                    try {
+                        forge.game.player.PlaySpellAbility.playSpellAbility(this, player, ma);
+                    } finally {
+                        forcedColor = 0;
+                    }
                 }
             }
             if (sa.isSpell() && live()) {
@@ -2740,6 +2875,7 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public byte chooseColor(String message, SpellAbility sa, forge.card.ColorSet colors) {
+            if (forcedColor != 0 && colors.hasAnyColor(forcedColor)) return forcedColor;      // Nykthos from the autotap preview: no question
             if (!live() || colors.countColors() < 2) return super.chooseColor(message, sa, colors);
             List<Byte> c = askColors(sa == null ? null : sa.getHostCard(), colors, false, 1, 1);
             return c.isEmpty() ? super.chooseColor(message, sa, colors) : c.get(0);
@@ -2754,6 +2890,7 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public forge.card.ColorSet chooseColors(String message, SpellAbility sa, int min, int max, forge.card.ColorSet options) {
+            if (forcedColor != 0 && min <= 1 && options.hasAnyColor(forcedColor)) return forge.card.ColorSet.fromMask(forcedColor);      // Nykthos from the autotap preview
             if (!live() || options.countColors() <= min) return super.chooseColors(message, sa, min, max, options);
             List<Byte> c = askColors(sa == null ? null : sa.getHostCard(), options, false, min, Math.min(max, options.countColors()));
             if (c.size() < min) return super.chooseColors(message, sa, min, max, options);

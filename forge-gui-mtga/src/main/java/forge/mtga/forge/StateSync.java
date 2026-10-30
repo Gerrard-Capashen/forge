@@ -100,6 +100,8 @@ public final class StateSync {
 
     // ---- hints from Forge events, consumed by the next diff
     private final List<AnnotationInfo> earlyAnns = new ArrayList<>();
+    /** Forge ids of the permanents damaged since the last diff: their death is SBA_Damage / SBA_ZeroLoyalty, which the client folds into the combat frame. */
+    private final Set<Integer> damagedCards = new HashSet<>();
     private final List<AnnotationInfo> lateAnns = new ArrayList<>();
     private final Map<Integer, String> categoryHint = new HashMap<>();
     private final Map<Integer, List<AnnotationInfo>> playerDamage = new HashMap<>();
@@ -308,6 +310,7 @@ public final class StateSync {
             if (e.card() == null) return;
             Integer victim = iidByKey.get("c" + e.card().getId());
             if (victim == null) return;
+            damagedCards.add(e.card().getId());
             AnnotationInfo.Builder a = ann(AnnotationType.AnnotationType_DamageDealt, sourceIid(e.source()), victim);
             a.addDetails(intDetail("damage", e.amount()));
             a.addDetails(intDetail("type", inCombatDamage() ? 1 : 2));
@@ -854,6 +857,8 @@ public final class StateSync {
                             .addDetails(intDetail("count", e.getValue())).addDetails(intDetail("counter_type", e.getKey())));
                 }
             }
+            AnnotationInfo.Builder dev = devotionWord(c, iid);
+            if (dev != null) s.persistent.put("devotion:" + iid, dev);
             if (c.isRoom()) {       // which doors are open: the client marks the locked half of the card from these
                 for (CardStateName door : c.getUnlockedRooms()) {
                     int type = door == CardStateName.LeftSplit ? com.wizards.mtga.gre.Designation.Designation_LeftUnlocked_VALUE
@@ -865,6 +870,55 @@ public final class StateSync {
             }
         }
         return o.build();
+    }
+
+    /**
+     * The "Devotion" ability word the client's badge reads (an icon with the count on the card; the abilities carry the DevotionTo* terms in the
+     * card DB, the badge tree matches them and then looks up this word). {@code value} is the devotion to the card's color(s), or the highest one
+     * for "a color of your choice" (Nykthos); {@code threshold} is the number a static ability compares it with (Purphoros: less than 5).
+     * Null for a card that does not count devotion.
+     */
+    private AnnotationInfo.Builder devotionWord(Card c, int iid) {
+        String devSvar = null, spec = null;
+        for (Map.Entry<String, String> e : c.getSVars().entrySet()) {
+            if (e.getValue() != null && e.getValue().startsWith("Count$Devotion")) { devSvar = e.getKey(); spec = e.getValue().substring("Count$".length()); break; }
+        }
+        if (spec == null) return null;
+        String[] parts = spec.split("\\.");
+        Player ctrl = c.getController();
+        if (ctrl == null) return null;
+        int value;
+        if (parts.length > 1 && parts[1].contains("Chosen") || parts.length < 2) {
+            value = 0;
+            for (byte col : forge.card.MagicColor.WUBRG) value = Math.max(value, devotionTo(ctrl, col));
+        } else {
+            byte mask = forge.card.mana.ManaAtom.fromName(parts[1]);
+            if (parts[0].equals("DevotionDual") && parts.length > 2) mask |= forge.card.mana.ManaAtom.fromName(parts[2]);
+            value = devotionTo(ctrl, mask);
+        }
+        AnnotationInfo.Builder a = AnnotationInfo.newBuilder().setAffectorId(iid).addAffectedIds(iid)
+                .addType(AnnotationType.AnnotationType_AbilityWordActive)
+                .addDetails(KeyValuePairInfo.newBuilder().setKey("AbilityWordName").setType(KeyValuePairValueType.KeyValuePairValueType_string).addValueString("Devotion"))
+                .addDetails(intDetail("value", value));
+        for (forge.game.staticability.StaticAbility st : c.getStaticAbilities()) {
+            if (!devSvar.equals(st.getParam("CheckSVar"))) continue;
+            String cmp = st.getParamOrDefault("SVarCompare", "");
+            if (cmp.length() > 2 && Character.isDigit(cmp.charAt(2))) {
+                int n = Integer.parseInt(cmp.substring(2)), op = cmp.startsWith("GT") || cmp.startsWith("LE") ? 1 : 0;
+                a.addDetails(intDetail("threshold", n + op));
+                break;
+            }
+        }
+        return a;
+    }
+
+    /** Mana symbols of the given colors (a mask) in the mana costs of the player's permanents, as Count$Devotion counts them. */
+    static int devotionTo(Player p, byte colorMask) {
+        int n = p.getDevotionMod();
+        for (Card c0 : p.getCardsIn(ZoneType.Battlefield)) {
+            for (forge.card.mana.ManaCostShard sh : c0.getManaCost()) if (sh.isColor(colorMask)) n++;
+        }
+        return n;
     }
 
     /**
@@ -1077,6 +1131,7 @@ public final class StateSync {
     private void clearHints() {
         pendingActions.clear();
         earlyAnns.clear();
+        damagedCards.clear();
         lateAnns.clear();
         playerDamage.clear();
         lifeAffector.clear();
@@ -1232,6 +1287,7 @@ public final class StateSync {
             // move of the same card (a ninjutsu return showed up as "Countered")
             if (("Resolve".equals(cat) || "Countered".equals(cat)) && ch.srcZone() != Z_STACK) cat = null;
             if (cat == null) cat = categoryOf(ch.srcZone(), ch.dstZone(), now);
+            if ("Destroy".equals(cat) && damagedCards.contains(ch.card().getId())) cat = ch.card().isPlaneswalker() ? "ZeroLoyalty" : "Damage";
             int affector = now == null ? 0 : now.getControllerSeatId();
             out.add(ann(AnnotationType.AnnotationType_ZoneTransfer, affector, ch.newId())
                     .addDetails(intDetail("zone_src", ch.srcZone())).addDetails(intDetail("zone_dest", ch.dstZone()))
@@ -1266,8 +1322,14 @@ public final class StateSync {
             for (Map.Entry<Integer, Integer> c : before.entrySet()) if (!e.getValue().containsKey(c.getKey())) counterDelta(out, e.getKey(), c.getKey(), -c.getValue());
         }
         for (Map.Entry<Integer, Map<Integer, Integer>> e : sentCounters.entrySet()) {
-            if (s.counters.containsKey(e.getKey()) || (!s.objs.containsKey(e.getKey()) && !isSeat(e.getKey()))) continue;
-            for (Map.Entry<Integer, Integer> c : e.getValue().entrySet()) counterDelta(out, e.getKey(), c.getKey(), -c.getValue());
+            if (s.counters.containsKey(e.getKey())) continue;
+            // a planeswalker that died to damage: the client folds its ZeroLoyalty move into the combat frame only after a loyalty removal on the old id
+            boolean diedPw = !s.objs.containsKey(e.getKey()) && isOldIdOfMove(s, e.getKey());
+            if (!s.objs.containsKey(e.getKey()) && !isSeat(e.getKey()) && !diedPw) continue;
+            for (Map.Entry<Integer, Integer> c : e.getValue().entrySet()) {
+                if (diedPw && c.getKey() != com.wizards.mtga.gre.CounterType.CounterType_Loyalty_VALUE) continue;
+                counterDelta(out, e.getKey(), c.getKey(), -c.getValue());
+            }
         }
         for (PlayerInfo p : s.players.values()) {
             PlayerInfo old = sentPlayers.get(p.getSystemSeatNumber());
