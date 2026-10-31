@@ -1090,7 +1090,8 @@ public final class SelfPlay {
                 }
             }
             for (AnnotationInfo p : persistent.values()) {
-                boolean attachment = p.getType(0) == AnnotationType.AnnotationType_Attachment || p.getType(0) == AnnotationType.AnnotationType_Designation;      // a player designation (companion) names the seat
+                boolean attachment = p.getType(0) == AnnotationType.AnnotationType_Attachment || p.getType(0) == AnnotationType.AnnotationType_Designation
+                        || p.getType(0) == AnnotationType.AnnotationType_Counter;      // a player designation (companion) names the seat; a player's counters (rad, energy, poison) sit on it
                 for (int id : p.getAffectedIdsList()) {
                     if (!objs.containsKey(id) && !(attachment && id <= 2)) problem("persistent annotation on missing object " + p.getType(0));      // a curse is attached to a player
                 }
@@ -1205,7 +1206,7 @@ public final class SelfPlay {
                         if (t == AnnotationType.AnnotationType_TokenDeleted) for (int id : a.getAffectedIdsList()) tokenDeleted.merge(debugName(id), 1, Integer::sum);
                     }
                     case AnnotationType_CounterAdded, AnnotationType_CounterRemoved -> {
-                        if (!oldObjs.containsKey(a.getAffectedIds(0))) problem(t + " on object not in old state");
+                        if (a.getAffectedIds(0) > 2 && !oldObjs.containsKey(a.getAffectedIds(0))) problem(t + " on object not in old state");      // a player (seat 1 or 2) has rad/energy/poison counters
                     }
                     case AnnotationType_ResolutionStart, AnnotationType_ResolutionComplete -> {
                         int id = a.getAffectorId();

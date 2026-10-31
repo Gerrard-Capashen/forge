@@ -713,6 +713,7 @@ public final class StateSync {
                 s.objs.put(iid, objectInfo(s, host, iid, Z_STACK, ZoneType.Stack, false));
                 continue;
             }
+            if (isRuleTrigger(host)) continue;       // the client has no ability for it: its effects show as life, counters and mills
             String key = "s" + si.getId();
             s.liveStack.add(key);
             Integer iid = iidByKey.get(key);
@@ -1008,6 +1009,14 @@ public final class StateSync {
     /** Stable per (object, ability) id for GameObjectInfo.uniqueAbilities (the client keys ability instances by it). */
     private int uniqueAbilityId(int iid, int abilityGrp) {
         return uniqueAbilityIds.computeIfAbsent(((long) iid << 32) | abilityGrp, k -> nextUniqueAbility++);
+    }
+
+    /**
+     * A trigger of a Forge-only effect card (the command zone's Radiation, "Max Speed!"...): an immutable card the client has no card for,
+     * so its trigger has no ability to draw. Arena runs these as rules; their results show as life, counter and zone changes.
+     */
+    private boolean isRuleTrigger(Card host) {
+        return host != null && host.isImmutable() && !host.isEmblem() && grpIdOf(host) == 0;
     }
 
     private GameObjectInfo abilityInfo(SpellAbilityStackInstance si, int iid, int parent) {
