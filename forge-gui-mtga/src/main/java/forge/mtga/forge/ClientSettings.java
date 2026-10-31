@@ -19,6 +19,12 @@ import java.util.Set;
 public final class ClientSettings {
     private final Set<StopType> myStops = EnumSet.of(StopType.StopType_PrecombatMainPhase, StopType.StopType_PostcombatMainPhase);
     private final Set<StopType> opponentStops = EnumSet.noneOf(StopType.class);
+    /** One-shot stops from a click on the phase ladder (SettingsMessage.transientStops): each is dropped once its step is reached. */
+    private final Set<StopType> myTransient = EnumSet.noneOf(StopType.class);
+    private final Set<StopType> opponentTransient = EnumSet.noneOf(StopType.class);
+    private int transientTurn;           // the turn and step where a transient stop was last taken: it holds for that whole step
+    private PhaseType transientPhase;
+    private boolean transientSpent;
     private AutoPassOption autoPass = AutoPassOption.AutoPassOption_None;          // this turn's option (None/Clear = unset)
     private AutoPassOption defaultAutoPass = AutoPassOption.AutoPassOption_None;
     private AutoPassOption stackAutoPass = AutoPassOption.AutoPassOption_None;
@@ -40,16 +46,25 @@ public final class ClientSettings {
         if (s.getClearAllStops() == SettingStatus.SettingStatus_Set) {
             myStops.clear();
             opponentStops.clear();
+            myTransient.clear();
+            opponentTransient.clear();
         }
-        for (Stop st : s.getStopsList()) {
-            Set<StopType> target = st.getAppliesTo() == SettingScope.SettingScope_Opponents ? opponentStops : myStops;
-            if (st.getStatus() == SettingStatus.SettingStatus_Set) target.add(st.getStopType());
-            else if (st.getStatus() == SettingStatus.SettingStatus_Clear) target.remove(st.getStopType());
-        }
+        applyStops(s.getStopsList(), myStops, opponentStops);
+        applyStops(s.getTransientStopsList(), myTransient, opponentTransient);
         if (s.getAutoPassOption() != AutoPassOption.AutoPassOption_None) autoPass = s.getAutoPassOption();
         if (s.getDefaultAutoPassOption() != AutoPassOption.AutoPassOption_None) defaultAutoPass = s.getDefaultAutoPassOption();
         if (s.getStackAutoPassOption() != AutoPassOption.AutoPassOption_None) stackAutoPass = s.getStackAutoPassOption();
         if (s.getManaSelectionType() != ManaSelectionType.ManaSelectionType_None) manaSelection = s.getManaSelectionType();
+    }
+
+    private static void applyStops(java.util.List<Stop> stops, Set<StopType> mine, Set<StopType> theirs) {
+        for (Stop st : stops) {
+            boolean opp = st.getAppliesTo() == SettingScope.SettingScope_Opponents, any = st.getAppliesTo() == SettingScope.SettingScope_AnyPlayer;
+            for (Set<StopType> target : any ? java.util.List.of(mine, theirs) : java.util.List.of(opp ? theirs : mine)) {
+                if (st.getStatus() == SettingStatus.SettingStatus_Set) target.add(st.getStopType());
+                else if (st.getStatus() == SettingStatus.SettingStatus_Clear) target.remove(st.getStopType());
+            }
+        }
     }
 
     private AutoPassOption turnOption() {
@@ -79,11 +94,34 @@ public final class ClientSettings {
         return t != null && (myTurn ? myStops : opponentStops).contains(t);
     }
 
+    /**
+     * Is there a transient stop at this step of this turn? It holds for the whole step it was reached in (the player
+     * may act and get priority back there) and is then spent; {@link #transientSpent()} says the client must be told.
+     */
+    public synchronized boolean transientStopAt(PhaseType phase, boolean myTurn, int turn) {
+        if (turn == transientTurn && phase == transientPhase) return true;
+        StopType t = stopOf(phase);
+        if (t == null || !(myTurn ? myTransient : opponentTransient).remove(t)) return false;
+        transientTurn = turn;
+        transientPhase = phase;
+        transientSpent = true;
+        return true;
+    }
+
+    /** A transient stop was spent since the last call (the client's phase ladder still shows it). */
+    public synchronized boolean transientSpent() {
+        boolean was = transientSpent;
+        transientSpent = false;
+        return was;
+    }
+
     public synchronized SettingsMessage toMessage() {
         SettingsMessage.Builder b = SettingsMessage.newBuilder().setAutoPassOption(autoPass).setDefaultAutoPassOption(defaultAutoPass)
                 .setStackAutoPassOption(stackAutoPass).setManaSelectionType(manaSelection);
         for (StopType t : myStops) b.addStops(Stop.newBuilder().setStopType(t).setAppliesTo(SettingScope.SettingScope_Team).setStatus(SettingStatus.SettingStatus_Set));
         for (StopType t : opponentStops) b.addStops(Stop.newBuilder().setStopType(t).setAppliesTo(SettingScope.SettingScope_Opponents).setStatus(SettingStatus.SettingStatus_Set));
+        for (StopType t : myTransient) b.addTransientStops(Stop.newBuilder().setStopType(t).setAppliesTo(SettingScope.SettingScope_Team).setStatus(SettingStatus.SettingStatus_Set));
+        for (StopType t : opponentTransient) b.addTransientStops(Stop.newBuilder().setStopType(t).setAppliesTo(SettingScope.SettingScope_Opponents).setStatus(SettingStatus.SettingStatus_Set));
         return b.build();
     }
 
@@ -107,6 +145,7 @@ public final class ClientSettings {
 
     @Override
     public synchronized String toString() {
-        return "autoPass=" + autoPass + " default=" + defaultAutoPass + " stack=" + stackAutoPass + " mana=" + manaSelection + " myStops=" + myStops + " oppStops=" + opponentStops;
+        return "autoPass=" + autoPass + " default=" + defaultAutoPass + " stack=" + stackAutoPass + " mana=" + manaSelection + " myStops=" + myStops + " oppStops=" + opponentStops
+                + (myTransient.isEmpty() && opponentTransient.isEmpty() ? "" : " transient mine=" + myTransient + " opp=" + opponentTransient);
     }
 }

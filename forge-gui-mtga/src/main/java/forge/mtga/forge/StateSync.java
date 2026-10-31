@@ -234,6 +234,11 @@ public final class StateSync {
         return id;
     }
 
+    /** Has the client been sent this card in a game state (it has a card view for it)? */
+    public boolean inClientState(Card c) {
+        return c != null && zoneByKey.getOrDefault("c" + c.getId(), -1) != -1;      // -1: only an id handed out for a prompt
+    }
+
     /** The Forge card behind an instance id (current or older id of the same card), or null. */
     public Card card(int iid) {
         Integer f = forgeByIid.get(iid);

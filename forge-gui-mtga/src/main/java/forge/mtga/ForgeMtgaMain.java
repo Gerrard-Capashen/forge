@@ -181,6 +181,13 @@ public final class ForgeMtgaMain {
             green.put("Wrath of the Skies", 8);
             green.put("Plains", 16);
         }
+        if ("passage".equals(rig)) {      // test rig: "choose a basic land type" as a land enters (Multiversal Passage) vs a passive opponent
+            green.clear();
+            green.put("Multiversal Passage", 10);
+            green.put("Forest", 30);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("color".equals(rig)) {      // test rig: "choose a color" as a land enters (Room of Refuge) vs a passive opponent
             green.clear();
             green.put("Room of Refuge", 10);
@@ -273,6 +280,19 @@ public final class ForgeMtgaMain {
             green.put("Wastes", 12);
             green.put("Devourer of Destiny", 20);
             green.put("Thought-Knot Seer", 16);
+            red.clear();
+            red.put("Forest", 16);
+            red.put("Grizzly Bears", 24);
+        }
+        if ("fc".equals(rig)) {      // playtest rig: stops, Full Control, payment, Undo (ForgeBackend.rigHand sets the board) vs an attacking creature deck
+            green.clear();
+            green.put("Plains", 13);
+            green.put("Island", 9);
+            green.put("Swords to Plowshares", 4);      // more instants to draw: targets, counters, upkeep plays
+            green.put("Counterspell", 4);
+            green.put("Silence", 4);
+            green.put("Orim's Chant", 4);
+            green.put("Wrath of the Skies", 2);
             red.clear();
             red.put("Forest", 16);
             red.put("Grizzly Bears", 24);

@@ -107,9 +107,16 @@ public final class SelfPlay {
             backend.onConnect(fc, connect.build());
             boolean done = fc.done.await(Long.getLong("selfplay.timeout", 300), TimeUnit.SECONDS);
             System.out.println("=== game " + (g + 1) + ": " + (done ? "finished" : "TIMEOUT") + " after " + fc.states + " states, turn " + fc.turnNo
-                    + ", requests " + fc.requests + ", result " + fc.result);
+                    + ", requests " + fc.requests + ", result " + fc.result + ", life " + fc.lifeTotals());
             fc.problems.forEach((k, v) -> System.out.println("  PROBLEM x" + v + ": " + k));
             System.out.println("  token deletions: " + fc.tokenDeleted);
+            if (Boolean.getBoolean("selfplay.transient")) {
+                // every click is echoed back; each one whose opponent upkeep came gives priority there, and is then cleared
+                boolean ok = fc.transientSet > 0 && fc.transientEchoed == fc.transientSet && fc.transientHit >= fc.transientSet - 1 && fc.transientCleared >= fc.transientHit - 1;
+                System.out.println("  transient stops: set " + fc.transientSet + ", echoed " + fc.transientEchoed + ", priority in opponent upkeep " + fc.transientHit
+                        + ", cleared " + fc.transientCleared + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if (bo3) {
                 int played = fc.intermissions + 1;
                 boolean ok = fc.sideboardScreens == fc.intermissions && fc.confirmations == fc.intermissions && fc.finalGames == played
@@ -124,6 +131,7 @@ public final class SelfPlay {
             backend.onDisconnect(fc);
         }
         System.out.println("annotation totals: " + totals);
+        System.out.println("undo presses: " + new TreeMap<>(UNDOS) + ", auto-pay offered " + AUTO_PAYS_OFFERED.get() + " times");
         // card faces added by CardDbBuilder that appeared on visible objects (back faces show transforms/flips)
         Map<Integer, String> added = new TreeMap<>();
         for (int g : ADDED_SEEN) added.put(g, db.name(g));
@@ -580,6 +588,9 @@ public final class SelfPlay {
     static CardDb TITLE_DB;
     static final java.util.concurrent.atomic.AtomicInteger CARD_NAMES = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger CARD_CHOICES = new java.util.concurrent.atomic.AtomicInteger();
+    /** Undo presses by request type (-Dselfplay.undo) and payment prompts that offered the auto-pay button. */
+    static final Map<String, Integer> UNDOS = new java.util.concurrent.ConcurrentHashMap<>();
+    static final java.util.concurrent.atomic.AtomicInteger AUTO_PAYS_OFFERED = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger COMPANION_SHOWN = new java.util.concurrent.atomic.AtomicInteger(), COMPANION_DESIGNATED = new java.util.concurrent.atomic.AtomicInteger(), COMPANION_ACTIONS = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger PHYREXIAN_LIFE = new java.util.concurrent.atomic.AtomicInteger(), PHYREXIAN_MANA = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger OPP_HAND_VISIBLE = new java.util.concurrent.atomic.AtomicInteger();
@@ -628,9 +639,19 @@ public final class SelfPlay {
 
         FakeClient(Random rnd) { this.rnd = rnd; }
 
+        /** Life per seat as the client last saw it. */
+        String lifeTotals() {
+            StringBuilder b = new StringBuilder();
+            for (PlayerInfo p : new TreeMap<>(players).values()) b.append(b.length() == 0 ? "" : "/").append(p.getLifeTotal());
+            return b.toString();
+        }
+
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
 
-        private void problem(String p) { problems.merge(p, 1, Integer::sum); if (TRACE) System.out.println("[selfplay] PROBLEM " + p); }
+        private void problem(String p) {
+            problems.merge(p, 1, Integer::sum);
+            System.out.println("[selfplay] PROBLEM " + p + " (turn " + turnNo + ")");      // in place, next to the server's lines
+        }
 
         @Override
         public synchronized void send(MatchServiceToClientMessage.Builder m, int requestId) {
@@ -661,6 +682,46 @@ public final class SelfPlay {
 
         private static ClientToGREMessage.Builder msg(ClientMessageType t) { return ClientToGREMessage.newBuilder().setType(t); }
 
+        private static Action preferred(List<Action> acts) {
+            long want = Long.getLong("selfplay.prefer", 0);
+            if (want == 0) return null;
+            for (Action a : acts) {
+                if (a.getGrpId() == want && (a.getActionType() == ActionType.ActionType_Activate || a.getActionType() == ActionType.ActionType_Cast)) return a;
+            }
+            return null;
+        }
+
+        private boolean fullControlSent;
+        /** -Dselfplay.transient=true: the turn a transient stop on the opponent's upkeep was clicked, whether it was honoured, and the echoes seen. */
+        private int transientTurn, transientHitTurn;
+        int transientSet, transientHit, transientEchoed, transientCleared;
+
+        /** Like a click on the opponent's Upkeep icon of the phase ladder, once in each of my turns. */
+        private void clickOpponentUpkeep() {
+            if (!Boolean.getBoolean("selfplay.transient") || turn == null || turn.getActivePlayer() != 1 || transientTurn == turnNo) return;
+            transientTurn = turnNo;
+            transientSet++;
+            ClientToGREMessage.Builder s = msg(ClientMessageType.ClientMessageType_SetSettingsReq);
+            s.getSetSettingsReqBuilder().getSettingsBuilder().addTransientStops(Stop.newBuilder().setStopType(StopType.StopType_UpkeepStep)
+                    .setAppliesTo(SettingScope.SettingScope_Opponents).setStatus(SettingStatus.SettingStatus_Set));
+            reply(s);
+        }
+
+        /**
+         * -Dselfplay.fullcontrol=midgame: lock Full Control at the first decision of turn 2 the way the real client does
+         * (Ctrl, then Shift: two SetSettingsReqs carrying the current turn number), not through the connect settings.
+         */
+        private void lockFullControlMidGame() {
+            if (fullControlSent || turnNo < 2 || !"midgame".equals(System.getProperty("selfplay.fullcontrol"))) return;
+            fullControlSent = true;
+            for (AutoPassOption def : List.of(AutoPassOption.AutoPassOption_ResolveMyStackEffects, AutoPassOption.AutoPassOption_FullControl)) {
+                ClientToGREMessage.Builder s = msg(ClientMessageType.ClientMessageType_SetSettingsReq);
+                s.getSetSettingsReqBuilder().setTurnNumber(turnNo).getSettingsBuilder()
+                        .setAutoPassOption(AutoPassOption.AutoPassOption_FullControl).setDefaultAutoPassOption(def);
+                reply(s);
+            }
+        }
+
         private void handle(GREToClientMessage g) {
             if (holdMulligan && heldQuestionSeen) afterHeldQuestion++;
             if (TRACE) {
@@ -681,6 +742,13 @@ public final class SelfPlay {
                     }
                 }
                 System.out.println(t);
+            }
+            // -Dselfplay.undo=true: press Undo on a third of the requests that offer it (mana taps, casts in progress)
+            if (g.getAllowUndo() && Boolean.getBoolean("selfplay.undo") && rnd.nextInt(3) == 0) {
+                requests++;
+                UNDOS.merge(g.getType().name().replace("GREMessageType_", ""), 1, Integer::sum);
+                reply(msg(ClientMessageType.ClientMessageType_UndoReq));
+                return;
             }
             switch (g.getType()) {
                 case GREMessageType_GameStateMessage -> state(g.getGameStateMessage());
@@ -708,6 +776,9 @@ public final class SelfPlay {
                 }
                 case GREMessageType_ActionsAvailableReq -> {
                     requests++;
+                    lockFullControlMidGame();
+                    if (turn != null && turn.getActivePlayer() == 2 && turn.getStep() == Step.Step_Upkeep && transientTurn == turnNo - 1 && transientHitTurn != turnNo) { transientHit++; transientHitTurn = turnNo; }
+                    clickOpponentUpkeep();
                     List<Action> acts = new ArrayList<>(g.getActionsAvailableReq().getActionsList());
                     for (Action a : acts) {
                         if (a.getActionType() != ActionType.ActionType_Pass && !objs.containsKey(a.getInstanceId())) problem("action on unknown object " + a.getActionType());
@@ -719,6 +790,8 @@ public final class SelfPlay {
                         COMPANION_ACTIONS.incrementAndGet();
                         if (special.getAbilityGrpId() == 0 || special.getManaCostCount() == 0) problem("special action without ability or cost");
                         r.getPerformActionRespBuilder().addActions(withChosenColor(special));
+                    } else if (preferred(acts) != null) {      // -Dselfplay.prefer=<grpId>: always take that card's cast/activation (e.g. 9004907 Isochron Scepter)
+                        r.getPerformActionRespBuilder().addActions(withChosenColor(preferred(acts)));
                     } else if (!acts.isEmpty() && rnd.nextInt(10) < 7) r.getPerformActionRespBuilder().addActions(withChosenColor(acts.get(rnd.nextInt(acts.size()))));
                     else r.getPerformActionRespBuilder().addActions(Action.newBuilder().setActionType(ActionType.ActionType_Pass));
                     reply(r);
@@ -726,6 +799,7 @@ public final class SelfPlay {
                 case GREMessageType_SelectTargetsReq -> {
                     requests++;
                     TargetSelection ts = g.getSelectTargetsReq().getTargets(0);
+                    if (g.getSelectTargetsReq().getSourceId() != 0 && !objs.containsKey(g.getSelectTargetsReq().getSourceId())) problem("target prompt source the client has no view for");
                     if (!g.hasPrompt()) problem("SelectTargetsReq without prompt");
                     for (Target t : ts.getTargetsList()) {
                         int id = t.getTargetInstanceId();
@@ -750,6 +824,10 @@ public final class SelfPlay {
                     requests++;
                     List<CastingTimeOptionReq> opts = g.getCastingTimeOptionsReq().getCastingTimeOptionReqList();
                     for (CastingTimeOptionReq o : opts) {
+                        // CastingTimeOption_KickerWorkflow builds its buttons from the affector's card view: NRE (hung game) without one
+                        if (o.getCastingTimeOptionType() == CastingTimeOptionType.CastingTimeOptionType_Kicker && !objs.containsKey(o.getAffectorId())) {
+                            problem("kicker prompt names an object the client has no view for");
+                        }
                         // CastingTimeOptionRequest throws NotImplementedException for these (the duel crashes)
                         switch (o.getCastingTimeOptionType()) {
                             case CastingTimeOptionType_OptionalCost, CastingTimeOptionType_Multikicker, CastingTimeOptionType_CastThroughAbility,
@@ -902,6 +980,15 @@ public final class SelfPlay {
                         reply(r);
                         break;
                     }
+                    if (g.getPayCostsReq().hasAutoTapActionsReq() && g.getPayCostsReq().getAutoTapActionsReq().getAutoTapSolutionsCount() > 0) {
+                        AUTO_PAYS_OFFERED.incrementAndGet();
+                        if (rnd.nextBoolean()) {      // the "Pay" button
+                            ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_PerformAutoTapActionsResp);
+                            r.getPerformAutoTapActionsRespBuilder().setIndex(0);
+                            reply(r);
+                            break;
+                        }
+                    }
                     List<Action> pay = g.getPayCostsReq().getPaymentActions().getActionsList();
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_PerformActionResp);
                     r.getPerformActionRespBuilder().addActions(withChosenColor(pay.get(rnd.nextInt(pay.size()))));
@@ -981,7 +1068,12 @@ public final class SelfPlay {
                 }
                 case GREMessageType_SubmitDeckConfirmation -> confirmations++;
                 case GREMessageType_ConnectResp, GREMessageType_SubmitTargetsResp, GREMessageType_SubmitAttackersResp,
-                     GREMessageType_SubmitBlockersResp, GREMessageType_SetSettingsResp -> { }
+                     GREMessageType_SubmitBlockersResp -> { }
+                case GREMessageType_SetSettingsResp -> {
+                    int n = g.getSetSettingsResp().getSettings().getTransientStopsCount();
+                    if (n > 0) transientEchoed++;
+                    else if (transientSet > 0) transientCleared++;
+                }
                 default -> problem("fake client does not handle " + g.getType());
             }
             if (g.getType() != GREMessageType.GREMessageType_GameStateMessage && g.getGameStateId() != lastGsId && g.getGameStateId() != 0) {

@@ -178,18 +178,29 @@ public final class ForgeBackend implements GameBackend {
                  ClientMessageType_GroupResp, ClientMessageType_SelectNResp, ClientMessageType_OptionalActionResp, ClientMessageType_SelectReplacementResp,
                  ClientMessageType_NumericInputResp, ClientMessageType_OrderResp, ClientMessageType_CastingTimeOptionsResp,
                  ClientMessageType_EffectCostResp, ClientMessageType_EnterSideboardingReq, ClientMessageType_SubmitDeckResp,
-                 ClientMessageType_ChooseStartingPlayerResp -> inbox.add(msg);
+                 ClientMessageType_ChooseStartingPlayerResp, ClientMessageType_PerformAutoTapActionsResp,
+                 ClientMessageType_UndoReq -> inbox.add(msg);
             case ClientMessageType_SetSettingsReq -> {
                 settings.merge(msg.getSetSettingsReq().getSettings(), msg.getSetSettingsReq().getTurnNumber());
                 System.out.println("[mtga] settings now: " + settings);
-                GREToClientMessage.Builder resp = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_SetSettingsResp)
-                        .addSystemSeatIds(StateSync.HUMAN_SEAT).setGameStateId(sync == null ? 0 : sync.lastStateId());
-                resp.getSetSettingsRespBuilder().setSettings(settings.toMessage());
-                s.sendGre(resp);
+                sendSettings(s);
             }
             case ClientMessageType_UIMessage -> room.relayUi(this, msg.getUiMessage());
             default -> forge.mtga.net.Capture.log("UNHANDLED client message " + msg.getType());
         }
+    }
+
+    /** The current settings to the client (SetSettingsResp; the client also takes it unasked, e.g. when a transient stop is spent). */
+    private void sendSettings() {
+        MatchSession s = session;
+        if (s != null) sendSettings(s);
+    }
+
+    private void sendSettings(MatchSession s) {
+        GREToClientMessage.Builder resp = GREToClientMessage.newBuilder().setType(GREMessageType.GREMessageType_SetSettingsResp)
+                .addSystemSeatIds(StateSync.HUMAN_SEAT).setGameStateId(sync == null ? 0 : sync.lastStateId());
+        resp.getSetSettingsRespBuilder().setSettings(settings.toMessage());
+        s.sendGre(resp);
     }
 
     @Override
@@ -486,6 +497,7 @@ public final class ForgeBackend implements GameBackend {
     /** Diff (if any) + the request in one batch, with the human shown as deciding player. */
     private void sendRequest(GREToClientMessage.Builder request) {
         batching = false;
+        if (castPoint != null && CAST_PROMPTS.contains(request.getType()) && undoable(castPoint)) request.setAllowUndo(true);
         sync.setDecisionPlayer(human);
         GameStateMessage.Builder d = sync.diff(!playStageSent && introSent);
         if (d != null && !playStageSent) playStageSent = true;
@@ -508,6 +520,72 @@ public final class ForgeBackend implements GameBackend {
         return GREToClientMessage.newBuilder().setType(type).addSystemSeatIds(StateSync.HUMAN_SEAT).setGameStateId(sync.lastStateId());
     }
 
+    // ---- undo (the client's Undo button) ----------------------------------------------------------------------------
+    // As on Arena: mana tapped at a priority prompt, and a cast that is still being chosen or paid. Each point is the
+    // game as it was before that step; anything random or a library change (a draw, a search) closes the window.
+
+    private record UndoPoint(forge.game.undo.GameMemento memento, long random, int libraries, List<Card> tokens) {}
+
+    /** Thrown out of a cast's prompt when the client asks to undo it; MtgaController.playChosenSpellAbility restores the game. */
+    private static final class UndoCast extends RuntimeException {
+        UndoCast() { super(null, null, false, false); }
+    }
+
+    private static final ClientToGREMessage CANCEL_PROBE = ClientToGREMessage.newBuilder().setType(ClientMessageType.ClientMessageType_CancelActionReq).build();
+
+    /** Points before each mana tap at the current priority prompt, newest first. */
+    private final java.util.ArrayDeque<UndoPoint> undoPoints = new java.util.ArrayDeque<>();
+    /** The next priority prompt continues the same undo window (it follows a tap or an undo). */
+    private boolean keepUndo;
+    /** The game before the cast being chosen/paid now, else null. */
+    private UndoPoint castPoint;
+
+    private UndoPoint undoPoint() {
+        List<Card> tokens = new ArrayList<>();
+        for (Card c : game.getCardsIn(ZoneType.Battlefield)) if (c.isToken()) tokens.add(c);
+        return new UndoPoint(forge.game.undo.GameMemento.capture(game), forge.util.MyRandom.callCount(), librarySizes(), tokens);
+    }
+
+    private int librarySizes() {
+        int n = 0;
+        for (Player p : game.getPlayers()) n = n * 31 + p.getCardsIn(ZoneType.Library).size();
+        return n;
+    }
+
+    /**
+     * Nothing random happened and no library changed since the point (going back reveals nothing), and no token left
+     * the battlefield (a sacrificed Treasure is gone for the client: it cannot come back).
+     */
+    private boolean undoable(UndoPoint p) {
+        if (p == null || p.random() != forge.util.MyRandom.callCount() || p.libraries() != librarySizes()) return false;
+        for (Card t : p.tokens()) {
+            Card now = game.getCardState(t);
+            if (now == null || !now.isInZone(ZoneType.Battlefield)) return false;
+        }
+        return true;
+    }
+
+    private void restore(UndoPoint p) {
+        // the card id counters are game fields the snapshot rewinds: a card made later would reuse an id StateSync has
+        // already bound to another object (the client got an action on an object it never saw). Keep them moving forward.
+        int cardIds = game.nextCardId(), hiddenIds = game.nextHiddenCardId();
+        p.memento().restore();
+        while (game.nextCardId() < cardIds) { }
+        while (game.nextHiddenCardId() < hiddenIds) { }
+        if (!p.memento().problems.isEmpty()) System.out.println("[mtga] undo problems: " + p.memento().problems);
+        game.getTriggerHandler().resetActiveTriggers();
+        for (Player pl : game.getPlayers()) { pl.updateAllZonesForView(); pl.updateManaForView(); }
+        game.updateStackForView(); game.updatePhaseForView(); game.updatePlayerTurnForView();
+        game.updateTurnForView(); game.updateCombatForView();
+        // the restored state goes out now: a cast card back in hand gets its new instance id before the next prompt's
+        // actions are built (they named the id it had on the stack, which the client had already dropped)
+        sendDiff(true);
+    }
+
+    /** A request of the cast in progress offers Undo when going back is still safe. */
+    private static final java.util.Set<GREMessageType> CAST_PROMPTS = java.util.EnumSet.of(GREMessageType.GREMessageType_SelectTargetsReq,
+            GREMessageType.GREMessageType_PayCostsReq, GREMessageType.GREMessageType_CastingTimeOptionsReq, GREMessageType.GREMessageType_NumericInputReq);
+
     private ClientToGREMessage await(Predicate<ClientToGREMessage> want) {
         try {
             while (true) {
@@ -516,6 +594,12 @@ public final class ForgeBackend implements GameBackend {
                 if (m == CONCEDE_WAKE) {
                     if (!room.applyConcessions()) continue;     // already applied (a stale wake-up)
                     throw new ForgeMatch.Conceded();
+                }
+                // Undo inside a cast (a prompt that could be cancelled): back out the whole cast
+                if (m.getType() == ClientMessageType.ClientMessageType_UndoReq && !want.test(m) && castPoint != null
+                        && want.test(CANCEL_PROBE) && undoable(castPoint)) {
+                    decided();
+                    throw new UndoCast();
                 }
                 if (want.test(m)) {
                     decided();
@@ -846,6 +930,17 @@ public final class ForgeBackend implements GameBackend {
         }
         for (Card c : new ArrayList<>(p.getCardsIn(ZoneType.Hand))) game.getAction().moveToLibrary(c, -1, null);
         String rig = System.getProperty("mtga.rig");
+        if ("passage".equals(rig)) {      // Multiversal Passage x3 in hand: playing one asks for a basic land type (then offers the 2 life)
+            int n = 3;
+            for (Card c : new ArrayList<>(p.getCardsIn(ZoneType.Library))) {
+                if (n == 0) break;
+                if (!c.getName().equals("Multiversal Passage")) continue;
+                game.getAction().moveToHand(c, null);
+                n--;
+                System.out.println("[mtga] rig: Multiversal Passage instance " + iid(c));
+            }
+            return;
+        }
         if ("color".equals(rig)) {      // Room of Refuge alone in hand: playing it asks for a color
             for (Card c : p.getCardsIn(ZoneType.Library)) {
                 if (c.getName().equals("Room of Refuge")) {
@@ -857,16 +952,9 @@ public final class ForgeBackend implements GameBackend {
             return;
         }
         if ("scepter".equals(rig)) {      // Plains x5 in play; Isochron Scepter, Orim's Chant, Wrath of the Skies in hand
-            for (String name : List.of("Plains", "Plains", "Plains", "Plains", "Plains", "Isochron Scepter", "Orim's Chant", "Wrath of the Skies")) {
-                Card pick = null;
-                for (Card c : p.getCardsIn(ZoneType.Library)) {
-                    if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
-                }
-                if (pick == null) continue;
-                if (name.equals("Plains")) game.getAction().moveToPlay(pick, null, forge.game.ability.AbilityKey.newMap());
-                else game.getAction().moveToHand(pick, null);
-                System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
-            }
+            // made by name (rigAdd): the default playtest deck replaces the rig's deck, so taking them from the library found nothing
+            for (int i = 0; i < 5; i++) rigAdd(p, "Plains", ZoneType.Battlefield, 0);
+            for (String name : List.of("Isochron Scepter", "Orim's Chant", "Wrath of the Skies")) rigAdd(p, name, ZoneType.Hand, 0);
             return;
         }
         if ("bos".equals(rig)) {      // Forest x3 in play, Boseiju in hand, the AI's Command Tower in play: play the land or channel it
@@ -996,6 +1084,22 @@ public final class ForgeBackend implements GameBackend {
                 }
                 System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
             }
+            return;
+        }
+        if ("fc".equals(rig)) {
+            // Playtest for the phase ladder, Full Control, the "Pay" prompt and Undo. You go first.
+            //  - phase-ladder click on the opponent's Upkeep -> priority there (Isochron Scepter + Orim's Chant, Silence)
+            //  - Full Control (Ctrl, then Shift) -> priority in every step; payment by hand with an Auto Pay button
+            //  - Undo: tap a land by hand; or start Swords (targets), Sphinx's Revelation (X), Scepter's imprint, and undo
+            //  - Hallowed Fountain paying generic mana with Auto Pay: no color question
+            //  - Wrath of the Skies ({X}{W}{W}): X energy, then "pay any amount of {E}?" (destroys the AI's Bears at 2+, and your Scepter too)
+            for (String name : List.of("Plains", "Plains", "Plains", "Plains", "Island", "Island", "Hallowed Fountain")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Isochron Scepter", "Orim's Chant", "Orim's Chant", "Silence", "Swords to Plowshares", "Counterspell", "Sphinx's Revelation",
+                    "Wrath of the Skies")) {
+                rigAdd(p, name, ZoneType.Hand, 0);
+            }
+            for (String name : List.of("Forest", "Forest", "Forest", "Grizzly Bears", "Grizzly Bears")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
+            p.setLife(50, null);      // room to test for many turns against the attacking Bears
             return;
         }
         if ("nyk".equals(rig)) {      // Nykthos autotap: in play Nykthos, Forest x3, Plains, Gigantosaurus x2 (devotion to green 10); hand: Craterhoof Behemoth ({5}{G}{G}{G}: only affordable through Nykthos)
@@ -1365,6 +1469,14 @@ public final class ForgeBackend implements GameBackend {
      * something unknown (the AI's pick is used then).
      */
     String askCreatureType(Card source, java.util.Collection<String> validTypes, boolean optional) {
+        return askSubType(source, validTypes, optional, "creature");
+    }
+
+    /**
+     * "Choose a basic land type" (Multiversal Passage, Illusionary Terrain, Thran Portal...): the client's basic-land-subtype workflow, a
+     * SelectNReq over the SubTypes subset of the five basic land subtypes (the client matches exactly those five ids).
+     */
+    String askSubType(Card source, java.util.Collection<String> validTypes, boolean optional, String what) {
         Map<Integer, String> byId = new LinkedHashMap<>();
         for (String t : validTypes) {
             com.wizards.mtga.gre.SubType st = StateSync.subTypeOf(t);
@@ -1380,14 +1492,14 @@ public final class ForgeBackend implements GameBackend {
         if (source != null) sn.setSourceId(iid(source));
         sn.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);      // the client has no "choose a creature type" prompt, and a SelectNReq without one NREs
         req.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);
-        System.out.println("[mtga] asking creature type among " + byId.size() + " for " + source);
+        System.out.println("[mtga] asking " + what + " type among " + byId.size() + " for " + source);
         sendRequest(req);
         ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
         if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp) return null;
         for (int id : r.getSelectNResp().getIdsList()) {
             String t = byId.get(id);
             if (t != null) {
-                System.out.println("[mtga] client chose creature type " + t);
+                System.out.println("[mtga] client chose " + what + " type " + t);
                 return t;
             }
         }
@@ -1610,11 +1722,16 @@ public final class ForgeBackend implements GameBackend {
     /** Priority for the human: returns the chosen ability, or null to pass. */
     List<SpellAbility> askPriority(Player me) {
         batching = false;
+        if (!keepUndo || (!undoPoints.isEmpty() && !undoable(undoPoints.peek()))) undoPoints.clear();
+        keepUndo = false;
         PhaseType phase = game.getPhaseHandler().getPhase();
         boolean myTurn = game.getPhaseHandler().isPlayerTurn(me);
         boolean full = settings.fullControl();
         boolean stop = settings.stopAt(phase, myTurn) && game.getStack().isEmpty();
         boolean respond = !game.getStack().isEmpty();
+        // a stop clicked on the phase ladder (transient): priority there even with nothing to cast, then it is spent
+        boolean transientStop = settings.transientStopAt(phase, myTurn, game.getPhaseHandler().getTurn());
+        if (settings.transientSpent()) sendSettings();
         List<SpellAbility> playable = new ArrayList<>();
         List<Card> candidates = new ArrayList<>(me.getCardsIn(List.of(ZoneType.Hand, ZoneType.Battlefield, ZoneType.Graveyard, ZoneType.Exile, ZoneType.Command)));
         for (Player other : game.getPlayers()) {      // Ragavan / Gonti: the card is in the opponent's exile but we may cast it
@@ -1697,8 +1814,8 @@ public final class ForgeBackend implements GameBackend {
         if (!full && settings.autoPassTurn()) return null;
         if (!full && settings.autoPassUnlessOpponentAction() && !respond) return null;
         if (!full && respond && settings.autoResolveStack()) return null;
-        if (!full && (playable.isEmpty() || !(stop || respond))) return null;
-        if (offered.isEmpty() && !full) return null;      // nothing to do but pass: do not bother the client
+        if (!full && !transientStop && (playable.isEmpty() || !(stop || respond))) return null;
+        if (offered.isEmpty() && !full && !transientStop) return null;      // nothing to do but pass: do not bother the client
         for (Card c : me.getCardsIn(ZoneType.Battlefield)) {      // tap for mana by hand (floating mana)
             for (SpellAbility ma : c.getManaAbilities()) {
                 ma.setActivatingPlayer(me);
@@ -1715,13 +1832,24 @@ public final class ForgeBackend implements GameBackend {
             }
         }
         req.getActionsAvailableReqBuilder().addActions(Action.newBuilder().setActionType(ActionType.ActionType_Pass));
-        System.out.println("[mtga] turn " + game.getPhaseHandler().getTurn() + " " + phase + " offering " + offered.keySet());
+        if (!undoPoints.isEmpty()) req.setAllowUndo(true);      // mana tapped at this prompt can be taken back
+        System.out.println("[mtga] turn " + game.getPhaseHandler().getTurn() + " " + phase + " offering " + offered.keySet()
+                + (undoPoints.isEmpty() ? "" : " (undo " + undoPoints.size() + ")"));
         sendRequest(req);
 
-        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_PerformActionResp, ClientMessageType.ClientMessageType_ConcedeReq));
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_PerformActionResp, ClientMessageType.ClientMessageType_ConcedeReq,
+                ClientMessageType.ClientMessageType_UndoReq));
         if (r.getType() == ClientMessageType.ClientMessageType_ConcedeReq) {
             me.concede();
             return null;
+        }
+        if (r.getType() == ClientMessageType.ClientMessageType_UndoReq) {
+            if (!undoPoints.isEmpty()) {
+                restore(undoPoints.pop());
+                System.out.println("[mtga] undo: mana tap taken back (" + undoPoints.size() + " left)");
+            }
+            keepUndo = true;
+            return askPriority(me);
         }
         System.out.println("[mtga] client replied " + r.getPerformActionResp().toString().replace("\n", " "));
         for (Action a : r.getPerformActionResp().getActionsList()) {
@@ -1733,8 +1861,11 @@ public final class ForgeBackend implements GameBackend {
                 }
             }
             if (sa != null && sa.isManaAbility()) {
+                UndoPoint before = undoPoint();
                 applyManaChoice(sa, a);
                 forge.game.player.PlaySpellAbility.playSpellAbility(me.getController(), me, sa);
+                undoPoints.push(before);
+                keepUndo = true;
                 return askPriority(me);      // mana floats in the pool; the player keeps priority
             }
             if (sa != null) {
@@ -1963,14 +2094,30 @@ public final class ForgeBackend implements GameBackend {
         sel.getPromptBuilder().setPromptId(PROMPT_TARGETS);
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectTargetsReq);
         req.getPromptBuilder().setPromptId(PROMPT_TARGETS);
-        req.getSelectTargetsReqBuilder().addTargets(sel).setSourceId(iid(host));
+        req.getSelectTargetsReqBuilder().addTargets(sel).setSourceId(iid(promptCard(host)));
         if (abilityGrp != 0) req.getSelectTargetsReqBuilder().setAbilityGrpId(abilityGrp);
         return req;
     }
 
     /** Kicker and other optional additional costs: CastingTimeOptionsReq (one option per cost + Done). */
+    /**
+     * The card a prompt should name for {@code host}. A spell copy cast by an effect (Isochron Scepter's copy of the imprinted
+     * card) is not in any zone the client has seen when its kicker / target questions go out, and the client's kicker workflow
+     * NREs on a card it has no view for (the game hung): name a card of the same name it does know (the imprinted original).
+     */
+    private Card promptCard(Card host) {
+        if (host == null || sync.inClientState(host)) return host;
+        for (ZoneType z : List.of(ZoneType.Exile, ZoneType.Stack, ZoneType.Battlefield, ZoneType.Graveyard, ZoneType.Hand)) {
+            for (Card c : game.getCardsIn(z)) {
+                if (c != host && c.getName().equals(host.getName()) && sync.inClientState(c) && !c.isFaceDown()) return c;
+            }
+        }
+        return host;
+    }
+
     List<forge.game.spellability.OptionalCostValue> askOptionalCosts(SpellAbility sa, List<forge.game.spellability.OptionalCostValue> options) {
         Card host = sa.getHostCard();
+        int shown = iid(promptCard(host));
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_CastingTimeOptionsReq);
         Map<Integer, forge.game.spellability.OptionalCostValue> byCto = new HashMap<>();
         int cto = 0;
@@ -1990,16 +2137,16 @@ public final class ForgeBackend implements GameBackend {
             com.wizards.mtga.gre.CastingTimeOptionReq.Builder o = com.wizards.mtga.gre.CastingTimeOptionReq.newBuilder().setCtoId(++cto)
                     .setCastingTimeOptionType(kicker ? com.wizards.mtga.gre.CastingTimeOptionType.CastingTimeOptionType_Kicker
                             : com.wizards.mtga.gre.CastingTimeOptionType.CastingTimeOptionType_AdditionalCost)
-                    .setAffectorId(iid(host)).setAffectedId(iid(host)).setPlayerIdToPrompt(StateSync.HUMAN_SEAT)
+                    .setAffectorId(shown).setAffectedId(shown).setPlayerIdToPrompt(StateSync.HUMAN_SEAT)
                     .setGrpId(abilityId);
-            if (opt.getCost().hasManaCost()) o.addAllManaCost(manaRequirements(opt.getCost().getTotalMana(), iid(host)));
+            if (opt.getCost().hasManaCost()) o.addAllManaCost(manaRequirements(opt.getCost().getTotalMana(), shown));
             req.getCastingTimeOptionsReqBuilder().addCastingTimeOptionReq(o);
             byCto.put(cto, opt);
         }
         if (byCto.isEmpty()) return List.of();
         req.getCastingTimeOptionsReqBuilder().addCastingTimeOptionReq(com.wizards.mtga.gre.CastingTimeOptionReq.newBuilder().setCtoId(++cto)
                 .setCastingTimeOptionType(com.wizards.mtga.gre.CastingTimeOptionType.CastingTimeOptionType_Done)
-                .setAffectorId(iid(host)).setAffectedId(iid(host)).setPlayerIdToPrompt(StateSync.HUMAN_SEAT));
+                .setAffectorId(shown).setAffectedId(shown).setPlayerIdToPrompt(StateSync.HUMAN_SEAT));
         System.out.println("[mtga] asking optional costs " + byCto.values() + " for " + host);
         sendRequest(req);
         ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_CastingTimeOptionsResp, ClientMessageType.ClientMessageType_CancelActionReq));
@@ -2061,13 +2208,34 @@ public final class ForgeBackend implements GameBackend {
                 addManaOptions(ab, ma, srcIid, abilityGrp);
                 req.getPayCostsReqBuilder().getPaymentActionsBuilder().addActions(ab);
             }
-            System.out.println("[mtga] manual payment for " + sa.getHostCard() + ": unpaid " + toPay + " sources " + sources.keySet());
+            // the "Pay {W}" button (AutoTapActionsWorkflow): without it the client only highlights the lands, with no
+            // prompt or button, and the game looks frozen until a land is clicked
+            List<SpellAbility> autoTaps = new ArrayList<>();
+            Map<SpellAbility, String> autoColors = new java.util.IdentityHashMap<>();
+            com.wizards.mtga.gre.AutoTapSolution sol = ctl instanceof MtgaController ? autoTap(sa, me, autoTaps, autoColors) : null;
+            boolean autoPay = sol != null && !autoTaps.isEmpty() && lastAutoTapComplete && !lastAutoTapDevotion;
+            if (autoPay) req.getPayCostsReqBuilder().getAutoTapActionsReqBuilder().addAutoTapSolutions(sol);
+            System.out.println("[mtga] manual payment for " + sa.getHostCard() + ": unpaid " + toPay + " sources " + sources.keySet() + (autoPay ? " (auto-pay offered)" : ""));
             sendRequest(req);
 
-            ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_PerformActionResp, ClientMessageType.ClientMessageType_CancelActionReq));
+            ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_PerformActionResp, ClientMessageType.ClientMessageType_CancelActionReq,
+                    ClientMessageType.ClientMessageType_PerformAutoTapActionsResp));
             System.out.println("[mtga] client payment message " + r.getType() + " " + r.toString().replace("\n", " "));
             if (r.getType() == ClientMessageType.ClientMessageType_CancelActionReq) return false;
             boolean progressed = false;
+            if (r.getType() == ClientMessageType.ClientMessageType_PerformAutoTapActionsResp) {
+                // tap the offered solution in order, paying from the pool after each source, until the cost is paid
+                if (autoPay) {
+                    for (SpellAbility ma : autoTaps) {
+                        if (toPay.isPaid()) break;
+                        if (!((MtgaController) ctl).tapPreviewSource(ma, autoColors.get(ma))) continue;
+                        me.getManaPool().payManaCostFromPool(toPay, sa, false, sa.getPayingMana());
+                        progressed = true;
+                    }
+                }
+                if (!progressed) System.out.println("[mtga] auto-pay tapped nothing");
+                continue;
+            }
             for (Action a : r.getPerformActionResp().getActionsList()) {
                 SpellAbility chosen = sources.get(a.getInstanceId() + ":" + a.getAbilityGrpId());
                 if (chosen == null) {      // reply without (or with another) ability id: that source's first ability
@@ -2701,7 +2869,7 @@ public final class ForgeBackend implements GameBackend {
             if ("block".equals(System.getProperty("mtga.rig")) || "menace".equals(System.getProperty("mtga.rig"))) return opponent;      // test rig: let the AI attack first
             if (isFirstGame && room.forcedStarter() != null) return room.forcedStarter();      // a challenge's "play first" setting
             if (!isFirstGame && room.gamesToWin() > 1) return askStartingPlayer();      // best of three: the loser chooses
-            if ("playtest".equals(System.getProperty("mtga.deck"))) return player;      // solo sandbox: you start
+            if ("playtest".equals(System.getProperty("mtga.deck")) || "fc".equals(System.getProperty("mtga.rig"))) return player;      // solo sandbox / fc rig: you start
             return super.chooseStartingPlayer(isFirstGame);
         }
 
@@ -2744,8 +2912,50 @@ public final class ForgeBackend implements GameBackend {
             return askManaPayment(toPay, ability, player, this);
         }
 
+        /** Tap one source of an auto-tap solution for the color the solution assigned; false if it could not be tapped. */
+        boolean tapPreviewSource(SpellAbility ma, String color) {
+            if (ma.getHostCard().isTapped() || !ma.canPlay()) return false;
+            // a dual land in the preview must make the color the preview assigned (Spirebluff Canal made R
+            // for a {U} spell: the payment failed and the spell stayed stuck on the stack)
+            if (ma.getManaPart() != null) {
+                ma.getManaPart().clearExpressChoice();
+                if (color == null) {      // a dual the solution uses for generic mana: any color it makes (no color question)
+                    List<String> makes = new ArrayList<>();
+                    for (String code : MANA_CODES) if (ma.getManaPart().canProduce(code, ma)) makes.add(code);
+                    if (makes.size() > 1) color = makes.get(0);
+                }
+                if (color != null) ma.getManaPart().setExpressChoice(color);
+            } else if (ma.getApi() == forge.game.ability.ApiType.ChooseColor && color != null) {
+                forcedColor = forge.card.MagicColor.fromName(color);
+            }
+            try {
+                return forge.game.player.PlaySpellAbility.playSpellAbility(this, player, ma);
+            } finally {
+                forcedColor = 0;
+            }
+        }
+
+        /**
+         * Undo while the cast is still being chosen or paid (targets, costs, X, payment): the game goes back to the
+         * moment before the cast, as on Arena. Forge's cast path cannot back out a half-paid cast by itself.
+         */
         @Override
         public boolean playChosenSpellAbility(SpellAbility sa) {
+            if (sa.isLandAbility() || !live()) return playChosen(sa);
+            castPoint = undoPoint();
+            try {
+                return playChosen(sa);
+            } catch (UndoCast u) {
+                restore(castPoint);
+                keepUndo = true;      // taps made before the cast can still be taken back
+                System.out.println("[mtga] undo: cast of " + sa.getHostCard() + " taken back");
+                return false;
+            } finally {
+                castPoint = null;
+            }
+        }
+
+        private boolean playChosen(SpellAbility sa) {
             if (sa.isLandAbility()) return super.playChosenSpellAbility(sa);
             castChosen(sa);
             return true;
@@ -2781,23 +2991,7 @@ public final class ForgeBackend implements GameBackend {
             pendingTaps = null;
             pendingTapColors = null;
             if (taps != null && !settings.manualMana()) {
-                for (SpellAbility ma : taps) {
-                    if (ma.getHostCard().isTapped() || !ma.canPlay()) continue;
-                    // a dual land in the preview must make the color the preview assigned (Spirebluff Canal made R
-                    // for a {U} spell: the payment failed and the spell stayed stuck on the stack)
-                    if (ma.getManaPart() != null) {
-                        ma.getManaPart().clearExpressChoice();
-                        String color = tapColors.get(ma);
-                        if (color != null) ma.getManaPart().setExpressChoice(color);
-                    } else if (ma.getApi() == forge.game.ability.ApiType.ChooseColor && tapColors.get(ma) != null) {
-                        forcedColor = forge.card.MagicColor.fromName(tapColors.get(ma));
-                    }
-                    try {
-                        forge.game.player.PlaySpellAbility.playSpellAbility(this, player, ma);
-                    } finally {
-                        forcedColor = 0;
-                    }
-                }
+                for (SpellAbility ma : taps) tapPreviewSource(ma, tapColors.get(ma));
             }
             if (sa.isSpell() && live()) {
                 List<forge.game.spellability.OptionalCostValue> opts = forge.game.GameActionUtil.getOptionalCostValues(sa);
@@ -2972,8 +3166,9 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public String chooseSomeType(String kindOfType, SpellAbility sa, java.util.Collection<String> validTypes, boolean isOptional) {
-            if (!live() || !"Creature".equalsIgnoreCase(kindOfType) || validTypes.size() < 2) return super.chooseSomeType(kindOfType, sa, validTypes, isOptional);
-            String type = askCreatureType(sa == null ? null : sa.getHostCard(), validTypes, isOptional);
+            boolean basic = "Basic Land".equalsIgnoreCase(kindOfType);
+            if (!live() || !(basic || "Creature".equalsIgnoreCase(kindOfType)) || validTypes.size() < 2) return super.chooseSomeType(kindOfType, sa, validTypes, isOptional);
+            String type = askSubType(sa == null ? null : sa.getHostCard(), validTypes, isOptional, basic ? "basic land" : "creature");
             return type == null ? super.chooseSomeType(kindOfType, sa, validTypes, isOptional) : type;
         }
 
