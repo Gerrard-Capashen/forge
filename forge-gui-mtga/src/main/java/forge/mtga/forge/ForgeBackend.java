@@ -856,6 +856,19 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("scepter".equals(rig)) {      // Plains x5 in play; Isochron Scepter, Orim's Chant, Wrath of the Skies in hand
+            for (String name : List.of("Plains", "Plains", "Plains", "Plains", "Plains", "Isochron Scepter", "Orim's Chant", "Wrath of the Skies")) {
+                Card pick = null;
+                for (Card c : p.getCardsIn(ZoneType.Library)) {
+                    if (c.getName().equals(name) && (pick == null || c.getId() < pick.getId())) pick = c;
+                }
+                if (pick == null) continue;
+                if (name.equals("Plains")) game.getAction().moveToPlay(pick, null, forge.game.ability.AbilityKey.newMap());
+                else game.getAction().moveToHand(pick, null);
+                System.out.println("[mtga] rig: " + name + " instance " + iid(pick));
+            }
+            return;
+        }
         if ("bos".equals(rig)) {      // Forest x3 in play, Boseiju in hand, the AI's Command Tower in play: play the land or channel it
             for (String name : List.of("Forest", "Forest", "Forest", "Boseiju, Who Endures", "Cavern of Souls", "Unholy Annex // Ritual Chamber")) {
                 Card pick = null;
@@ -2734,6 +2747,24 @@ public final class ForgeBackend implements GameBackend {
         @Override
         public boolean playChosenSpellAbility(SpellAbility sa) {
             if (sa.isLandAbility()) return super.playChosenSpellAbility(sa);
+            castChosen(sa);
+            return true;
+        }
+
+        /**
+         * A spell cast by an effect (Isochron Scepter's copy, cascade, "you may cast it without paying its mana cost"): the AI's
+         * version decided targets and optional costs itself, or quietly declined to cast; cast it like one picked at priority,
+         * so the client chooses the kicker, X and targets.
+         */
+        @Override
+        public boolean playSaFromPlayEffect(SpellAbility tgtSA) {
+            if (!live() || !tgtSA.isSpell()) return super.playSaFromPlayEffect(tgtSA);
+            pendingTaps = null;
+            pendingTapColors = null;
+            return castChosen(tgtSA);
+        }
+
+        private boolean castChosen(SpellAbility sa) {
             int phyrexianLife = 0;
             if (live() && sa.getPayCosts() != null && sa.getPayCosts().hasManaCost()) {
                 PhyrexianPlan plan = askPhyrexian(sa);
@@ -2799,7 +2830,7 @@ public final class ForgeBackend implements GameBackend {
                     game.getAction().moveTo(castFrom, now, null, null);
                 }
             }
-            return true;
+            return played;
         }
 
         @Override
@@ -2841,12 +2872,16 @@ public final class ForgeBackend implements GameBackend {
         @Override
         public boolean payCostToPreventEffect(forge.game.cost.Cost cost, SpellAbility sa, boolean alreadyPaid, forge.util.collect.FCollectionView<Player> allPayers) {
             if (!live() || !forge.ai.ComputerUtilCost.canPayCost(cost, sa, player, true)) return live() ? false : super.payCostToPreventEffect(cost, sa, alreadyPaid, allPayers);
-            int life = 0;
-            boolean onlyLife = true;
+            int life = 0, energy = 0;
+            boolean onlyLife = true, onlyEnergy = true;
             for (forge.game.cost.CostPart part : cost.getCostParts()) {
                 if (part instanceof forge.game.cost.CostPayLife pl) life += pl.getAbilityAmount(sa);
                 else onlyLife = false;
+                // the amount can be an SVar (Wrath of the Skies: PayEnergy<Y>), so resolve it for the prompt text
+                if (part instanceof forge.game.cost.CostPayEnergy pe) energy += pe.getAbilityAmount(sa);
+                else onlyEnergy = false;
             }
+            String costText = onlyEnergy ? "Pay " + (energy == 0 ? "0 {E}" : "{E}".repeat(energy)) :cost.toSimpleString();
             int prompt = 0;
             List<PromptParameter> params = new ArrayList<>();
             if (onlyLife && life == 2) prompt = PROMPT_PAY_2_LIFE;
@@ -2854,14 +2889,21 @@ public final class ForgeBackend implements GameBackend {
                 prompt = PROMPT_PAY_N_LIFE;
                 params.add(numberParam("CardId", iid(sa.getHostCard())));
                 params.add(numberParam("Number", life));
-            } else prompt = db.promptId("Pay " + cost.toSimpleString() + "?");
+            } else {
+                String question = (costText.startsWith("Pay ") ? "" : "Pay ") + costText + "?";
+                prompt = db.promptId(question);
+                if (prompt == 0) {
+                    prompt = PROMPT_FORGE_TEXT;
+                    params.add(textParam("Text", question));
+                }
+            }
             Card host = sa.getHostCard();
             int reAbility = 0;
             for (forge.game.replacement.ReplacementEffect re : host.getReplacementEffects()) {
                 reAbility = abilities.abilityByText(grp(host), re.getDescription(), host);
                 if (reAbility != 0) break;
             }
-            if (!askOptional(host, prompt, params, "pay " + cost.toSimpleString(), reAbility)) return false;
+            if (!askOptional(host, prompt, params, "pay " + costText, reAbility)) return false;
             final forge.game.cost.CostPayment pay = new forge.game.cost.CostPayment(cost, sa);
             return pay.payComputerCosts(new forge.ai.AiCostDecision(player, sa, true));
         }
@@ -2873,7 +2915,12 @@ public final class ForgeBackend implements GameBackend {
                 return askExplore(sa.getHostCard(), revealed);
             }
             Card src = cardToShow != null ? cardToShow : sa == null ? null : sa.getHostCard();
-            return askOptional(src, promptFor(message), List.of(), message);
+            int prompt = promptFor(message);
+            // no client prompt for Forge's question ("Do you want to play Orim's Chant?"): show Forge's wording, not a blank prompt
+            if (prompt == 0 && message != null && !message.isBlank()) {
+                return askOptional(src, PROMPT_FORGE_TEXT, List.of(textParam("Text", message)), message);
+            }
+            return askOptional(src, prompt, List.of(), message);
         }
 
         /** "You may reveal this card from your opening hand" (Devourer of Destiny, Leylines, Gemstone Caverns): ask per card. */

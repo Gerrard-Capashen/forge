@@ -58,7 +58,12 @@ public class CostPayShards extends CostPart {
     public final String toString() {
         final StringBuilder sb = new StringBuilder();
         sb.append("Pay ");
-        sb.append(Strings.repeat("{M}", Integer.parseInt(getAmount())));
+        final Integer amount = convertAmount();
+        if (amount == null) {
+            sb.append(getAmount()).append(" {M}");
+        } else {
+            sb.append(Strings.repeat("{M}", amount));
+        }
         return sb.toString();
     }
 

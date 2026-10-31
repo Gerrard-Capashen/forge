@@ -59,10 +59,12 @@ public class CostPayEnergy extends CostPart {
     public final String toString() {
         final StringBuilder sb = new StringBuilder();
         sb.append("Pay ");
-        if (getAmount().equals("X")) {
-            sb.append("X {E}");
+        final Integer amount = convertAmount();
+        if (amount == null) {
+            // a variable amount: X, or an SVar such as Wrath of the Skies' Y
+            sb.append(getAmount()).append(" {E}");
         } else {
-            sb.append(Strings.repeat("{E}", Integer.parseInt(getAmount())));
+            sb.append(Strings.repeat("{E}", amount));
         }
         return sb.toString();
     }

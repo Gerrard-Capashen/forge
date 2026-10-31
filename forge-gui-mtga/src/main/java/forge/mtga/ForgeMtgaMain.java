@@ -174,6 +174,13 @@ public final class ForgeMtgaMain {
             red.put("Command Tower", 10);
             red.put("Mountain", 30);
         }
+        if ("scepter".equals(rig)) {      // test rig: Isochron Scepter + Orim's Chant (a spell cast by an effect), Wrath of the Skies (variable energy) vs the bolt deck
+            green.clear();
+            green.put("Isochron Scepter", 8);
+            green.put("Orim's Chant", 8);
+            green.put("Wrath of the Skies", 8);
+            green.put("Plains", 16);
+        }
         if ("color".equals(rig)) {      // test rig: "choose a color" as a land enters (Room of Refuge) vs a passive opponent
             green.clear();
             green.put("Room of Refuge", 10);

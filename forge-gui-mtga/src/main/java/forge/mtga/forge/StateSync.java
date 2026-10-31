@@ -737,6 +737,14 @@ public final class StateSync {
         s.zones.put(Z_STACK, z.build());
     }
 
+    /**
+     * A token on the battlefield, or a dungeon in the command zone (no DungeonStatus room tracker yet), appears out of nowhere: announced as
+     * TokenCreated. So does a spell copy cast straight onto the stack (Isochron Scepter's copy of the imprinted card).
+     */
+    private boolean appearsFromNowhere(Card c, int zid) {
+        return gsId > 0 && (c.isToken() && (zid == Z_BF || zid == Z_STACK) || c.getType().isDungeon() && zid == Z_COMMAND);
+    }
+
     /** Instance id for c now in zone zid; a zone change allocates a new id (recorded as an IdChange). */
     private int track(Snapshot s, Card c, int zid) {
         String key = "c" + c.getId();
@@ -749,13 +757,13 @@ public final class StateSync {
             usedIids.add(id);
             s.binds.put(key, new int[] {id, zid});
             s.newForge.put(id, c.getId());
-            // a dungeon appears in the command zone out of nowhere, like a token on the battlefield (no DungeonStatus room tracker yet)
-            if (gsId > 0 && (c.isToken() && zid == Z_BF || c.getType().isDungeon() && zid == Z_COMMAND)) s.createdTokens.add(id);
+            if (appearsFromNowhere(c, zid)) s.createdTokens.add(id);
             return id;
         }
         int was = zoneByKey.getOrDefault(key, -1);
-        if (was == -1) {
+        if (was == -1) {      // an id handed out before the card was ever in a state (a prompt naming it, e.g. the kicker question for a copy)
             s.binds.put(key, new int[] {cur, zid});
+            if (appearsFromNowhere(c, zid)) s.createdTokens.add(cur);
             return cur;
         }
         if (was == zid) return cur;

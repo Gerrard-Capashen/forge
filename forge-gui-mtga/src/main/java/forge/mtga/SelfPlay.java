@@ -630,7 +630,7 @@ public final class SelfPlay {
 
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
 
-        private void problem(String p) { problems.merge(p, 1, Integer::sum); }
+        private void problem(String p) { problems.merge(p, 1, Integer::sum); if (TRACE) System.out.println("[selfplay] PROBLEM " + p); }
 
         @Override
         public synchronized void send(MatchServiceToClientMessage.Builder m, int requestId) {
