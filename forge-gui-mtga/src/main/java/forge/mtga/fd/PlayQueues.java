@@ -13,7 +13,7 @@ import static forge.mtga.fd.FrontDoor.obj;
 
 /**
  * The play blade's "Find Match" queues: Bot Play (against the Forge AI) and Casual Play (against another player), each in
- * Standard, Pioneer, Modern, Legacy, Vintage and Pauper. Every queue is an ordinary constructed event named {@code <Mode>_<Format>} whose deck format is
+ * Standard, Pioneer, Modern, Legacy, Vintage, Pauper and Premodern. Every queue is an ordinary constructed event named {@code <Mode>_<Format>} whose deck format is
  * the queue's format, so the client's deck picker only offers decks that are valid there; the server checks the submitted deck
  * again ({@link ForgeFormats#problem}). They are not "AIBotMatch" events, so the client runs the normal ladder flow
  * (EventJoin, EventSetDeckV3, EventEnterPairing) and the server starts the match on EventEnterPairing.
@@ -35,7 +35,7 @@ final class PlayQueues {
     }
 
     /** Formats offered by every mode (client format names, see {@link ForgeFormats#SPECS}). */
-    static final List<String> FORMATS = List.of("Standard", "Pioneer", "Modern", "Legacy", "Vintage", "Pauper");
+    static final List<String> FORMATS = List.of("Standard", "Pioneer", "Modern", "Legacy", "Vintage", "Pauper", "Premodern");
 
     /** Play-blade queue id of a mode and format, e.g. "bot-standard". */
     static String queueId(Mode mode, String format) { return mode.idPrefix + format.toLowerCase(); }

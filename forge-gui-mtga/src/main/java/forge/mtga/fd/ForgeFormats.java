@@ -64,6 +64,7 @@ public final class ForgeFormats {
             new Spec("Legacy", "Legacy", 60, 250, 15, 0, 0, false, false),
             new Spec("Vintage", "Vintage", 60, 250, 15, 0, 0, false, false),
             new Spec("Pauper", "Pauper", 60, 250, 15, 0, 0, false, false),
+            new Spec("Premodern", "Premodern", 60, 250, 15, 0, 0, false, false),
             new Spec("Commander", "Commander", 99, 99, 1, 1, 2, true, false),
             new Spec("Historic", "Historic", 60, 250, 15, 0, 0, false, true),
             new Spec("Alchemy", null, 60, 250, 15, 0, 0, false, true),
@@ -149,7 +150,7 @@ public final class ForgeFormats {
     /** Format of the direct challenge screen's slot name (client format names): Standard / Pioneer / Modern / Limited rules under the slot's own name. */
     private static final Map<String, List<String>> DIRECT_SLOTS = Map.of("Standard", List.of("DirectGame"), "Pioneer", List.of("DirectGameBrawlRebalanced"),
             "Modern", List.of("DirectGameAlchemy"), "Legacy", List.of("DirectGameLimited"), "Vintage", List.of("DirectGameVintage"),
-            "Pauper", List.of("DirectGamePauper"));
+            "Pauper", List.of("DirectGamePauper"), "Premodern", List.of("DirectGamePremodern"));
 
     public synchronized GetFormatsResponse response() {
         GetFormatsResponse.Builder b = GetFormatsResponse.newBuilder();

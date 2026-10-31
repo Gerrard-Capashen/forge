@@ -34,3 +34,9 @@ Vintage/Lurrus PO.txt
 Vintage/Mono-White Initiative.txt
 Vintage/Oath of Druids.txt
 Vintage/Raker Shops.txt
+Premodern/Azorius Control.txt
+Premodern/Blue-Black Psychatog.txt
+Premodern/Green Stompy.txt
+Premodern/Mono-Red Burn.txt
+Premodern/Mono-Red Goblins.txt
+Premodern/White Weenie.txt

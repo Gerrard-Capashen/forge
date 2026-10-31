@@ -76,6 +76,12 @@ public final class QueueCheck {
         check(formats.problem("Modern", deck("Relentless Rats", 30, "Mountain", 30), 0) == null, "any number of Relentless Rats is fine");
         check(formats.problem("Legacy", bolt, 0) == null, "Legacy accepts Bolt + Mountain");
         check(formats.problem("Pauper", bolt, 0) == null, "Pauper accepts Bolt + Mountain");
+        check(formats.problem("Premodern", bolt, 0) == null, "Premodern accepts Bolt + Mountain");
+        check(formats.problem("Premodern", deck("Arcbound Ravager", 4, "Mountain", 56), 0) != null, "Premodern refuses Arcbound Ravager (Darksteel): " + formats.problem("Premodern", deck("Arcbound Ravager", 4, "Mountain", 56), 0));
+        check(formats.problem("Premodern", deck("Necropotence", 1, "Swamp", 59), 0) != null, "Premodern bans Necropotence");
+        check(formats.problem("Premodern", deck("Hermit Druid", 4, "Forest", 56), 0) == null, "Premodern allows Hermit Druid (banned in Legacy)");
+        check(formats.problem("Premodern", deck("Black Lotus", 1, "Mountain", 59), 0) != null, "Premodern refuses Black Lotus");
+        check(formats.problem("Premodern", deck("Thoughtseize", 4, "Swamp", 56), 0) != null, "Premodern refuses Thoughtseize");
         check(formats.problem("Legacy", deck("Black Lotus", 1, "Mountain", 59), 0) != null, "Legacy refuses Black Lotus");
         check(formats.problem("Vintage", deck("Black Lotus", 1, "Mountain", 59), 0) == null, "Vintage accepts one Black Lotus");
         check(formats.problem("Vintage", deck("Brainstorm", 2, "Mountain", 58), 0) != null, "Vintage refuses 2 Brainstorm (restricted): " + formats.problem("Vintage", deck("Brainstorm", 2, "Mountain", 58), 0));
@@ -104,7 +110,7 @@ public final class QueueCheck {
                 else System.out.println("  bot pool " + f + " / " + d.name() + " skipped:" + (lacking.isEmpty() ? "" : " NOT ON CLIENT " + lacking) + (problem == null ? "" : " ILLEGAL: " + problem));
             }
             System.out.println("  bot pool " + f + ": " + ok + " playable of " + pool.size());
-            check(ok >= 8, "bot pool " + f + " has " + ok + " playable decks");
+            check(ok >= (f.equals("Premodern") ? 6 : 8), "bot pool " + f + " has " + ok + " playable decks");   // Premodern: the six starter decks, no MTGGoldfish pool
         }
 
         // seeding on a copy of the real data dir (old "Forge: ..." starter decks, the player's own decks)
@@ -146,9 +152,9 @@ public final class QueueCheck {
         FrontDoor moved = new FrontDoor(db, older, null);
         java.util.List<String> movedNames = new java.util.ArrayList<>();
         for (JsonObject d : moved.decks().all()) movedNames.add(d.getAsJsonObject("Summary").get("Name").getAsString());
-        long lvp = forge.mtga.DefaultDecks.all().stream().filter(d -> java.util.Set.of("Legacy", "Vintage", "Pauper").contains(d.format())).count();
-        check(movedNames.size() == lvp && movedNames.stream().allMatch(n -> n.endsWith("(Legacy)") || n.endsWith("(Vintage)") || n.endsWith("(Pauper)")),
-                "an old one-shot profile gets the missing Legacy/Vintage/Pauper decks (" + movedNames.size() + " of " + lvp + "), not the Standard/Pioneer/Modern ones it deleted");
+        long lvp = forge.mtga.DefaultDecks.all().stream().filter(d -> java.util.Set.of("Legacy", "Vintage", "Pauper", "Premodern").contains(d.format())).count();
+        check(movedNames.size() == lvp && movedNames.stream().allMatch(n -> n.endsWith("(Legacy)") || n.endsWith("(Vintage)") || n.endsWith("(Pauper)") || n.endsWith("(Premodern)")),
+                "an old one-shot profile gets the missing Legacy/Vintage/Pauper/Premodern decks (" + movedNames.size() + " of " + lvp + "), not the Standard/Pioneer/Modern ones it deleted");
 
         // course flow
         check(q.setDeck("BotPlay_Modern", new JsonObject(), null) instanceof FrontDoor.Err, "set deck before join is an error");
