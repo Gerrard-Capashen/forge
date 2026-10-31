@@ -37,6 +37,7 @@ public class MakeCardEffect extends SpellAbilityEffect {
 
             List<ICardFace> faces = new ArrayList<>();
             List<PaperCard> pack = null;
+            String boosterSet = null;
             List<String> names = Lists.newArrayList();
 
             final String desc = sa.getParamOrDefault("OptionPrompt", "");
@@ -82,6 +83,8 @@ public class MakeCardEffect extends SpellAbilityEffect {
                 StaticData.instance().ensureAllCardsLoaded();
                 SealedTemplate booster = Aggregates.random(StaticData.instance().getBoosters());
                 pack = new BoosterPack(booster.getEdition(), booster).getCards();
+                CardEdition packEdition = booster.getEdition() == null ? null : StaticData.instance().getEditions().get(booster.getEdition());
+                boosterSet = packEdition != null ? packEdition.getName() : booster.getEdition();
                 for (PaperCard pc : pack) {
                     ICardFace face = pc.getRules().getMainPart();
                     if (face != null)
@@ -110,8 +113,9 @@ public class MakeCardEffect extends SpellAbilityEffect {
                     } else {
                         final String sbName = sa.hasParam("SpellbookName") ? sa.getParam("SpellbookName") :
                                 source.getTranslatedName();
-                        final String message = sa.hasParam("Choices") ? 
+                        final String message = sa.hasParam("Choices") ?
                             Localizer.getInstance().getMessage("lblChooseaCard") :
+                            boosterSet != null ? Localizer.getInstance().getMessage("lblChooseFromBooster", boosterSet) :
                             Localizer.getInstance().getMessage("lblChooseFromSpellbook", sbName);
                         chosen = player.getController().chooseCardName(sa, faces, message);
                     }

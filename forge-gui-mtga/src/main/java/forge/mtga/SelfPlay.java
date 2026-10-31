@@ -128,6 +128,7 @@ public final class SelfPlay {
         System.out.println("companion: states with the card in the sideboard zone " + COMPANION_SHOWN.get() + ", with the designation " + COMPANION_DESIGNATED.get() + ", special actions taken " + COMPANION_ACTIONS.get());
         System.out.println("face-down objects seen (object x state): " + FACEDOWN_SEEN.get());
         System.out.println("card names chosen: " + CARD_NAMES.get());
+        System.out.println("card choices (card browser): " + CARD_CHOICES.get());
         System.out.println("Phyrexian pips answered: " + PHYREXIAN_LIFE.get() + " with life, " + PHYREXIAN_MANA.get() + " with mana");
         System.out.println(failed == 0 ? "SELFPLAY OK" : "SELFPLAY FAILED games=" + failed);
         System.exit(failed == 0 ? 0 : 1);
@@ -573,6 +574,7 @@ public final class SelfPlay {
     static final java.util.concurrent.atomic.AtomicInteger ATTACH_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static CardDb TITLE_DB;
     static final java.util.concurrent.atomic.AtomicInteger CARD_NAMES = new java.util.concurrent.atomic.AtomicInteger();
+    static final java.util.concurrent.atomic.AtomicInteger CARD_CHOICES = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger COMPANION_SHOWN = new java.util.concurrent.atomic.AtomicInteger(), COMPANION_DESIGNATED = new java.util.concurrent.atomic.AtomicInteger(), COMPANION_ACTIONS = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger PHYREXIAN_LIFE = new java.util.concurrent.atomic.AtomicInteger(), PHYREXIAN_MANA = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger OPP_HAND_VISIBLE = new java.util.concurrent.atomic.AtomicInteger();
@@ -809,6 +811,18 @@ public final class SelfPlay {
                         CARD_NAMES.incrementAndGet();
                         ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_SelectNResp);
                         r.getSelectNRespBuilder().addIds(tid);
+                        reply(r);
+                        break;
+                    }
+                    if (sn.getIdType() == IdType.IdType_CardGrpId) {      // card browser of cards not in the game (Booster Tutor's pack): the answer is a GrpId
+                        // the client reads the source instance unconditionally and names each browser card after its GrpId
+                        if (!objs.containsKey(sn.getSourceId())) problem("card choice without a known source (the client NREs in SelectNWorkflow_Printing)");
+                        if (new HashSet<>(sn.getIdsList()).size() != sn.getIdsCount()) problem("card choice with duplicate GrpIds");
+                        if (!g.hasPrompt() || sn.getMinSel() != 1 || sn.getMaxSel() != 1) problem("card choice without prompt / one choice");
+                        System.out.println("[selfplay] card choice among " + sn.getIdsList());
+                        CARD_CHOICES.incrementAndGet();
+                        ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_SelectNResp);
+                        r.getSelectNRespBuilder().addIds(sn.getIds(rnd.nextInt(sn.getIdsCount())));
                         reply(r);
                         break;
                     }

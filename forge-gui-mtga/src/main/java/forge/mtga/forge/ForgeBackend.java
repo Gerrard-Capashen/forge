@@ -558,6 +558,16 @@ public final class ForgeBackend implements GameBackend {
         return PromptParameter.newBuilder().setParameterName(name).setType(ParameterType.ParameterType_Number).setNumberValue(v).build();
     }
 
+    private static PromptParameter textParam(String name, String v) {
+        return PromptParameter.newBuilder().setParameterName(name).setType(ParameterType.ParameterType_NonLocalizedString).setStringValue(v).build();
+    }
+
+    /**
+     * A prompt id the client's Prompts table lacks: the patched client (ForgeBridge.PromptText, hooked into PromptEngine.GetPromptText(Prompt, ...))
+     * shows its "Text" string parameter as is. For Forge's own wording, e.g. "Choose a card from this Kaladesh booster pack".
+     */
+    static final int PROMPT_FORGE_TEXT = 9_000_001;
+
     // ---- mulligan ----------------------------------------------------------------------------------------------
 
     /**
@@ -977,6 +987,11 @@ public final class ForgeBackend implements GameBackend {
         if ("nyk".equals(rig)) {      // Nykthos autotap: in play Nykthos, Forest x3, Plains, Gigantosaurus x2 (devotion to green 10); hand: Craterhoof Behemoth ({5}{G}{G}{G}: only affordable through Nykthos)
             for (String name : List.of("Nykthos, Shrine to Nyx", "Forest", "Forest", "Forest", "Plains", "Gigantosaurus", "Gigantosaurus")) rigAdd(p, name, ZoneType.Battlefield, 0);
             rigAdd(p, "Craterhoof Behemoth", ZoneType.Hand, 0);
+            return;
+        }
+        if ("bt".equals(rig)) {      // Booster Tutor: Swamp x2 in play, Booster Tutor x2 in hand -> the pack shows in the card browser
+            for (String name : List.of("Swamp", "Swamp")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Booster Tutor", "Booster Tutor")) rigAdd(p, name, ZoneType.Hand, 0);
             return;
         }
         if ("pte".equals(rig)) {      // playtest deck: explore + blight. In play: Forest x2, Overgrown Tomb, Watery Grave, Llanowar Elves; hand: Jadelight Ranger, Requiting Hex
@@ -1495,6 +1510,41 @@ public final class ForgeBackend implements GameBackend {
         System.out.println("[mtga] client card name reply " + r.toString().replace("\n", " "));
         for (int id : r.getSelectNResp().getIdsList()) {
             String name = titleNames.get(id);
+            if (name != null) return name;
+        }
+        return null;
+    }
+
+    /**
+     * "Choose one of these cards" for cards that exist nowhere in the game yet (Booster Tutor's pack, conjure-one-of choices):
+     * the client's card browser (SelectNReq, Dynamic list of CardGrpIds -> SelectNWorkflow_Printing), which shows each option as a
+     * card and answers the chosen GrpId. The client names each browser card after its GrpId, so duplicates must go, and it reads the
+     * source instance unconditionally, so a source is required. Null = no answer (or no source).
+     */
+    String askCardChoice(Card source, java.util.Collection<String> names, String message) {
+        if (source == null) return null;
+        Map<Integer, String> byGrp = new LinkedHashMap<>();
+        for (String n : names) { int g = db.grpId(n); if (g != 0) byGrp.putIfAbsent(g, n); }
+        if (byGrp.isEmpty()) return null;
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(1).setMaxSel(1)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setOptionContext(com.wizards.mtga.gre.OptionContext.OptionContext_Resolution)
+                .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Dynamic)
+                .setIdType(com.wizards.mtga.gre.IdType.IdType_CardGrpId)
+                .setSourceId(iid(source)).addAllIds(byGrp.keySet());
+        // Forge's own message names the choice ("Choose a card from this <set> booster pack"); without one, the client's "Choose a card"
+        boolean text = message != null && !message.isBlank();
+        for (com.wizards.mtga.gre.Prompt.Builder pb : List.of(sn.getPromptBuilder(), req.getPromptBuilder())) {
+            pb.setPromptId(text ? PROMPT_FORGE_TEXT : PROMPT_CHOOSE_CARD).addParameters(numberParam("CardId", iid(source)));
+            if (text) pb.addParameters(textParam("Text", message));
+        }
+        System.out.println("[mtga] asking a card choice for " + source + " (\"" + message + "\") among " + byGrp.values());
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        System.out.println("[mtga] client card choice reply " + r.toString().replace("\n", " "));
+        for (int id : r.getSelectNResp().getIdsList()) {
+            String name = byGrp.get(id);
             if (name != null) return name;
         }
         return null;
@@ -2656,7 +2706,10 @@ public final class ForgeBackend implements GameBackend {
             List<String> names = new ArrayList<>();
             for (forge.card.ICardFace f : faces) if (db.grpId(f.getName()) != 0) names.add(f.getName());
             if (names.isEmpty()) return super.chooseCardName(sa, faces, message);
-            String name = askCardName(sa == null ? null : sa.getHostCard(), names, message);
+            Card host = sa == null ? null : sa.getHostCard();
+            // a fixed set of cards (Booster Tutor's pack, conjure choices): show them as cards; the name search box is the fallback
+            String name = askCardChoice(host, names, message);
+            if (name == null) name = askCardName(host, names, message);
             return name != null && names.contains(name) ? name : super.chooseCardName(sa, faces, message);
         }
 

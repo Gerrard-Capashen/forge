@@ -160,7 +160,7 @@ public final class ForgeMtgaMain {
         Map<String, Integer> red = new LinkedHashMap<>();
         red.put("Mountain", 16);
         red.put("Lightning Bolt", 24);
-        if ("bf".equals(rig)) {      // test rig: a passive opponent
+        if ("bf".equals(rig) || "bt".equals(rig)) {      // test rig: a passive opponent
             red.clear();
             red.put("Mountain", 40);
         }
