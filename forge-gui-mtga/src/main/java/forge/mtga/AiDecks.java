@@ -30,8 +30,34 @@ public final class AiDecks {
     private AiDecks() { }
 
     /** {@code companion}: the deck's companion card (Forge name) or null; a match does not play it yet. */
-    public record Choice(String name, Map<String, Integer> cards, String companion) {
-        public Choice(String name, Map<String, Integer> cards) { this(name, cards, null); }
+    public record Choice(String name, Map<String, Integer> cards, String companion, List<String> commanders) {
+        public Choice(String name, Map<String, Integer> cards) { this(name, cards, null, List.of()); }
+        public Choice(String name, Map<String, Integer> cards, String companion) { this(name, cards, companion, List.of()); }
+    }
+
+    /**
+     * A Brawl deck for the AI (Arena's Brawl is Commander for two): Forge's Commander deck builder around a random legendary commander the
+     * client has, 99 cards. Of 60 tries the one missing the fewest client cards wins; its missing cards become basic lands.
+     */
+    public static Choice brawl(Predicate<String> onClient) {
+        Choice best = null;
+        int bestMissing = Integer.MAX_VALUE;
+        for (int i = 0; i < 60 && bestMissing > 6; i++) {
+            Deck d = DeckgenUtil.generateCommanderDeck(true, forge.game.GameType.Commander);
+            List<PaperCard> commanders = d.getCommanders();
+            if (commanders.size() != 1 || !commanders.get(0).getRules().canBeBrawlCommander() || !onClient.test(commanders.get(0).getName())) continue;
+            Map<String, Integer> cards = mainCards(d);
+            if (cards.values().stream().mapToInt(Integer::intValue).sum() != 99) continue;
+            int missing = 0;
+            for (Map.Entry<String, Integer> e : cards.entrySet()) if (!onClient.test(e.getKey())) missing += e.getValue();
+            if (missing < bestMissing) {
+                bestMissing = missing;
+                best = new Choice(commanders.get(0).getName() + " (Brawl)", cards, null, List.of(commanders.get(0).getName()));
+            }
+        }
+        if (best == null) throw new IllegalStateException("no Brawl deck the client can show");
+        if (bestMissing > 0) System.out.println("[mtga] AI Brawl deck " + best.name() + ": " + bestMissing + " cards not on the client -> basic lands");
+        return new Choice(best.name(), replaceMissing(best.cards(), onClient), null, best.commanders());
     }
 
     public static Choice pick(String spec) {

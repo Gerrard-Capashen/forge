@@ -15,6 +15,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -133,6 +134,7 @@ public final class PeerHost {
             ok.addProperty("matchId", o.matchId());
             ok.addProperty("name", o.host().name());
             ok.add("profile", o.host().toJson());
+            if (!o.room().commanders(0).isEmpty()) ok.add("commanders", new com.google.gson.Gson().toJsonTree(o.room().commanders(0)));       // the host's (Brawl): the guest's versus screen shows them
             link.sendText(PeerLink.HELLO_OK, ok.toString());
             System.out.println("[mtga] peer: guest '" + seat.name() + "' joined match " + o.matchId() + " from " + remote);
             o.onGuestJoined().accept(guestProfile(h, seat.name()));
@@ -191,7 +193,14 @@ public final class PeerHost {
         String name = str(h, "name");
         String companion = str(h, "companion");       // a guest of an older build sends none
         if (companion.isBlank() || StaticData.instance().getCommonCards().getUniqueByName(companion) == null || db.grpId(companion) == 0) companion = null;
-        return new ForgeMatch.Seat(name.isBlank() ? "Guest" : name, deck, printing, side, companion);
+        List<String> commanders = new java.util.ArrayList<>();       // a guest of an older build sends none
+        if (h.has("commanders") && h.get("commanders").isJsonArray()) {
+            for (JsonElement e : h.getAsJsonArray("commanders")) {
+                String c = e.getAsString();
+                if (StaticData.instance().getCommonCards().getUniqueByName(c) != null && db.grpId(c) != 0) commanders.add(c);
+            }
+        }
+        return new ForgeMatch.Seat(name.isBlank() ? "Guest" : name, deck, printing, side, companion, commanders);
     }
 
     private static String str(JsonObject o, String k) { return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : ""; }

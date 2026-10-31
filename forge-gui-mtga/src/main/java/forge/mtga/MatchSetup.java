@@ -11,7 +11,15 @@ import java.util.Map;
 public record MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
                          Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
                          java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
-                         String humanCompanion, String aiCompanion) {
+                         String humanCompanion, String aiCompanion, java.util.List<String> humanCommanders, java.util.List<String> aiCommanders) {
+    /** No commanders. */
+    public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
+                      Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
+                      java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
+                      String humanCompanion, String aiCompanion) {
+        this(matchId, humanDeck, aiDeck, grpOverrides, aiName, seat, onResult, humanSideboard, gamesToWin, humanCompanion, aiCompanion, java.util.List.of(), java.util.List.of());
+    }
+
     /** No companions. */
     public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
                       Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,

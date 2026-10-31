@@ -37,15 +37,16 @@ public final class QueueCheck {
         PlayQueues q = new PlayQueues();
 
         JsonArray cfg = q.queueConfig(), events = q.eventInfos();
-        int queues = PlayQueues.Mode.values().length * PlayQueues.FORMATS.size();
+        int queues = 0, bo3s = PlayQueues.FORMATS.size();       // Bot Play offers a best-of-three event for every format but Brawl
+        for (PlayQueues.Mode m : PlayQueues.Mode.values()) queues += PlayQueues.formats(m).size();
         // Bot Play also has a best-of-three event per format
-        check(cfg.size() == queues && events.size() == queues + PlayQueues.FORMATS.size(), queues + " queues and " + (queues + PlayQueues.FORMATS.size()) + " events");
+        check(cfg.size() == queues && events.size() == queues + bo3s, queues + " queues and " + (queues + bo3s) + " events");
         java.util.Map<String, JsonObject> byName = new java.util.HashMap<>();
         for (int i = 0; i < events.size(); i++) byName.put(events.get(i).getAsJsonObject().get("InternalEventName").getAsString(), events.get(i).getAsJsonObject());
         for (int i = 0; i < cfg.size(); i++) {
             JsonObject c = cfg.get(i).getAsJsonObject(), e = byName.get(cfg.get(i).getAsJsonObject().get("EventNameBO1").getAsString());
             String name = e.get("InternalEventName").getAsString();
-            boolean bot = PlayQueues.modeOf(name) == PlayQueues.Mode.BOT;
+            boolean bot = PlayQueues.modeOf(name) == PlayQueues.Mode.BOT && !PlayQueues.BRAWL.equals(PlayQueues.formatOf(name));
             String bo3 = c.get("EventNameBO3").isJsonNull() ? null : c.get("EventNameBO3").getAsString();
             check(bot ? (name + PlayQueues.BO3).equals(bo3) : bo3 == null, name + (bot ? " offers a best-of-three event" : " is best-of-one only"));
             if (bot) {
@@ -56,14 +57,30 @@ public final class QueueCheck {
             }
             check(c.get("EventNameBO1").getAsString().equals(name) && PlayQueues.isQueueEvent(name), "queue " + c.get("Id").getAsString() + " -> event " + name);
             String format = e.getAsJsonObject("EventUXInfo").get("DeckSelectFormat").getAsString();
-            check(format.equals(PlayQueues.formatOf(name)) && PlayQueues.FORMATS.contains(format), name + " deck picker format " + format);
+            check(format.equals(PlayQueues.formatOf(name)) && PlayQueues.formats(PlayQueues.modeOf(name)).contains(format), name + " deck picker format " + format);
             check("Queue".equals(e.getAsJsonObject("EventUXInfo").get("EventBladeBehavior").getAsString()), name + " is a queue event");
             boolean ranked = PlayQueues.isRanked(name), flagged = e.getAsJsonArray("Flags").toString().contains("\"Ranked\"");
             check(ranked == "Ranked".equals(c.get("QueueType").getAsString()) && ranked == flagged, name + (ranked ? " is in the Ranked list with the Ranked flag" : " is unranked"));
         }
         check(PlayQueues.modeOf("BotPlay_Modern") == PlayQueues.Mode.BOT && PlayQueues.modeOf("CasualPlay_Pioneer") == PlayQueues.Mode.CASUAL
-                && PlayQueues.modeOf("BotPlay_Pauper") == PlayQueues.Mode.BOT && PlayQueues.modeOf("RankedPlay_Vintage") == PlayQueues.Mode.RANKED && PlayQueues.modeOf("BotPlay_Brawl") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
+                && PlayQueues.modeOf("BotPlay_Pauper") == PlayQueues.Mode.BOT && PlayQueues.modeOf("RankedPlay_Vintage") == PlayQueues.Mode.RANKED && PlayQueues.modeOf("BotPlay_Brawl") == PlayQueues.Mode.BOT && PlayQueues.modeOf("CasualPlay_Brawl") == PlayQueues.Mode.CASUAL
+                && PlayQueues.modeOf("RankedPlay_Brawl") == null && PlayQueues.modeOf("BotPlay_Brawl_BO3") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
                 "event names parse");
+
+        // Brawl: its queues sit under the blade's Brawl tab (QueueType "Brawl"), best of one; a generated AI deck passes the server's own check
+        for (String id : new String[] {"bot-brawl", "casual-brawl"}) {
+            JsonObject b = null;
+            for (int i = 0; i < cfg.size(); i++) if (id.equals(cfg.get(i).getAsJsonObject().get("Id").getAsString())) b = cfg.get(i).getAsJsonObject();
+            check(b != null && "Brawl".equals(b.get("QueueType").getAsString()) && b.get("EventNameBO3").isJsonNull(), id + " is a best-of-one queue of the Brawl tab");
+        }
+        forge.mtga.AiDecks.Choice brawl = forge.mtga.AiDecks.brawl(n -> db.grpId(n) != 0);
+        int brawlCards = brawl.cards().values().stream().mapToInt(Integer::intValue).sum();
+        System.out.println("  AI Brawl deck: " + brawl.name() + ", " + brawlCards + " cards + " + brawl.commanders());
+        check(brawl.commanders().size() == 1 && brawlCards == 99, "the AI's Brawl deck is 99 cards and a commander");
+        check(formats.problem("Commander", brawl.cards(), brawl.commanders(), 0) == null, "a Brawl deck is a Commander deck too (same pool and bans)");
+        check(formats.problem("Brawl", brawl.cards(), brawl.commanders(), 0) == null, "Brawl accepts the generated deck: " + formats.problem("Brawl", brawl.cards(), brawl.commanders(), 0));
+        check(formats.problem("Brawl", brawl.cards(), java.util.List.of(), 0) != null, "Brawl refuses a deck without a commander");
+        check(formats.problem("Standard", deck("Mountain", 60), brawl.commanders(), 0) != null, "Standard refuses a commander");
 
         Map<String, Integer> bolt = deck("Lightning Bolt", 4, "Mountain", 56);
         check(formats.problem("Modern", bolt, 0) == null, "Modern accepts Bolt + Mountain");

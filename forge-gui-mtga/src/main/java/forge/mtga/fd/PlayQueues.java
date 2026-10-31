@@ -37,6 +37,24 @@ final class PlayQueues {
     /** Formats offered by every mode (client format names, see {@link ForgeFormats#SPECS}). */
     static final List<String> FORMATS = List.of("Standard", "Pioneer", "Modern", "Legacy", "Vintage", "Pauper", "Premodern");
 
+    /**
+     * Brawl: Bot Play and Casual Play only (no Brawl ladder), best of one (the sideboard screen has no command zone). Its queues sit under the
+     * play blade's own Brawl tab ({@code QueueType} "Brawl"), which the client keeps locked while that list is empty.
+     */
+    static final String BRAWL = ForgeFormats.BRAWL;
+
+    /** The formats a mode offers: the constructed ones, plus Brawl for the unranked modes. */
+    static List<String> formats(Mode m) {
+        if (m == Mode.RANKED) return FORMATS;
+        List<String> all = new java.util.ArrayList<>(FORMATS);
+        all.add(BRAWL);
+        return all;
+    }
+
+    private static String queueType(Mode m, String format) { return BRAWL.equals(format) ? "Brawl" : m.queueType; }
+
+    private static boolean hasBo3(Mode m, String format) { return m == Mode.BOT && !BRAWL.equals(format); }
+
     /** Play-blade queue id of a mode and format, e.g. "bot-standard". */
     static String queueId(Mode mode, String format) { return mode.idPrefix + format.toLowerCase(); }
 
@@ -61,7 +79,9 @@ final class PlayQueues {
         if (eventName == null) return null;
         String base = baseName(eventName);
         for (Mode m : Mode.values()) {
-            if (base.startsWith(m.prefix + "_") && FORMATS.contains(base.substring(m.prefix.length() + 1))) return m;
+            if (!base.startsWith(m.prefix + "_")) continue;
+            String format = base.substring(m.prefix.length() + 1);
+            if (formats(m).contains(format) && (!isBo3(eventName) || hasBo3(m, format))) return m;
         }
         return null;
     }
@@ -82,10 +102,10 @@ final class PlayQueues {
         JsonArray q = new JsonArray();
         for (Mode m : Mode.values()) {
             if (!modes.contains(m)) continue;
-            for (String f : FORMATS) {
+            for (String f : formats(m)) {
                 String ev = eventName(m, f);
-                q.add(obj("Id", queueId(m, f), "QueueType", m.queueType, "LocTitle", "Events/Event_Title_" + ev,
-                        "EventNameBO1", ev, "EventNameBO3", m == Mode.BOT ? ev + BO3 : null, "DeckSizeBO1", null, "DeckSizeBO3", null,
+                q.add(obj("Id", queueId(m, f), "QueueType", queueType(m, f), "LocTitle", "Events/Event_Title_" + ev,
+                        "EventNameBO1", ev, "EventNameBO3", hasBo3(m, f) ? ev + BO3 : null, "DeckSizeBO1", null, "DeckSizeBO3", null,
                         "SideBoardBO1", null, "SideBoardBO3", null, "Tags", new JsonArray()));
             }
         }
@@ -100,7 +120,7 @@ final class PlayQueues {
         int priority = 200;
         for (Mode m : Mode.values()) {
             if (!modes.contains(m)) continue;
-            for (String f : FORMATS) for (boolean bo3 : m == Mode.BOT ? new boolean[] {false, true} : new boolean[] {false}) {
+            for (String f : formats(m)) for (boolean bo3 : hasBo3(m, f) ? new boolean[] {false, true} : new boolean[] {false}) {
                 String name = eventName(m, f) + (bo3 ? BO3 : "");
                 JsonObject data = obj(
                         "TitleRankText", obj("LocKey", "Events/Event_Title_" + name),

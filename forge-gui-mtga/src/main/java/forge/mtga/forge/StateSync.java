@@ -516,6 +516,18 @@ public final class StateSync {
         List<Card> command = new ArrayList<>();
         for (Card c : game.getCardsIn(ZoneType.Command)) if (!isCompanionCard(c)) command.add(c);
         addZone(s, ZoneType.Command, 0, command);
+        // the client marks a commander by a designation on the card (it keeps it at the command zone's front, shows the tax)
+        for (Player p : new Player[] {human, ai}) {
+            for (Card c : p.getCommanders()) {
+                ZoneType z = c.getZone() == null ? null : c.getZone().getZoneType();
+                if (z != ZoneType.Command && z != ZoneType.Battlefield && z != ZoneType.Stack && z != ZoneType.Graveyard && z != ZoneType.Exile) continue;
+                int cid = idIn(s, c);
+                if (!s.objs.containsKey(cid)) continue;
+                s.persistent.put("commander:" + c.getId(), AnnotationInfo.newBuilder().setAffectorId(seatOf(p)).addAffectedIds(cid)
+                        .addType(AnnotationType.AnnotationType_Designation)
+                        .addDetails(intDetail("DesignationType", com.wizards.mtga.gre.Designation.Designation_Commander_VALUE)));
+            }
+        }
         addExiledUnder(s);
         addAttachments(s);
         for (Map.Entry<String, AnnotationInfo.Builder> e : extraPersistent.entrySet()) s.persistent.put(e.getKey(), e.getValue());
@@ -1463,10 +1475,15 @@ public final class StateSync {
             .setFreeMulliganCount(0);
 
     /** GameInfo of game {@code gameNumber} in a match won by {@code gamesToWin} games (1 = a single game); {@code minDeck} bounds the sideboarded main deck. */
-    public static GameInfoSupplier matchInfo(int gameNumber, int gamesToWin, int minDeck) {
-        if (gamesToWin <= 1 && gameNumber == 1) return DEFAULT_INFO;
+    public static GameInfoSupplier matchInfo(int gameNumber, int gamesToWin, int minDeck) { return matchInfo(gameNumber, gamesToWin, minDeck, false); }
+
+    /** {@code brawl}: a game with commanders (the client checks every player's deck has one, CommanderDeckValidator). */
+    public static GameInfoSupplier matchInfo(int gameNumber, int gamesToWin, int minDeck, boolean brawl) {
+        if (gamesToWin <= 1 && gameNumber == 1 && !brawl) return DEFAULT_INFO;
         return (gi, matchId) -> {
             DEFAULT_INFO.fill(gi, matchId);
+            if (brawl) gi.setVariant(com.wizards.mtga.gre.GameVariant.GameVariant_Brawl).setFreeMulliganCount(1);       // the first mulligan is free
+            if (gamesToWin <= 1 && gameNumber == 1) return;
             gi.setGameNumber(gameNumber).setMatchWinCondition(gamesToWin > 1
                     ? com.wizards.mtga.gre.MatchWinCondition.MatchWinCondition_Best2of3 : com.wizards.mtga.gre.MatchWinCondition.MatchWinCondition_SingleElimination);
             // the client's sideboard screen validates the deck it submits against these (all zero = "deck too big")

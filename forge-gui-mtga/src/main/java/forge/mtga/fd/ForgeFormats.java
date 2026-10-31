@@ -56,6 +56,13 @@ public final class ForgeFormats {
         return DIRECT_SLOTS.getOrDefault(LIMITED, List.of()).contains(format);
     }
 
+    /**
+     * Arena's Brawl is Commander for two: a commander (legendary creature or planeswalker) and 99 other cards of its colors, singleton, no sideboard,
+     * 25 life, best of one with a free first mulligan. For now it has Commander's card pool and ban list, so a Commander deck is as good as a
+     * Brawl one in a Brawl queue (the two specs only differ in what may lead the deck).
+     */
+    public static final String BRAWL = "Brawl";
+
     /** Client format order (ConstructedSortOrder): the first one is the client's default format. */
     public static final List<Spec> SPECS = List.of(
             new Spec("Standard", "Standard", 60, 250, 15, 0, 0, false, false),
@@ -66,6 +73,7 @@ public final class ForgeFormats {
             new Spec("Pauper", "Pauper", 60, 250, 15, 0, 0, false, false),
             new Spec("Premodern", "Premodern", 60, 250, 15, 0, 0, false, false),
             new Spec("Commander", "Commander", 99, 99, 1, 1, 2, true, false),
+            new Spec(BRAWL, "Commander", 99, 99, 1, 1, 2, true, false),
             new Spec("Historic", "Historic", 60, 250, 15, 0, 0, false, true),
             new Spec("Alchemy", null, 60, 250, 15, 0, 0, false, true),
             new Spec("Timeless", null, 60, 250, 15, 0, 0, false, false),
@@ -150,7 +158,8 @@ public final class ForgeFormats {
     /** Format of the direct challenge screen's slot name (client format names): Standard / Pioneer / Modern / Limited rules under the slot's own name. */
     private static final Map<String, List<String>> DIRECT_SLOTS = Map.of("Standard", List.of("DirectGame"), "Pioneer", List.of("DirectGameBrawlRebalanced"),
             "Modern", List.of("DirectGameAlchemy"), "Legacy", List.of("DirectGameLimited"), "Vintage", List.of("DirectGameVintage"),
-            "Pauper", List.of("DirectGamePauper"), "Premodern", List.of("DirectGamePremodern"));
+            "Pauper", List.of("DirectGamePauper"), "Premodern", List.of("DirectGamePremodern"), BRAWL, List.of("DirectGameBrawl"),
+            "Historic", List.of("DirectGameHistoric"));
 
     public synchronized GetFormatsResponse response() {
         GetFormatsResponse.Builder b = GetFormatsResponse.newBuilder();
@@ -211,7 +220,10 @@ public final class ForgeFormats {
      * Server-side deck check for a queue whose deck format is {@code format}: null if the main deck (Forge names -> quantity) is
      * playable there, else the reason. {@code unknownCards} = cards of the deck Forge could not resolve (never legal).
      */
-    public synchronized String problem(String format, Map<String, Integer> main, int unknownCards) {
+    public synchronized String problem(String format, Map<String, Integer> main, int unknownCards) { return problem(format, main, List.of(), unknownCards); }
+
+    /** The same with the deck's command zone cards (Forge names): a commander format needs its commander, any other has none. */
+    public synchronized String problem(String format, Map<String, Integer> main, List<String> commanders, int unknownCards) {
         Spec spec = null;
         for (Spec s : SPECS) if (s.name().equalsIgnoreCase(format)) spec = s;
         if (spec == null) return "unknown format " + format;
@@ -224,10 +236,30 @@ public final class ForgeFormats {
             PaperCard pc = forgeCards.get(e.getKey());
             boolean unlimited = pc != null && (pc.getRules().getType().isBasicLand()
                     || pc.getRules().getOracleText().contains("A deck can have any number of cards named"));
+            if (!unlimited && spec.singleton() && e.getValue() > 1) return "more than one copy of " + e.getKey() + " in a " + spec.name() + " deck";
             if (!unlimited && e.getValue() > 4) return "more than 4 copies of " + e.getKey();
             if (e.getValue() > 1 && restricted(spec).contains(e.getKey())) return e.getKey() + " is restricted in " + spec.name() + " (one copy)";
         }
         if (total < spec.mainMin()) return "a " + spec.name() + " deck needs at least " + spec.mainMin() + " cards (this one has " + total + ")";
+        if (spec.commandMax() > 0 && total > spec.mainMax()) return "a " + spec.name() + " deck has at most " + spec.mainMax() + " cards besides its commander (this one has " + total + ")";
+        if (commanders.size() < spec.commandMin() || commanders.size() > spec.commandMax()) {
+            return spec.commandMax() == 0 ? spec.name() + " decks have no commander" : "a " + spec.name() + " deck needs " + spec.commandMin() + " commander (this one has " + commanders.size() + ")";
+        }
+        int identity = 0;
+        for (String c : commanders) {
+            PaperCard pc = forgeCards.get(c);
+            if (!ok.contains(c)) return c + " is not legal in " + spec.name();
+            if (pc == null) continue;
+            boolean can = BRAWL.equals(spec.name()) ? pc.getRules().canBeBrawlCommander() : pc.getRules().canBeCommander();
+            if (!can) return c + " can't be a " + spec.name() + " commander";
+            identity |= pc.getRules().getColorIdentity().getColor();
+        }
+        if (!commanders.isEmpty()) {
+            for (String n : main.keySet()) {
+                PaperCard pc = forgeCards.get(n);
+                if (pc != null && !pc.getRules().getColorIdentity().hasNoColorsExcept(identity)) return n + " is outside your commander's colors";
+            }
+        }
         return null;
     }
 

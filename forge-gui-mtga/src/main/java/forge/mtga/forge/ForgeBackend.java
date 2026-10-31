@@ -102,9 +102,9 @@ public final class ForgeBackend implements GameBackend {
     /** A human (seat 1) against Forge's AI. */
     public ForgeBackend(CardDb db, forge.mtga.MatchSetup setup) {
         this(db, new ForgeMatch(db, setup.matchId() == null ? DEFAULT_MATCH_ID : setup.matchId()), 0,
-                new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides(), setup.humanSideboard(), setup.humanCompanion()));
+                new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides(), setup.humanSideboard(), setup.humanCompanion(), setup.humanCommanders()));
         room.setGamesToWin(setup.gamesToWin());
-        room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of(), Map.of(), setup.aiCompanion()), setup.aiName() == null ? "Forge AI" : setup.aiName());
+        room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of(), Map.of(), setup.aiCompanion(), setup.aiCommanders()), setup.aiName() == null ? "Forge AI" : setup.aiName());
         this.onResult = setup.onResult();
     }
 
@@ -647,6 +647,7 @@ public final class ForgeBackend implements GameBackend {
         for (Card c : human.getCardsIn(List.of(ZoneType.Hand, ZoneType.Library))) {
             connect.getConnectRespBuilder().getDeckMessageBuilder().addDeckCards(db.grpId(c.getName()));
         }
+        for (Card c : human.getCommanders()) connect.getConnectRespBuilder().getDeckMessageBuilder().addCommanderCards(db.grpId(c.getName()));
         sync.setDecisionPlayer(withMulliganReq ? human : null);
         mulliganAsked = withMulliganReq;
         // a later game of the match: no new connection, just the opening state of the new game
@@ -729,7 +730,7 @@ public final class ForgeBackend implements GameBackend {
 
     private GREToClientMessage.Builder mulliganReq() {
         GREToClientMessage.Builder m = req(GREMessageType.GREMessageType_MulliganReq);
-        m.getMulliganReqBuilder().setMulliganType(com.wizards.mtga.gre.MulliganType.MulliganType_London).setFreeMulliganCount(0).setMulliganCount(mulligans);
+        m.getMulliganReqBuilder().setMulliganType(com.wizards.mtga.gre.MulliganType.MulliganType_London).setFreeMulliganCount(game.getRules().hasAppliedVariant(forge.game.GameType.Brawl) ? 1 : 0).setMulliganCount(mulligans);
         m.getPromptBuilder().setPromptId(PROMPT_MULLIGAN).addParameters(numberParam("NumberOfCards", 7));
         return m;
     }
@@ -2536,7 +2537,10 @@ public final class ForgeBackend implements GameBackend {
         if (sa.getPayCosts() == null) return;
         // a Phyrexian pip is [color, Phyrexian]: with no auto-tap solution the client still lets a cost made only of such pips be cast
         // (ActionExtensions.CanAffordToCast), which is how {U/P} is castable for 2 life with no blue source
-        ab.addAllManaCost(manaRequirements(sa.getPayCosts().getTotalMana(), objectId, true));
+        // a commander in the command zone costs {2} more for each earlier cast (CostAdjustment); the printed cost is not what the client must afford
+        forge.game.cost.Cost cost = sa.getPayCosts();
+        if (sa.isSpell() && sa.getHostCard().isCommander() && sa.getHostCard().isInZone(ZoneType.Command)) cost = forge.game.cost.CostAdjustment.adjust(cost, sa, false);
+        ab.addAllManaCost(manaRequirements(cost.getTotalMana(), objectId, true));
     }
 
     // ---- the human's Forge controller --------------------------------------------------------------------------

@@ -24,9 +24,17 @@ import java.util.Map;
  */
 public final class ForgeMatch {
     /** What a seat plays: display name, deck by Forge card name, the printings the player chose (card name -> GrpId). */
-    public record Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion) {
+    public record Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion, List<String> commanders) {
+        /** {@code commanders}: the deck's command zone cards (a Brawl deck's commander), Forge names. */
+        public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion) { this(name, deck, overrides, sideboard, companion, List.of()); }
         public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard) { this(name, deck, overrides, sideboard, null); }
         public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides) { this(name, deck, overrides, Map.of(), null); }
+    }
+
+    /** The commanders (Forge names) a seat plays, empty if it has none or is not seated yet. */
+    public List<String> commanders(int seat) {
+        Seat s = seats[seat];
+        return s == null || s.commanders() == null ? List.of() : s.commanders();
     }
 
     /** Games a seat must win to take the match: 1 = a single game, 2 = best of three (the human sideboards between games). */
@@ -195,8 +203,12 @@ public final class ForgeMatch {
     }
 
     private void runMatch() throws Throwable {
-        GameRules rules = new GameRules(GameType.Constructed);
-        rules.setAppliedVariants(EnumSet.of(GameType.Constructed));
+        // a deck with a commander makes it a Brawl game (25 life, the command zone, commander tax)
+        boolean brawl = false;
+        for (Seat seat : seats) brawl |= seat.commanders() != null && !seat.commanders().isEmpty();
+        GameType type = brawl ? GameType.Brawl : GameType.Constructed;
+        GameRules rules = new GameRules(type);
+        rules.setAppliedVariants(EnumSet.of(type));
         rules.setGamesPerMatch(gamesToWin * 2 - 1);
         List<RegisteredPlayer> players = new ArrayList<>();
         Map<String, Integer>[] main = new Map[2];
@@ -209,7 +221,13 @@ public final class ForgeMatch {
                 forge.item.PaperCard pc = forge.StaticData.instance().getCommonCards().getUniqueByName(companion);
                 if (pc != null) deck.getOrCreate(forge.deck.DeckSection.Sideboard).add(pc, 1);
             }
-            RegisteredPlayer rp = new RegisteredPlayer(deck);
+            if (brawl) {
+                for (String commander : seats[i].commanders()) {
+                    forge.item.PaperCard pc = forge.StaticData.instance().getCommonCards().getUniqueByName(commander);
+                    if (pc != null) deck.getOrCreate(forge.deck.DeckSection.Commander).add(pc, 1);
+                }
+            }
+            RegisteredPlayer rp = brawl ? RegisteredPlayer.forVariants(2, EnumSet.of(GameType.Brawl), deck, null, false, null, null) : new RegisteredPlayer(deck);
             rp.setPlayer(humans[i] != null ? humans[i].newLobbyPlayer() : GamePlayerUtil.createAiPlayer(aiName, 1, ""));
             players.add(rp);
         }
@@ -221,6 +239,7 @@ public final class ForgeMatch {
                 for (String n : main[i].keySet()) grpByName.put(n, db.grpId(n));
                 for (String n : seats[i].sideboard().keySet()) grpByName.put(n, db.grpId(n));
                 if (seats[i].companion() != null) grpByName.put(seats[i].companion(), db.grpId(seats[i].companion()));
+                for (String commander : seats[i].commanders()) grpByName.put(commander, db.grpId(commander));
             }
             Game game = match.createGame();
             this.game = game;
@@ -231,7 +250,7 @@ public final class ForgeMatch {
                 if (seats[1 - i].overrides() != null) view.putAll(seats[1 - i].overrides());
                 if (seats[i].overrides() != null) view.putAll(seats[i].overrides());
                 Player me = game.getPlayers().get(i);
-                humans[i].bind(game, me, game.getPlayers().get(1 - i), view, StateSync.matchInfo(gameNo, gamesToWin, minDeck(seats[i].deck())));
+                humans[i].bind(game, me, game.getPlayers().get(1 - i), view, StateSync.matchInfo(gameNo, gamesToWin, minDeck(seats[i].deck()), brawl));
             }
             game.setNoGUIUser();
             mulliganOpened = false;
