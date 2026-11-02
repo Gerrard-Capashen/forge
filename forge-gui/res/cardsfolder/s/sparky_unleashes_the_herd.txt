@@ -1,0 +1,6 @@
+Name:Sparky Unleashes the Herd
+ManaCost:no cost
+Types:Scheme
+T:Mode$ SetInMotion | ValidCard$ Card.Self | Execute$ TrigToken | TriggerZones$ Command | TriggerDescription$ When you set this scheme in motion, create three 6/6 green Wurm creature tokens.
+SVar:TrigToken:DB$ Token | TokenAmount$ 3 | TokenScript$ g_6_6_wurm | TokenOwner$ You
+Oracle:When you set this scheme in motion, create three 6/6 green Wurm creature tokens.

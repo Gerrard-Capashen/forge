@@ -11,13 +11,31 @@ import java.util.Map;
 public record MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
                          Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
                          java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
-                         String humanCompanion, String aiCompanion, java.util.List<String> humanCommanders, java.util.List<String> aiCommanders) {
+                         String humanCompanion, String aiCompanion, java.util.List<String> humanCommanders, java.util.List<String> aiCommanders,
+                         java.util.List<String> aiSchemes, int aiLife) {
+    /** {@code aiLife}: the AI seat's starting life, 0 = what the rules give. */
+    public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
+                      Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
+                      java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
+                      String humanCompanion, String aiCompanion, java.util.List<String> humanCommanders, java.util.List<String> aiCommanders,
+                      java.util.List<String> aiSchemes) {
+        this(matchId, humanDeck, aiDeck, grpOverrides, aiName, seat, onResult, humanSideboard, gamesToWin, humanCompanion, aiCompanion, humanCommanders, aiCommanders, aiSchemes, 0);
+    }
+
+    /** No schemes (every match but Archenemy: Sparky); {@code aiSchemes} is the AI seat's scheme deck, which makes it the Archenemy. */
+    public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
+                      Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
+                      java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
+                      String humanCompanion, String aiCompanion, java.util.List<String> humanCommanders, java.util.List<String> aiCommanders) {
+        this(matchId, humanDeck, aiDeck, grpOverrides, aiName, seat, onResult, humanSideboard, gamesToWin, humanCompanion, aiCompanion, humanCommanders, aiCommanders, java.util.List.of(), 0);
+    }
+
     /** No commanders. */
     public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
                       Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
                       java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
                       String humanCompanion, String aiCompanion) {
-        this(matchId, humanDeck, aiDeck, grpOverrides, aiName, seat, onResult, humanSideboard, gamesToWin, humanCompanion, aiCompanion, java.util.List.of(), java.util.List.of());
+        this(matchId, humanDeck, aiDeck, grpOverrides, aiName, seat, onResult, humanSideboard, gamesToWin, humanCompanion, aiCompanion, java.util.List.of(), java.util.List.of(), java.util.List.of(), 0);
     }
 
     /** No companions. */

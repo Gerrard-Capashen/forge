@@ -1,0 +1,6 @@
+Name:Sparky Calls Down the Storm
+ManaCost:no cost
+Types:Scheme
+T:Mode$ SetInMotion | ValidCard$ Card.Self | Execute$ TrigDamage | TriggerZones$ Command | TriggerDescription$ When you set this scheme in motion, this scheme deals 5 damage to each opponent and each creature and planeswalker your opponents control.
+SVar:TrigDamage:DB$ DamageAll | NumDmg$ 5 | ValidCards$ Creature.OppCtrl,Planeswalker.OppCtrl | ValidPlayers$ Player.Opponent | ValidDescription$ each opponent and each creature and planeswalker your opponents control.
+Oracle:When you set this scheme in motion, this scheme deals 5 damage to each opponent and each creature and planeswalker your opponents control.

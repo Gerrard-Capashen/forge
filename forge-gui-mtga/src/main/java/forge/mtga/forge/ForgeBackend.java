@@ -104,7 +104,7 @@ public final class ForgeBackend implements GameBackend {
         this(db, new ForgeMatch(db, setup.matchId() == null ? DEFAULT_MATCH_ID : setup.matchId()), 0,
                 new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides(), setup.humanSideboard(), setup.humanCompanion(), setup.humanCommanders()));
         room.setGamesToWin(setup.gamesToWin());
-        room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of(), Map.of(), setup.aiCompanion(), setup.aiCommanders()), setup.aiName() == null ? "Forge AI" : setup.aiName());
+        room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of(), Map.of(), setup.aiCompanion(), setup.aiCommanders(), setup.aiSchemes(), setup.aiLife()), setup.aiName() == null ? "Forge AI" : setup.aiName());
         this.onResult = setup.onResult();
     }
 

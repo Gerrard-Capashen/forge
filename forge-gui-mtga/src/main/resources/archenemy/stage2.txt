@@ -1,0 +1,76 @@
+# Enraged Sparky (stage 2): mono-red all-in aggro around Krenko, Mob Boss: hasty threats on turn one off Lotus and Moxen, burn to finish.
+Basics Mountain
+Commander
+1 Krenko, Mob Boss
+
+Deck
+1 Black Lotus
+1 Mox Ruby
+1 Sol Ring
+1 Mana Crypt
+1 Mana Vault
+1 Grim Monolith
+1 Lotus Petal
+1 Simian Spirit Guide
+1 Ancient Tomb
+1 Mutavault
+1 Strip Mine
+1 Goblin Guide
+1 Monastery Swiftspear
+1 Zurgo Bellstriker
+1 Burning-Tree Emissary
+1 Goblin Chainwhirler
+1 Goblin Rabblemaster
+1 Legion Warboss
+1 Hellrider
+1 Goblin Chieftain
+1 Goblin Piledriver
+1 Bloodrage Brawler
+1 Eidolon of the Great Revel
+1 Chandra's Phoenix
+1 Hazoret the Fervent
+1 Glorybringer
+1 Inferno Titan
+1 Hellkite Charger
+1 Siege-Gang Commander
+1 Combustible Gearhulk
+1 Balefire Dragon
+1 Thundermaw Hellkite
+1 Zealous Conscripts
+1 Pia and Kiran Nalaar
+1 Goblin Heelcutter
+1 Hangarback Walker
+1 Juggernaut
+1 Walking Ballista
+1 Phyrexian Dreadnought
+1 Embercleave
+1 Lightning Bolt
+1 Chain Lightning
+1 Fireblast
+1 Lava Spike
+1 Rift Bolt
+1 Burst Lightning
+1 Skullcrack
+1 Char
+1 Incinerate
+1 Searing Spear
+1 Fiery Confluence
+1 Lightning Strike
+1 Searing Blaze
+1 Magma Jet
+1 Stoke the Flames
+1 Fireball
+1 Banefire
+1 Anger of the Gods
+1 Wheel of Fortune
+1 Faithless Looting
+1 Goblin Bushwhacker
+1 Light Up the Stage
+1 Fall of the Hammer
+1 Mizzium Mortars
+1 Slagstorm
+1 Chandra, Torch of Defiance
+1 Koth of the Hammer
+1 Sarkhan, Fireblood
+1 Sarkhan the Masterless
+1 Gamble

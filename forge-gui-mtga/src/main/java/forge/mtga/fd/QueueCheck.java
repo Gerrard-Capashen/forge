@@ -2,6 +2,7 @@ package forge.mtga.fd;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import forge.StaticData;
 import forge.model.FModel;
 import forge.mtga.forge.HeadlessGui;
 import forge.mtga.forge.CardDb;
@@ -66,6 +67,23 @@ public final class QueueCheck {
                 && PlayQueues.modeOf("BotPlay_Pauper") == PlayQueues.Mode.BOT && PlayQueues.modeOf("RankedPlay_Vintage") == PlayQueues.Mode.RANKED && PlayQueues.modeOf("BotPlay_Brawl") == PlayQueues.Mode.BOT && PlayQueues.modeOf("CasualPlay_Brawl") == PlayQueues.Mode.CASUAL
                 && PlayQueues.modeOf("RankedPlay_Brawl") == null && PlayQueues.modeOf("BotPlay_Brawl_BO3") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
                 "event names parse");
+
+        // Archenemy: Sparky is an event page, not a queue: three stages, each with a complete deck and schemes that exist in Forge and on the client
+        check(!PlayQueues.isQueueEvent(ArchenemyEvent.NAME) && ArchenemyEvent.is("Archenemy_Sparky"), "Archenemy_Sparky is an event of its own, not a queue");
+        JsonObject info = new ArchenemyEvent(new File(System.getProperty("java.io.tmpdir"), "queuecheck-arch-" + System.nanoTime())).eventInfos().get(0).getAsJsonObject();
+        check("EventPage".equals(info.getAsJsonObject("EventUXInfo").get("EventBladeBehavior").getAsString())
+                && info.getAsJsonObject("EventUXInfo").getAsJsonObject("EventComponentData").getAsJsonObject("ByCourseObjectiveTrack").getAsJsonArray("ChestDescriptions").size() == 4, "the event page has a win track of three stages");
+        for (forge.mtga.Archenemy.Stage stage : forge.mtga.Archenemy.STAGES) {
+            forge.mtga.AiDecks.Choice sparky = forge.mtga.Archenemy.deck(stage, n -> db.grpId(n) != 0);
+            check(sparky.cards().values().stream().mapToInt(Integer::intValue).sum() == 99 && sparky.commanders().size() == 1, stage.name() + " plays 99 cards and a commander");
+            long lost = sparky.cards().keySet().stream().filter(n -> db.grpId(n) == 0 || StaticData.instance().getCommonCards().getUniqueByName(n) == null).count();
+            check(lost == 0, "every card of " + stage.name() + "'s deck is known to Forge and the client");
+            check(sparky.schemes().size() >= 20, stage.name() + "'s scheme deck has " + sparky.schemes().size() + " schemes");
+        }
+        for (String scheme : forge.mtga.Archenemy.schemeNames()) {
+            check(StaticData.instance().getVariantCards().getUniqueByName(scheme) != null, "Forge has the scheme " + scheme);
+            check(db.grpId(scheme) != 0, "the client card DB has a row for the scheme " + scheme + " (rebuild it with CardDbBuilder if not)");
+        }
 
         // Brawl: its queues sit under the blade's Brawl tab (QueueType "Brawl"), best of one; a generated AI deck passes the server's own check
         for (String id : new String[] {"bot-brawl", "casual-brawl"}) {

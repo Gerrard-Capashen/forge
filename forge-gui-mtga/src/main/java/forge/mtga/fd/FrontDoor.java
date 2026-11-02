@@ -43,6 +43,7 @@ public final class FrontDoor {
     private final CardDb db;
     private final DeckStore decks;
     private final DraftEvents events;
+    private final ArchenemyEvent archenemy;
     private final PremierDrafts premier;
     private final PlayQueues queues = new PlayQueues();
     private final ProfileApi profile;
@@ -55,6 +56,7 @@ public final class FrontDoor {
         this.db = db;
         this.decks = new DeckStore(new File(dataDir, "decks"));
         this.events = new DraftEvents(db, dataDir);
+        this.archenemy = new ArchenemyEvent(dataDir);
         this.profile = profile;
         this.premier = new PremierDrafts(db, events, profile, () -> {
             Peer p = peer;                                     // premier tables are online when online matches are (-Dmtga.premier.online=false: bots only)
@@ -238,11 +240,13 @@ public final class FrontDoor {
         on("EventGetCoursesV2", (s, r) -> {
             JsonArray courses = new JsonArray();     // no course of a hidden event (the client fails on a course without its event)
             for (JsonElement c : events.courseList()) if (premierShown() || !PremierDrafts.isPremier(str(c.getAsJsonObject(), "InternalEventName"))) courses.add(c);
+            courses.addAll(archenemy.courseList());
             return obj("Courses", courses);
         });
 
         // ---- quick drafts: one event per Forge set, bot pod run by Forge (see DraftEvents) ----
         on("EventJoin", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.join(str(r.obj(), "EventName"))
+                : ArchenemyEvent.is(str(r.obj(), "EventName")) ? archenemy.join()
                 : PremierDrafts.isPremier(str(r.obj(), "EventName")) ? premier.join(r.obj()) : events.join(r.obj()));
         on("BotDraftStartDraft", (s, r) -> events.startDraft(r.obj()));
         on("BotDraftDraftStatus", (s, r) -> events.draftStatus(r.obj()));
@@ -252,8 +256,10 @@ public final class FrontDoor {
             premier.dropped(str(r.obj(), "EventName"));
             return events.claimPrize(r.obj());
         });
-        on("EventDrop", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), true) : dropDraft(r.obj(), true));
-        on("EventResign", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), false) : dropDraft(r.obj(), false));
+        on("EventDrop", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), true)
+                : ArchenemyEvent.is(str(r.obj(), "EventName")) ? archenemy.drop(true) : dropDraft(r.obj(), true));
+        on("EventResign", (s, r) -> PlayQueues.isQueueEvent(str(r.obj(), "EventName")) ? queues.drop(str(r.obj(), "EventName"), false)
+                : ArchenemyEvent.is(str(r.obj(), "EventName")) ? archenemy.drop(false) : dropDraft(r.obj(), false));
         // ---- premier drafts: table draft through the client's human-draft flow (see PremierDrafts) ----
         on("EventJoinDraftQueue", (s, r) -> premier.joinQueue(s::push, r.obj()));
         on("EventLeaveDraftQueue", (s, r) -> premier.leaveQueue());
@@ -417,6 +423,8 @@ public final class FrontDoor {
     /** Local bot matches of this run: match id -> event (the quests count the format of the queue). */
     private final Map<String, String> botMatches = new java.util.concurrent.ConcurrentHashMap<>();
     /** Ranked-queue bot matches that ended with a winner: match id -> the player won, empty = a draw (a quit leaves no entry: the coordinator counts an abandoned match as a loss). */
+    /** Archenemy: Sparky matches won for the first time (match id -> the stage beaten), waiting for their XP prize to be paid. */
+    private final Map<String, forge.mtga.Archenemy.Stage> archenemyPrizes = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, java.util.Optional<Boolean>> botRankedWins = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** Online matches of this run (match id -> event) and, per finished match, the wait for what it earned (started by the first report request). */
@@ -431,7 +439,7 @@ public final class FrontDoor {
      * Handlers run on the network thread, so nothing here may block.
      */
     private Object matchResultReport(String matchId) {
-        JsonObject report = obj("CurrentModule", lastEvent != null ? events.module(lastEvent) : "Complete", "FoundMatch", true, "InventoryInfo", null,
+        JsonObject report = obj("CurrentModule", lastEvent == null ? "Complete" : ArchenemyEvent.is(lastEvent) ? archenemy.module() : events.module(lastEvent), "FoundMatch", true, "InventoryInfo", null,
                 "questUpdates", new JsonArray(), "rankUpdates", null, "mythicRatingUpdates", null, "periodicRewardsProgress", null);
         if (matchId == null) return report;
         boolean online = onlineMatches.containsKey(matchId), bot = matchId.startsWith("forge-");
@@ -445,7 +453,10 @@ public final class FrontDoor {
             return java.util.concurrent.CompletableFuture.supplyAsync(() -> {
                 JsonObject earned = new JsonObject();
                 if (bot) {
-                    earned.addProperty("xp", ms.botMatch(id));
+                    int xp = ms.botMatch(id);
+                    forge.mtga.Archenemy.Stage prize = archenemyPrizes.remove(id);      // the first win of a Sparky stage: its 10,000 XP
+                    if (prize != null) xp += ms.eventReward(ArchenemyEvent.prizeKey(prize));
+                    earned.addProperty("xp", xp);
                     java.util.Optional<Boolean> won = botRankedWins.remove(id);
                     if (won != null && event != null && PlayQueues.isRanked(event)) {
                         JsonObject change = rs.botResult(id, event, won.orElse(null));
@@ -569,12 +580,19 @@ public final class FrontDoor {
         JsonArray all = queues.eventInfos(playableModes());
         if (premierShown()) all.addAll(premier.eventInfos());
         all.addAll(events.eventInfos());
+        all.addAll(archenemy.eventInfos());
         return all;
     }
 
     /** EventSetDeckV3: a queue event checks the deck against its format first; draft events keep their own course. */
     private Object setEventDeck(JsonObject req) {
         String name = str(req, "EventName");
+        if (ArchenemyEvent.is(name)) {
+            JsonObject deck = req.has("Deck") && req.get("Deck").isJsonObject() ? req.getAsJsonObject("Deck") : null;
+            String problem = deck == null ? "no deck submitted" : deckProblem(ForgeFormats.BRAWL, deck);
+            if (problem != null) System.out.println("[mtga] FD " + name + ": deck refused: " + problem);
+            return archenemy.setDeck(req, problem);
+        }
         if (!PlayQueues.isQueueEvent(name)) return events.setDeck(req);
         JsonObject deck = req.has("Deck") && req.get("Deck").isJsonObject() ? req.getAsJsonObject("Deck") : null;
         String problem = deck == null ? "no deck submitted" : deckProblem(PlayQueues.formatOf(name), deck);
@@ -674,6 +692,15 @@ public final class FrontDoor {
             }
             return startMatch(s, c.getAsJsonObject("CourseDeckSummary"), c.getAsJsonObject("CourseDeck"), null, eventName);
         }
+        if (ArchenemyEvent.is(eventName)) {
+            JsonObject c = archenemy.course();
+            if (c == null || !c.has("CourseDeck") || !c.get("CourseDeck").isJsonObject() || c.getAsJsonObject("CourseDeck").getAsJsonArray("MainDeck").size() == 0) {
+                return new Err(7000, "no deck for event " + eventName);
+            }
+            forge.mtga.Archenemy.Stage stage = archenemy.next();
+            forge.mtga.AiDecks.Choice sparky = forge.mtga.Archenemy.deck(stage, n -> db.grpId(n) != 0);
+            return startMatch(s, c.getAsJsonObject("CourseDeckSummary"), c.getAsJsonObject("CourseDeck"), sparky, eventName);
+        }
         JsonObject course = DraftEvents.isDraftEvent(eventName) ? events.course(eventName) : null;
         if (course == null || !course.has("CourseDeck") || !course.get("CourseDeck").isJsonObject()) return new Err(7000, "no deck for event " + eventName);
         Peer p = peer;
@@ -762,7 +789,7 @@ public final class FrontDoor {
         }
         String companion = companionOf(deck, printing);
         // only a Brawl game plays the command zone (a Commander deck keeps playing as 99 cards + the rest)
-        java.util.List<String> commanders = ForgeFormats.BRAWL.equals(PlayQueues.isQueueEvent(eventId) ? PlayQueues.formatOf(eventId) : deckFormat(summary))
+        java.util.List<String> commanders = ArchenemyEvent.is(eventId) || ForgeFormats.BRAWL.equals(PlayQueues.isQueueEvent(eventId) ? PlayQueues.formatOf(eventId) : deckFormat(summary))
                 ? commandersOf(deck, printing) : java.util.List.of();
         if (human.isEmpty()) return new Err(7000, "deck '" + deckName + "' has no cards Forge knows");
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
@@ -792,6 +819,11 @@ public final class FrontDoor {
             }
             return startOnlineMatch(s, deckName, human, printing, me, eventId, p, session, companion, java.util.List.of());
         }
+        if (ArchenemyEvent.is(eventId)) {
+            String problem = deckProblem(ForgeFormats.BRAWL, deck);      // the server's own check, as for a queue
+            if (problem != null) return new Err(7000, "Archenemy: Sparky: " + problem);
+            return launchBotMatch(s, deckName, human, printing, sideboard, companion, commanders, aiOverride, profile.forBoss(aiOverride.name()), me, eventId);
+        }
         forge.mtga.AiDecks.Choice ai = aiOverride != null ? aiOverride : aiDeck(mode == PlayQueues.Mode.BOT ? queueFormat : deckFormat(summary));
         return launchBotMatch(s, deckName, human, printing, sideboard, companion, commanders, ai, profile.forAi(), me, eventId);
     }
@@ -801,13 +833,16 @@ public final class FrontDoor {
                                   String companion, java.util.List<String> commanders, forge.mtga.AiDecks.Choice ai, PublicProfile opponent, PublicProfile me, String eventId) {
         String matchId = "forge-" + System.currentTimeMillis() + "-" + (++matchCounter);
         String aiName = opponent.name();
-        boolean event = DraftEvents.isDraftEvent(eventId);
-        lastEvent = event ? eventId : null;
+        boolean event = DraftEvents.isDraftEvent(eventId), sparky = ArchenemyEvent.is(eventId);
+        lastEvent = event || sparky ? eventId : null;
         int gamesToWin = PlayQueues.gamesToWin(eventId);
         boolean ranked = PlayQueues.isRanked(eventId);
-        java.util.function.Consumer<Boolean> onResult = event ? won -> { if (won != null) events.recordResult(eventId, won); } : ranked ? won -> botRankedWins.put(matchId, won == null ? java.util.Optional.empty() : java.util.Optional.of(won)) : null;
+        forge.mtga.Archenemy.Stage stage = sparky ? archenemy.next() : null;
+        java.util.function.Consumer<Boolean> onResult = sparky ? won -> {
+            if (won != null && archenemy.recordResult(stage, won)) archenemyPrizes.put(matchId, stage);
+        } : event ? won -> { if (won != null) events.recordResult(eventId, won); } : ranked ? won -> botRankedWins.put(matchId, won == null ? java.util.Optional.empty() : java.util.Optional.of(won)) : null;
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName, null,
-                onResult, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin, companion, ai.companion(), commanders, ai.commanders()));
+                onResult, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin, companion, ai.companion(), commanders, ai.commanders(), ai.schemes(), ai.life()));
         if (ranked) rank.botStartAsync(matchId, eventId);
         int total = human.values().stream().mapToInt(Integer::intValue).sum();
         botMatches.put(matchId, eventId);

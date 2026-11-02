@@ -1,0 +1,9 @@
+Name:Sparky Opens the Library
+ManaCost:no cost
+Types:Ongoing Scheme
+T:Mode$ Phase | Phase$ Draw | ValidPlayer$ You | TriggerZones$ Command | Execute$ TrigDraw | TriggerDescription$ At the beginning of your draw step, draw two additional cards.
+SVar:TrigDraw:DB$ Draw | Defined$ You | NumCards$ 2
+T:Mode$ Phase | Phase$ End of Turn | ValidPlayer$ You | CheckSVar$ X | SVarCompare$ GE7 | TriggerZones$ Command | Execute$ TrigAbandon | TriggerDescription$ At the beginning of your end step, if you have seven or more cards in hand, abandon this scheme.
+SVar:TrigAbandon:DB$ Abandon
+SVar:X:Count$InYourHand
+Oracle:(An ongoing scheme remains face up until it's abandoned.)\nAt the beginning of your draw step, draw two additional cards.\nAt the beginning of your end step, if you have seven or more cards in hand, abandon this scheme.

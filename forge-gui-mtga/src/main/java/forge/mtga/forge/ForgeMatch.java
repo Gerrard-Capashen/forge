@@ -24,7 +24,11 @@ import java.util.Map;
  */
 public final class ForgeMatch {
     /** What a seat plays: display name, deck by Forge card name, the printings the player chose (card name -> GrpId). */
-    public record Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion, List<String> commanders) {
+    public record Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion, List<String> commanders, List<String> schemes, int life) {
+        /** {@code schemes}: a scheme deck (Forge names) makes the seat the Archenemy. */
+        public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion, List<String> commanders) { this(name, deck, overrides, sideboard, companion, commanders, List.of(), 0); }
+        /** {@code life}: the seat's starting life, 0 = what the rules give. */
+        public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion, List<String> commanders, List<String> schemes) { this(name, deck, overrides, sideboard, companion, commanders, schemes, 0); }
         /** {@code commanders}: the deck's command zone cards (a Brawl deck's commander), Forge names. */
         public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard, String companion) { this(name, deck, overrides, sideboard, companion, List.of()); }
         public Seat(String name, Map<String, Integer> deck, Map<String, Integer> overrides, Map<String, Integer> sideboard) { this(name, deck, overrides, sideboard, null); }
@@ -206,9 +210,14 @@ public final class ForgeMatch {
         // a deck with a commander makes it a Brawl game (25 life, the command zone, commander tax)
         boolean brawl = false;
         for (Seat seat : seats) brawl |= seat.commanders() != null && !seat.commanders().isEmpty();
+        // a seat with a scheme deck is the Archenemy (Archenemy: Sparky); the game is a Brawl game with that variant on top
+        boolean archenemy = false;
+        for (Seat seat : seats) archenemy |= seat.schemes() != null && !seat.schemes().isEmpty();
         GameType type = brawl ? GameType.Brawl : GameType.Constructed;
+        EnumSet<GameType> variants = EnumSet.of(type);
+        if (archenemy) variants.add(GameType.Archenemy);
         GameRules rules = new GameRules(type);
-        rules.setAppliedVariants(EnumSet.of(type));
+        rules.setAppliedVariants(variants);
         rules.setGamesPerMatch(gamesToWin * 2 - 1);
         List<RegisteredPlayer> players = new ArrayList<>();
         Map<String, Integer>[] main = new Map[2];
@@ -227,7 +236,17 @@ public final class ForgeMatch {
                     if (pc != null) deck.getOrCreate(forge.deck.DeckSection.Commander).add(pc, 1);
                 }
             }
-            RegisteredPlayer rp = brawl ? RegisteredPlayer.forVariants(2, EnumSet.of(GameType.Brawl), deck, null, false, null, null) : new RegisteredPlayer(deck);
+            boolean boss = seats[i].schemes() != null && !seats[i].schemes().isEmpty();
+            List<forge.item.PaperCard> schemes = new ArrayList<>();
+            if (boss) {
+                for (String scheme : seats[i].schemes()) {
+                    forge.item.PaperCard pc = forge.StaticData.instance().getVariantCards().getUniqueByName(scheme);
+                    if (pc == null) System.out.println("[mtga] Archenemy: Forge has no scheme " + scheme);
+                    else schemes.add(pc);
+                }
+            }
+            RegisteredPlayer rp = brawl || archenemy ? RegisteredPlayer.forVariants(2, variants, deck, schemes, boss, null, null) : new RegisteredPlayer(deck);
+            if (seats[i].life() > 0) rp.setStartingLife(seats[i].life());
             rp.setPlayer(humans[i] != null ? humans[i].newLobbyPlayer() : GamePlayerUtil.createAiPlayer(aiName, 1, ""));
             players.add(rp);
         }

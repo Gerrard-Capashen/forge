@@ -64,6 +64,20 @@ public final class SelfPlay {
                 System.out.println("[selfplay] deck " + i + ": " + c.name() + " (" + added + " cards added by CardDbBuilder) " + c.cards());
             }
         }
+        // -Dselfplay.archenemy=true: Brawl against Sparky (his deck, commander and scheme deck; the Archenemy goes first)
+        java.util.List<String> schemes1 = java.util.List.of();
+        int life1 = 0;
+        if (System.getProperty("selfplay.archenemy") != null) {      // =1|2|3: the stage (true = 1)
+            int stageNo = Math.max(1, Math.min(3, Integer.parseInt(System.getProperty("selfplay.archenemy").replace("true", "1"))));
+            AiDecks.Choice me = AiDecks.brawl(n -> db.grpId(n) != 0), sparky = Archenemy.deck(Archenemy.STAGES.get(stageNo - 1), n -> db.grpId(n) != 0);
+            life1 = sparky.life();
+            decks[0] = me.cards();
+            decks[1] = sparky.cards();
+            commanders0 = me.commanders();
+            commanders1 = sparky.commanders();
+            schemes1 = sparky.schemes();
+            System.out.println("[selfplay] archenemy: " + me.name() + " vs " + sparky.name() + " " + sparky.cards() + " schemes " + schemes1);
+        }
         // -Dselfplay.builtin=Legacy: the format's built-in decks (DefaultDecks), two per game in list order: game g plays decks 2g and 2g+1
         String builtinFormat = System.getProperty("selfplay.builtin");
         java.util.List<DefaultDecks.Entry> builtin = builtinFormat == null ? null : DefaultDecks.of(builtinFormat);
@@ -93,7 +107,7 @@ public final class SelfPlay {
                 String pick = d1.keySet().stream().filter(n -> !mine.containsKey(n)).findFirst().orElse(d0.keySet().iterator().next());
                 backend = new ForgeBackend(db, new MatchSetup("selfplay-bo3-" + g, d0, d1, Map.of(), "Forge AI", null, null, Map.of(pick, 3), 2));
             } else if (!commanders0.isEmpty()) {
-                backend = new ForgeBackend(db, new MatchSetup("selfplay-" + g, d0, d1, Map.of(), "Forge AI", null, null, Map.of(), 1, null, null, commanders0, commanders1));
+                backend = new ForgeBackend(db, new MatchSetup("selfplay-" + g, d0, d1, Map.of(), "Forge AI", null, null, Map.of(), 1, null, null, commanders0, commanders1, schemes1, life1));
             } else {
                 backend = new ForgeBackend(db, d0, d1);
             }
@@ -582,6 +596,7 @@ public final class SelfPlay {
 
     private static PublicProfile eve() { return new PublicProfile("id-eve", "Eve", "", "", "", "", null, "", 4); }
 
+    static final Set<Integer> SCHEMES_SEEN = Collections.synchronizedSet(new TreeSet<>());
     static final Set<Integer> ADDED_SEEN = Collections.synchronizedSet(new TreeSet<>());
     static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger ATTACH_SEEN = new java.util.concurrent.atomic.AtomicInteger();
@@ -781,7 +796,7 @@ public final class SelfPlay {
                     clickOpponentUpkeep();
                     List<Action> acts = new ArrayList<>(g.getActionsAvailableReq().getActionsList());
                     for (Action a : acts) {
-                        if (a.getActionType() != ActionType.ActionType_Pass && !objs.containsKey(a.getInstanceId())) problem("action on unknown object " + a.getActionType());
+                        if (a.getActionType() != ActionType.ActionType_Pass && !objs.containsKey(a.getInstanceId())) problem("action on unknown object " + a.getActionType() + (Boolean.getBoolean("selfplay.verbose") ? " #" + a.getInstanceId() + " " + debugName(a.getInstanceId()) : ""));
                     }
                     acts.removeIf(a -> a.getActionType() == ActionType.ActionType_Pass);
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_PerformActionResp);
@@ -1176,6 +1191,9 @@ public final class SelfPlay {
                 else if (!seen.containsKey(o.getInstanceId())) problem("object not listed by any zone (" + o.getType() + ")");
                 if (o.getVisibility() != Visibility.Visibility_Hidden && o.getGrpId() == 0) problem("visible object without grpId: " + debugName(o.getInstanceId()));
                 if (o.getIsFacedown()) FACEDOWN_SEEN.incrementAndGet();
+                if (o.getType() == GameObjectType.GameObjectType_Emblem && SCHEMES_SEEN.add(o.getGrpId())) {
+                    System.out.println("[selfplay] emblem " + o.getGrpId() + " " + debugName(o.getInstanceId()) + " zone " + o.getZoneId() + " abilities " + o.getUniqueAbilitiesCount());
+                }
                 if (o.getType() == GameObjectType.GameObjectType_Card && o.getGrpId() >= CardDbBuilder.GRP_BASE && ADDED_SEEN.add(o.getGrpId())) {
                     System.out.println("[selfplay] first added face " + o.getGrpId() + " " + o.getType() + " zone " + o.getZoneId()
                             + " " + debugName(o.getInstanceId()));

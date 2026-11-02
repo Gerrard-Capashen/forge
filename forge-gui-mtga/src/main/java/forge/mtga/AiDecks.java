@@ -30,9 +30,11 @@ public final class AiDecks {
     private AiDecks() { }
 
     /** {@code companion}: the deck's companion card (Forge name) or null; a match does not play it yet. */
-    public record Choice(String name, Map<String, Integer> cards, String companion, List<String> commanders) {
-        public Choice(String name, Map<String, Integer> cards) { this(name, cards, null, List.of()); }
-        public Choice(String name, Map<String, Integer> cards, String companion) { this(name, cards, companion, List.of()); }
+    public record Choice(String name, Map<String, Integer> cards, String companion, List<String> commanders, List<String> schemes, int life) {
+        /** {@code schemes}: the AI's scheme deck (Archenemy); {@code life}: its starting life, 0 = what the rules give. */
+        public Choice(String name, Map<String, Integer> cards) { this(name, cards, null, List.of(), List.of(), 0); }
+        public Choice(String name, Map<String, Integer> cards, String companion) { this(name, cards, companion, List.of(), List.of(), 0); }
+        public Choice(String name, Map<String, Integer> cards, String companion, List<String> commanders) { this(name, cards, companion, commanders, List.of(), 0); }
     }
 
     /**

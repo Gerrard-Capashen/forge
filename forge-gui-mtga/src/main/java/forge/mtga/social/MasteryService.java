@@ -124,6 +124,27 @@ public final class MasteryService {
     }
 
     /**
+     * A local event's one-time prize ({@code POST /me/xp/event}, the coordinator's EVENT_XP: the stages of Archenemy: Sparky): the XP it paid,
+     * 0 when it was paid before, offline or on an error. The progress is re-read when XP was paid.
+     */
+    public int eventReward(String event) {
+        if (session == null) return 0;
+        JsonObject body = new JsonObject();
+        body.addProperty("event", event);
+        try {
+            JsonObject r = session.call("POST", "/me/xp/event", body);
+            int before = xp();
+            store(r);
+            int gained = xp() - before;
+            System.out.println("[mtga] mastery: event prize " + event + " +" + Math.max(gained, 0) + " XP (total " + xp() + ", level " + level() + ")");
+            return Math.max(gained, 0);
+        } catch (IOException e) {
+            System.out.println("[mtga] mastery: event prize " + event + ": " + e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
      * An online match's verdict once it is settled (status no longer pending), waiting up to {@code maxMs} for the other seat's report;
      * it carries {@code rank} (ranked) and {@code mastery} {xp} when they were applied. The progress is re-read when XP was paid.
      */

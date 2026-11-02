@@ -280,6 +280,13 @@ public final class ProfileApi {
         return new PublicProfile("forge-ai", BotNames.next(r), avatar, sleeve, "", "", Profile.DEFAULT_EMOTES, rankClass, 1 + r.nextInt(4));
     }
 
+    /** Sparky (a stage of Archenemy: Sparky, by its name): his own avatar, a Mythic ranking. */
+    PublicProfile forBoss(String name) {
+        PublicProfile p = forAi();
+        String avatar = catalog.hasAvatar(forge.mtga.Archenemy.BOSS_AVATAR) ? forge.mtga.Archenemy.BOSS_AVATAR : p.avatar();
+        return new PublicProfile("forge-ai", name, avatar, p.sleeve(), "", "", Profile.DEFAULT_EMOTES, "Mythic", 1);
+    }
+
     /** A human-looking AI opponent of a given rank (the ranked-queue fallback plays at the player's own rank). */
     PublicProfile forAi(String rankClass, int rankTier) {
         PublicProfile p = forAi();

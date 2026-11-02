@@ -1,0 +1,8 @@
+Name:Sparky Overclocks the Engine
+ManaCost:no cost
+Types:Ongoing Scheme
+S:Mode$ Continuous | EffectZone$ Command | Affected$ Creature.YouCtrl | AddPower$ 2 | AddKeyword$ Haste | Description$ Creatures you control get +2/+0 and have haste.
+T:Mode$ Phase | Phase$ End of Turn | CheckSVar$ X | SVarCompare$ EQ0 | TriggerZones$ Command | Execute$ TrigAbandon | TriggerDescription$ At the beginning of each end step, if you control no creatures, abandon this scheme.
+SVar:TrigAbandon:DB$ Abandon
+SVar:X:Count$Valid Creature.YouCtrl
+Oracle:(An ongoing scheme remains face up until it's abandoned.)\nCreatures you control get +2/+0 and have haste.\nAt the beginning of each end step, if you control no creatures, abandon this scheme.

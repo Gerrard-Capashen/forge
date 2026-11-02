@@ -1,0 +1,7 @@
+Name:Sparky Recalls the Past
+ManaCost:no cost
+Types:Scheme
+T:Mode$ SetInMotion | ValidCard$ Card.Self | Execute$ TrigReturn | TriggerZones$ Command | TriggerDescription$ When you set this scheme in motion, return up to three target cards from your graveyard to your hand, then draw two cards.
+SVar:TrigReturn:DB$ ChangeZone | Origin$ Graveyard | Destination$ Hand | ValidTgts$ Card.YouOwn | TgtPrompt$ Select up to three target cards in your graveyard | TargetMin$ 0 | TargetMax$ 3 | SubAbility$ DBDraw
+SVar:DBDraw:DB$ Draw | Defined$ You | NumCards$ 2
+Oracle:When you set this scheme in motion, return up to three target cards from your graveyard to your hand, then draw two cards.

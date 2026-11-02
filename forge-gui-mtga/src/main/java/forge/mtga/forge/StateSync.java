@@ -520,6 +520,7 @@ public final class StateSync {
         findCompanions();
         List<Card> command = new ArrayList<>();
         for (Card c : game.getCardsIn(ZoneType.Command)) if (!isCompanionCard(c)) command.add(c);
+        lingerScheme(command);
         addZone(s, ZoneType.Command, 0, command);
         // the client marks a commander by a designation on the card (it keeps it at the command zone's front, shows the tax)
         for (Player p : new Player[] {human, ai}) {
@@ -692,12 +693,35 @@ public final class StateSync {
         return z;
     }
 
+    /** Scheme ids in the command zone of the last snapshot, and the newest scheme set in motion (Archenemy). */
+    private final Set<Integer> schemesBefore = new HashSet<>();
+    private Card lastScheme;
+
+    /**
+     * A scheme that is not ongoing is abandoned the moment it resolves, which would show its emblem for a blink: the newest scheme stays in the
+     * command zone list until the next one is set in motion, so the player can read what Sparky just did (and what an ongoing one still does).
+     */
+    private void lingerScheme(List<Card> command) {
+        Set<Integer> now = new HashSet<>();
+        Card fresh = null;
+        for (Card c : command) {
+            if (!c.getType().isScheme()) continue;
+            now.add(c.getId());
+            if (!schemesBefore.contains(c.getId())) fresh = c;
+        }
+        schemesBefore.clear();
+        schemesBefore.addAll(now);
+        if (fresh != null) lastScheme = fresh;
+        if (lastScheme != null && lastScheme.getGame() == game && !now.contains(lastScheme.getId())) command.add(lastScheme);
+    }
+
     private void addZone(Snapshot s, ZoneType t, int seat, Iterable<Card> cards) {
         int zid = zoneId(t, seat);
         ZoneInfo.Builder z = zoneHeader(t, seat, zid);
         boolean hidden = (t == ZoneType.Library) || (t == ZoneType.Hand && seat != HUMAN_SEAT);
         for (Card c : cards) {
             if (c.isImmutable() && !(c.isEmblem() && grpIdOf(c) != 0)) continue;       // Forge effect cards have no client representation; emblems do (built from the card that made them)
+            if (c.getType().isScheme() && grpIdOf(c) == 0) continue;       // a scheme the client has no row for (card DB built before Archenemy)
             int iid = track(s, c, zid);
             z.addObjectInstanceIds(iid);
             s.objs.put(iid, objectInfo(s, c, iid, zid, t, hidden && !revealed.contains(c.getId()) && !keptRevealed(c)));
@@ -747,7 +771,7 @@ public final class StateSync {
      * TokenCreated. So does a spell copy cast straight onto the stack (Isochron Scepter's copy of the imprinted card).
      */
     private boolean appearsFromNowhere(Card c, int zid) {
-        return gsId > 0 && (c.isToken() && (zid == Z_BF || zid == Z_STACK) || c.getType().isDungeon() && zid == Z_COMMAND);
+        return gsId > 0 && (c.isToken() && (zid == Z_BF || zid == Z_STACK) || (c.getType().isDungeon() || c.getType().isScheme()) && zid == Z_COMMAND);
     }
 
     /** Instance id for c now in zone zid; a zone change allocates a new id (recorded as an IdChange). */
@@ -791,7 +815,9 @@ public final class StateSync {
         int grp = grpIdOf(c);
         o.setGrpId(grp).setOverlayGrpId(grp);
         if (c.isFaceDown()) o.setIsFacedown(true);
-        if (c.isEmblem()) o.setType(GameObjectType.GameObjectType_Emblem).setObjectSourceGrpId(grp);
+        // a scheme (Archenemy) in the command zone is drawn as an emblem of its own card row: an ongoing scheme stays, any other is gone once it resolves
+        boolean scheme = c.getType().isScheme();
+        if (c.isEmblem() || scheme) o.setType(GameObjectType.GameObjectType_Emblem).setObjectSourceGrpId(grp);
         int title = db.titleId(grp);
         if (title != 0) o.setName(title);
         // the client builds a card's abilities (rules text, activation buttons, loyalty) only from uniqueAbilities
@@ -824,7 +850,7 @@ public final class StateSync {
         o.setVisibility(priv ? Visibility.Visibility_Private : Visibility.Visibility_Public);
         if (t == ZoneType.Hand) o.addViewers(owner);
         else if (t == ZoneType.Library) o.addViewers(HUMAN_SEAT);
-        for (forge.card.CardType.CoreType ct : c.getType().getCoreTypes()) {
+        if (!scheme) for (forge.card.CardType.CoreType ct : c.getType().getCoreTypes()) {
             CardType m = enumOrNull(CardType.class, "CardType_" + ct.name());
             if (m != null) o.addCardTypes(m);
         }
@@ -1029,7 +1055,7 @@ public final class StateSync {
      * so its trigger has no ability to draw. Arena runs these as rules; their results show as life, counter and zone changes.
      */
     private boolean isRuleTrigger(Card host) {
-        return host != null && host.isImmutable() && !host.isEmblem() && grpIdOf(host) == 0;
+        return host != null && (host.isImmutable() && !host.isEmblem() || host.getType().isScheme()) && grpIdOf(host) == 0;
     }
 
     private GameObjectInfo abilityInfo(SpellAbilityStackInstance si, int iid, int parent) {

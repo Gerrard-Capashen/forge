@@ -1,0 +1,9 @@
+Name:Sparky Awakens the Mana Vault
+ManaCost:no cost
+Types:Ongoing Scheme
+T:Mode$ Phase | Phase$ Main1 | ValidPlayer$ You | TriggerZones$ Command | Execute$ TrigMana | TriggerDescription$ At the beginning of your precombat main phase, add {C}{C}{C}{C}{C}{C}.
+SVar:TrigMana:DB$ Mana | Produced$ C | Amount$ 6
+T:Mode$ Phase | Phase$ End of Turn | CheckSVar$ X | SVarCompare$ GE10 | TriggerZones$ Command | Execute$ TrigAbandon | TriggerDescription$ At the beginning of each end step, if you control ten or more lands, abandon this scheme.
+SVar:TrigAbandon:DB$ Abandon
+SVar:X:Count$Valid Land.YouCtrl
+Oracle:(An ongoing scheme remains face up until it's abandoned.)\nAt the beginning of your precombat main phase, add {C}{C}{C}{C}{C}{C}.\nAt the beginning of each end step, if you control ten or more lands, abandon this scheme.

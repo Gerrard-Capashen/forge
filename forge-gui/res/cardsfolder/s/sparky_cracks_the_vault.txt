@@ -1,0 +1,7 @@
+Name:Sparky Cracks the Vault
+ManaCost:no cost
+Types:Scheme
+T:Mode$ SetInMotion | ValidCard$ Card.Self | Execute$ TrigToken | TriggerZones$ Command | TriggerDescription$ When you set this scheme in motion, create five Treasure tokens, then untap all lands you control.
+SVar:TrigToken:DB$ Token | TokenAmount$ 5 | TokenScript$ c_a_treasure_sac | TokenOwner$ You | SubAbility$ DBUntap
+SVar:DBUntap:DB$ UntapAll | ValidCards$ Land.YouCtrl
+Oracle:When you set this scheme in motion, create five Treasure tokens, then untap all lands you control.

@@ -430,7 +430,7 @@ public final class CardDbBuilder {
         /**
          * Rows for what Forge shows in the command zone without a card behind it, when the client has no row of that name (it
          * has The Monarch and the AFR dungeons): the Initiative designation and Undercity, its dungeon (Vintage's Initiative
-         * decks). Not primary: never in the collection or a deck. Returns the number of rows added.
+         * decks), and the schemes of Archenemy: Sparky. Not primary: never in the collection or a deck. Returns the number of rows added.
          */
         int addGamePieces() throws Exception {
             List<CardRules> pieces = new ArrayList<>();
@@ -440,6 +440,12 @@ public final class CardDbBuilder {
                             + "advance to the next room. If not, enter Undercity. You can take the initiative even if you already have it.)")));
             forge.item.PaperToken undercity = StaticData.instance().getAllTokens().getToken("undercity");
             if (undercity != null) pieces.add(undercity.getRules());
+            // Archenemy: Sparky's schemes; the client draws a scheme that stays face up as an emblem of its row (StateSync)
+            for (String scheme : forge.mtga.Archenemy.schemeNames()) {
+                PaperCard pc = StaticData.instance().getVariantCards().getUniqueByName(scheme);
+                if (pc == null) System.out.println("[carddb] Forge has no scheme " + scheme);
+                else pieces.add(pc.getRules());
+            }
             int n = 0;
             for (CardRules r : pieces) {
                 if (existingNames.contains(r.getName())) continue;
