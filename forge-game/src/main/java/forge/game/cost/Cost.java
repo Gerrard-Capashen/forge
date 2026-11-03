@@ -670,6 +670,7 @@ public class Cost implements Serializable {
     }
     public final Cost copyWithDefinedMana(ManaCost manaCost) {
         Cost toRet = copyWithNoMana();
+        toRet.costParts.removeIf(p -> p instanceof CostPartMana);      // copyWithNoMana starts from a {0} mana part, which getCostMana() would return first
         toRet.costParts.add(new CostPartMana(manaCost, null));
         toRet.cacheTapCost();
         return toRet;

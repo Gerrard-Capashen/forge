@@ -104,6 +104,7 @@ public final class ForgeBackend implements GameBackend {
         this(db, new ForgeMatch(db, setup.matchId() == null ? DEFAULT_MATCH_ID : setup.matchId()), 0,
                 new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides(), setup.humanSideboard(), setup.humanCompanion(), setup.humanCommanders()));
         room.setGamesToWin(setup.gamesToWin());
+        room.setMomir(setup.momir());
         room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of(), Map.of(), setup.aiCompanion(), setup.aiCommanders(), setup.aiSchemes(), setup.aiLife()), setup.aiName() == null ? "Forge AI" : setup.aiName());
         this.onResult = setup.onResult();
     }
@@ -951,6 +952,13 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("sami".equals(rig)) {      // Sami, Wildcat Captain + 3 Ornithopter + 3 Plains in play, Wurmcoil Engine {6} in hand: affinity for artifacts makes it {3}
+            for (int i = 0; i < 3; i++) rigAdd(p, "Plains", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 3; i++) rigAdd(p, "Ornithopter", ZoneType.Battlefield, 0);
+            rigAdd(p, "Sami, Wildcat Captain", ZoneType.Battlefield, 0);
+            rigAdd(p, "Wurmcoil Engine", ZoneType.Hand, 0);
+            return;
+        }
         if ("evoke".equals(rig)) {      // Island x6 in play; Mulldrifter x2 in hand (evoke one, hard-cast the other: the stack must name the evoke trigger "Evoke")
             for (int i = 0; i < 6; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
             for (int i = 0; i < 2; i++) rigAdd(p, "Mulldrifter", ZoneType.Hand, 0);
@@ -1760,7 +1768,7 @@ public final class ForgeBackend implements GameBackend {
                 canAfford = lastAutoTapDevotion;
             }
             boolean companion = sync.isCompanionMove(sa);
-            boolean elsewhere = !companion && !host.isInZone(ZoneType.Hand) && !host.isInZone(ZoneType.Battlefield);
+            boolean elsewhere = !companion && !host.isInZone(ZoneType.Hand) && !host.isInZone(ZoneType.Battlefield) && !host.getType().isVanguard();      // an avatar's ability is always on offer, never a "castable from there" card
             if (!canAfford && !elsewhere) continue;
             if (!elsewhere && !sa.isLandAbility() && !hasLegalTargets(sa)) continue;      // Dismember with no creature around
             ActionType at = companion ? ActionType.ActionType_Special : sa.isLandAbility() ? ActionType.ActionType_Play : sa.isAdventure() ? ActionType.ActionType_CastAdventure
@@ -1777,11 +1785,12 @@ public final class ForgeBackend implements GameBackend {
             Action.Builder ab = Action.newBuilder().setActionType(at).setGrpId(grp(host)).setInstanceId(iid);
             if (abilityGrp != 0) ab.setAbilityGrpId(abilityGrp);
             if (at != ActionType.ActionType_Play) {
-                addManaCost(ab, sa, iid);
+                SpellAbility costSa = withGrantedAffinity(sa, me);
+                addManaCost(ab, costSa, iid);
                 // without an auto-tap solution the client treats a costed action as unaffordable: no playable highlight
                 List<SpellAbility> taps = new ArrayList<>();
                 Map<SpellAbility, String> tapColors = new java.util.IdentityHashMap<>();
-                com.wizards.mtga.gre.AutoTapSolution sol = autoTap(sa, me, taps, tapColors);
+                com.wizards.mtga.gre.AutoTapSolution sol = autoTap(costSa, me, taps, tapColors);
                 offeredTaps.put(key, taps);
                 offeredTapColors.put(key, tapColors);
                 if (sol != null) ab.setAutoTapSolution(sol);
@@ -2685,7 +2694,48 @@ public final class ForgeBackend implements GameBackend {
         return true;
     }
 
+    /**
+     * "Spells you cast have affinity for artifacts" (Sami, Mycosynth Golem...) only applies once the spell is on the stack
+     * (AffectedZone$ Stack + wasCastByYou), so a spell still in hand is evaluated at its full cost: unaffordable, and the
+     * client is shown the printed cost. Returns sa itself, or a copy whose generic mana is reduced by such a grant.
+     */
+    private static SpellAbility withGrantedAffinity(SpellAbility sa, Player me) {
+        try {
+            Card host = sa.getHostCard();
+            if (!sa.isSpell() || host == null || !host.isInZone(ZoneType.Hand) || sa.getPayCosts() == null || !sa.getPayCosts().hasManaCost()) return sa;
+            int reduce = 0;
+            for (Card src : me.getCardsIn(List.of(ZoneType.Battlefield, ZoneType.Command))) {
+                for (forge.game.staticability.StaticAbility st : src.getStaticAbilities()) {
+                    String add = st.getParam("AddKeyword");
+                    String zone = st.getParam("AffectedZone");
+                    String affected = st.getParam("Affected");
+                    if (add == null || affected == null || zone == null || !zone.contains("Stack") || !add.startsWith("Affinity:")) continue;
+                    if (!"Continuous".equals(st.getParam("Mode")) || !st.checkConditions()) continue;
+                    String valid = affected.replace("+wasCastByYou", "").replace(".wasCastByYou", "").replace("wasCastByYou", "Card");
+                    if (!host.isValid(valid, src.getController(), src, sa)) continue;
+                    String type = add.substring("Affinity:".length());
+                    reduce += forge.game.card.CardLists.getValidCards(me.getCardsIn(ZoneType.Battlefield), type, me, host, sa).size();
+                }
+            }
+            if (reduce == 0) return sa;
+            forge.card.mana.ManaCost orig = sa.getPayCosts().getTotalMana();
+            // rebuilt from the serialized cost: ManaCostBeingPaid.toManaCost() loses the generic part
+            String ser = forge.card.mana.ManaCost.serialize(orig);
+            int cut = 0;
+            while (cut < ser.length() && Character.isDigit(ser.charAt(cut))) cut++;
+            forge.card.mana.ManaCost reduced = forge.card.mana.ManaCost.deserialize(Math.max(0, orig.getGenericCost() - reduce) + ser.substring(cut));
+            System.out.println("[mtga] granted affinity for " + host + ": -" + reduce + " from " + orig + " to " + reduced);
+            SpellAbility copy = sa.copy();
+            copy.setPayCosts(sa.getPayCosts().copyWithDefinedMana(reduced));
+            copy.setActivatingPlayer(me);
+            return copy;
+        } catch (RuntimeException e) {
+            return sa;
+        }
+    }
+
     private static boolean affordable(SpellAbility sa, Player me) {
+        sa = withGrantedAffinity(sa, me);
         try {
             sa.setActivatingPlayer(me);
             return forge.ai.ComputerUtilMana.canPayManaCost(sa, me, 0, false) || affordableWithLife(sa, me);

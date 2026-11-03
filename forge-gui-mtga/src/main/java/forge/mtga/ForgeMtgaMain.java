@@ -181,6 +181,12 @@ public final class ForgeMtgaMain {
             green.put("Wrath of the Skies", 8);
             green.put("Plains", 16);
         }
+        if ("sami".equals(rig)) {      // test rig: Sami's granted affinity (ForgeBackend.rigHand sets the board) vs a passive opponent
+            green.clear();
+            green.put("Plains", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("passage".equals(rig)) {      // test rig: "choose a basic land type" as a land enters (Multiversal Passage) vs a passive opponent
             green.clear();
             green.put("Multiversal Passage", 10);

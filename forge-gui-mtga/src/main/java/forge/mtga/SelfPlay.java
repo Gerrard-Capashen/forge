@@ -106,6 +106,10 @@ public final class SelfPlay {
                 final Map<String, Integer> mine = d0;
                 String pick = d1.keySet().stream().filter(n -> !mine.containsKey(n)).findFirst().orElse(d0.keySet().iterator().next());
                 backend = new ForgeBackend(db, new MatchSetup("selfplay-bo3-" + g, d0, d1, Map.of(), "Forge AI", null, null, Map.of(pick, 3), 2));
+            } else if (Boolean.getBoolean("selfplay.momir")) {      // Momir Basic: 12 of each basic for both, the avatar in the command zone
+                Map<String, Integer> basics = forge.mtga.fd.ForgeFormats.momirDeck();
+                backend = new ForgeBackend(db, new MatchSetup("selfplay-" + g, basics, basics, Map.of(), "Forge AI", null, null, Map.of(), 1, null, null,
+                        java.util.List.of(), java.util.List.of(), java.util.List.of(), 0, true));
             } else if (!commanders0.isEmpty()) {
                 backend = new ForgeBackend(db, new MatchSetup("selfplay-" + g, d0, d1, Map.of(), "Forge AI", null, null, Map.of(), 1, null, null, commanders0, commanders1, schemes1, life1));
             } else {
@@ -141,6 +145,10 @@ public final class SelfPlay {
                 if (!ok || played < 2) failed++;
             }
             fc.annCounts.forEach((k, v) -> totals.merge(k, v, Integer::sum));
+            if ("sami".equals(System.getProperty("mtga.rig")) && !fc.samiOffered) {
+                System.out.println("  sami rig: Wurmcoil Engine was never offered (WRONG)");
+                failed++;
+            }
             if (!done || !fc.problems.isEmpty()) failed++;
             backend.onDisconnect(fc);
         }
@@ -661,6 +669,8 @@ public final class SelfPlay {
             return b.toString();
         }
 
+        boolean samiOffered;
+
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
 
         private void problem(String p) {
@@ -779,7 +789,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0;
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -797,6 +807,16 @@ public final class SelfPlay {
                     List<Action> acts = new ArrayList<>(g.getActionsAvailableReq().getActionsList());
                     for (Action a : acts) {
                         if (a.getActionType() != ActionType.ActionType_Pass && !objs.containsKey(a.getInstanceId())) problem("action on unknown object " + a.getActionType() + (Boolean.getBoolean("selfplay.verbose") ? " #" + a.getInstanceId() + " " + debugName(a.getInstanceId()) : ""));
+                    }
+                    if ("sami".equals(System.getProperty("mtga.rig"))) {      // rig sami: Wurmcoil Engine {6} must be offered at {3} (Sami + 3 Ornithopters, 3 Plains) and its cost shown reduced
+                        for (Action a : acts) {
+                            if (samiOffered || a.getActionType() != ActionType.ActionType_Cast || !String.valueOf(debugName(a.getInstanceId())).contains("Wurmcoil")) continue;
+                            int pips = 0;
+                            for (com.wizards.mtga.gre.ManaRequirement mr : a.getManaCostList()) pips += mr.getCount();
+                            System.out.println("[selfplay] sami rig: Wurmcoil Engine offered, shown cost " + pips + " " + a.getManaCostList().toString().replaceAll("\s+", " "));
+                            if (pips != 3) problem("sami rig: Wurmcoil Engine shown at " + pips + " mana, expected 3");
+                            samiOffered = true;
+                        }
                     }
                     acts.removeIf(a -> a.getActionType() == ActionType.ActionType_Pass);
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_PerformActionResp);
