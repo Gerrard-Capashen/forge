@@ -24,7 +24,9 @@ import static forge.mtga.fd.FrontDoor.obj;
 final class PlayQueues {
     enum Mode {
         BOT("BotPlay", "bot-", "Unranked", "Bot Play"), CASUAL("CasualPlay", "casual-", "Unranked", "Casual Play"),
-        RANKED("RankedPlay", "ranked-", "Ranked", "Ranked");
+        RANKED("RankedPlay", "ranked-", "Ranked", "Ranked"),
+        /** Momir Basic: casual only (Mastery XP and quests, no rank), against another player or, when nobody queues, the AI. */
+        MOMIR("MomirPlay", "momir-", "Unranked", "Momir Basic");
         final String prefix, idPrefix, queueType, label;
         Mode(String prefix, String idPrefix, String queueType, String label) {
             this.prefix = prefix;
@@ -45,6 +47,7 @@ final class PlayQueues {
 
     /** The formats a mode offers: the constructed ones, plus Brawl for the unranked modes. */
     static List<String> formats(Mode m) {
+        if (m == Mode.MOMIR) return List.of(ForgeFormats.MOMIR);
         if (m == Mode.RANKED) return FORMATS;
         List<String> all = new java.util.ArrayList<>(FORMATS);
         all.add(BRAWL);
@@ -85,6 +88,9 @@ final class PlayQueues {
         }
         return null;
     }
+
+    /** Momir Basic's queue: every deck plays as basic lands with Momir Vig's avatar. */
+    static boolean isMomir(String eventName) { return modeOf(eventName) == Mode.MOMIR; }
 
     static boolean isQueueEvent(String eventName) { return modeOf(eventName) != null; }
 
@@ -193,7 +199,7 @@ final class PlayQueues {
 
     static String queueLabel(String eventName) {
         Mode m = modeOf(eventName);
-        return m == null ? eventName : m.label + ": " + formatOf(eventName);
+        return m == null ? eventName : m == Mode.MOMIR ? m.label : m.label + ": " + formatOf(eventName);
     }
 
     private static JsonElement get(JsonObject o, String key) {

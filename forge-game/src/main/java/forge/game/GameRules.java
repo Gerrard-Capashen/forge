@@ -108,6 +108,12 @@ public class GameRules {
         return gamesToWinMatch;
     }
 
+    private java.util.function.Predicate<forge.item.PaperCard> randomCopyPool;
+
+    /** Cards a "copy of a random card" effect (Momir Vig's avatar) may pick, null = every card Forge knows (an embedding that can't show them all narrows it). */
+    public java.util.function.Predicate<forge.item.PaperCard> getRandomCopyPool() { return randomCopyPool; }
+    public void setRandomCopyPool(final java.util.function.Predicate<forge.item.PaperCard> pool) { randomCopyPool = pool; }
+
     public void setAppliedVariants(final Set<GameType> appliedVariants) {
         if (appliedVariants != null && !appliedVariants.isEmpty())
             this.appliedVariants.addAll(appliedVariants);

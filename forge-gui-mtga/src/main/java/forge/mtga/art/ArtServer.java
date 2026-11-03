@@ -50,7 +50,9 @@ public final class ArtServer {
         this.port = port;
         this.refs = db.generatedArt(MIN_ART_ID);
         this.pieceArt = db.pieceArtIds(MIN_ART_ID, INITIATIVE_PIECES);
-        this.schemeArt = db.pieceArtIds(MIN_ART_ID, forge.mtga.Archenemy.schemeNames());
+        java.util.List<String> withArt = new java.util.ArrayList<>(forge.mtga.Archenemy.schemeNames());
+        withArt.add(forge.mtga.Archenemy.MOMIR_AVATAR);
+        this.schemeArt = db.pieceArtIds(MIN_ART_ID, withArt);
     }
 
     public void start() throws Exception {

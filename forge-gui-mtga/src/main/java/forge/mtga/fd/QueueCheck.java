@@ -85,6 +85,24 @@ public final class QueueCheck {
             check(db.grpId(scheme) != 0, "the client card DB has a row for the scheme " + scheme + " (rebuild it with CardDbBuilder if not)");
         }
 
+        // Momir Basic: a casual queue of its own (unranked list, best of one), 60 basics only, the avatar has a client row and art
+        JsonObject momir = null;
+        for (int i = 0; i < cfg.size(); i++) if ("momir-momir".equals(cfg.get(i).getAsJsonObject().get("Id").getAsString())) momir = cfg.get(i).getAsJsonObject();
+        check(momir != null && "Unranked".equals(momir.get("QueueType").getAsString()) && momir.get("EventNameBO3").isJsonNull()
+                && "MomirPlay_Momir".equals(momir.get("EventNameBO1").getAsString()), "momir-momir is a best-of-one unranked queue");
+        check(PlayQueues.isMomir("MomirPlay_Momir") && !PlayQueues.isRanked("MomirPlay_Momir") && !PlayQueues.isMomir("CasualPlay_Modern")
+                && PlayQueues.modeOf("MomirPlay_Standard") == null && PlayQueues.modeOf("CasualPlay_Momir") == null && PlayQueues.modeOf("MomirPlay_Momir_BO3") == null
+                && "Momir".equals(PlayQueues.formatOf("MomirPlay_Momir")), "Momir queue names parse");
+        check(formats.problem("Momir", ForgeFormats.momirDeck(), 0) == null, "Momir accepts 12 of each basic: " + formats.problem("Momir", ForgeFormats.momirDeck(), 0));
+        check(formats.problem("Momir", deck("Island", 60), 0) == null, "Momir accepts 60 Islands");
+        check(formats.problem("Momir", deck("Lightning Bolt", 4, "Mountain", 56), 0) != null, "Momir refuses a spell");
+        check(formats.problem("Momir", deck("Island", 59), 0) != null, "Momir refuses 59 cards");
+        check(StaticData.instance().getVariantCards().getUniqueByName(forge.mtga.Archenemy.MOMIR_AVATAR) != null, "Forge has Momir Vig's avatar");
+        check(db.grpId(forge.mtga.Archenemy.MOMIR_AVATAR) != 0, "the client card DB has a row for the Momir avatar (rebuild it with CardDbBuilder if not)");
+        check(forge.mtga.Archenemy.artDonor(forge.mtga.Archenemy.MOMIR_AVATAR) != null
+                && StaticData.instance().getCommonCards().getUniqueByName(forge.mtga.Archenemy.artDonor(forge.mtga.Archenemy.MOMIR_AVATAR)) != null, "the avatar's art donor is a card Forge has");
+        check(forge.mtga.DefaultDecks.of("Momir").size() == 1 && formats.problem("Momir", forge.mtga.DefaultDecks.of("Momir").get(0).main(), 0) == null, "the built-in Momir Basic deck is legal");
+
         // Brawl: its queues sit under the blade's Brawl tab (QueueType "Brawl"), best of one; a generated AI deck passes the server's own check
         for (String id : new String[] {"bot-brawl", "casual-brawl"}) {
             JsonObject b = null;
@@ -187,9 +205,9 @@ public final class QueueCheck {
         FrontDoor moved = new FrontDoor(db, older, null);
         java.util.List<String> movedNames = new java.util.ArrayList<>();
         for (JsonObject d : moved.decks().all()) movedNames.add(d.getAsJsonObject("Summary").get("Name").getAsString());
-        long lvp = forge.mtga.DefaultDecks.all().stream().filter(d -> java.util.Set.of("Legacy", "Vintage", "Pauper", "Premodern").contains(d.format())).count();
-        check(movedNames.size() == lvp && movedNames.stream().allMatch(n -> n.endsWith("(Legacy)") || n.endsWith("(Vintage)") || n.endsWith("(Pauper)") || n.endsWith("(Premodern)")),
-                "an old one-shot profile gets the missing Legacy/Vintage/Pauper/Premodern decks (" + movedNames.size() + " of " + lvp + "), not the Standard/Pioneer/Modern ones it deleted");
+        long lvp = forge.mtga.DefaultDecks.all().stream().filter(d -> java.util.Set.of("Legacy", "Vintage", "Pauper", "Premodern", "Momir").contains(d.format())).count();
+        check(movedNames.size() == lvp && movedNames.stream().allMatch(n -> n.endsWith("(Legacy)") || n.endsWith("(Vintage)") || n.endsWith("(Pauper)") || n.endsWith("(Premodern)") || n.endsWith("(Momir)")),
+                "an old one-shot profile gets the missing Legacy/Vintage/Pauper/Premodern/Momir decks (" + movedNames.size() + " of " + lvp + "), not the Standard/Pioneer/Modern ones it deleted");
 
         // course flow
         check(q.setDeck("BotPlay_Modern", new JsonObject(), null) instanceof FrontDoor.Err, "set deck before join is an error");

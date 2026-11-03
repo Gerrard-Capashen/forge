@@ -66,6 +66,9 @@ public final class Archenemy {
             new Stage(2, "archenemy_2", "Enraged Sparky", "stage2", 40, TWO),
             new Stage(3, "archenemy_3", "Sparky Unleashed", "stage3", 60, THREE));
 
+/** Momir Basic's avatar (a Forge variant card; the card DB builder gives it a row like a scheme, the art server its art). */
+    public static final String MOMIR_AVATAR = "Momir Vig, Simic Visionary Avatar";
+
     /** The real card whose art each scheme borrows (the client draws a scheme's emblem with the art of its card row): a card that suits what the scheme does. */
     private static final Map<String, String> ART = Map.ofEntries(
             Map.entry("Sparky Cracks the Vault", "Mana Vault"), Map.entry("Sparky Calls Down the Storm", "Fiery Confluence"),
@@ -80,7 +83,8 @@ public final class Archenemy {
             Map.entry("All in Good Time", "Time Warp"), Map.entry("Perhaps You've Met My Cohort", "Liliana of the Veil"),
             Map.entry("My Crushing Masterstroke", "Control Magic"), Map.entry("Pay Tribute to Me", "Diabolic Edict"),
             Map.entry("Only Blood Ends Your Nightmares", "Damnation"), Map.entry("Know Naught but Fire", "Fireblast"),
-            Map.entry("Drench the Soil in Their Blood", "Hellrider"), Map.entry("Make Yourself Useful", "Vindicate"));
+            Map.entry("Drench the Soil in Their Blood", "Hellrider"), Map.entry("Make Yourself Useful", "Vindicate"),
+            Map.entry(MOMIR_AVATAR, "Momir Vig, Simic Visionary"));      // Momir Basic's avatar emblem borrows its creature's art
 
     /** The card whose art a scheme shows, null if it has none listed. */
     public static String artDonor(String scheme) { return ART.get(scheme); }

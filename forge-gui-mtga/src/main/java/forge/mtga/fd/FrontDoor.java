@@ -559,11 +559,11 @@ public final class FrontDoor {
     }
 
     /**
-     * What this start can play: Bot Play always; Casual Play with online play (or a direct host/join); Ranked with the matchmaking server and
+     * What this start can play: Bot Play and Momir Basic always (Momir against the AI offline); Casual Play with online play (or a direct host/join); Ranked with the matchmaking server and
      * an account. Offline (-Dmtga.p2p=off, launcher -Offline) the blade shows Bot Play only.
      */
     private java.util.Set<PlayQueues.Mode> playableModes() {
-        java.util.Set<PlayQueues.Mode> modes = java.util.EnumSet.of(PlayQueues.Mode.BOT);
+        java.util.Set<PlayQueues.Mode> modes = java.util.EnumSet.of(PlayQueues.Mode.BOT, PlayQueues.Mode.MOMIR);      // Momir Basic falls back to the AI, so offline too
         Peer p = peer;
         if (p != null) modes.add(PlayQueues.Mode.CASUAL);
         if (p != null && p.coordinator() != null && rank.online()) modes.add(PlayQueues.Mode.RANKED);
@@ -801,6 +801,7 @@ public final class FrontDoor {
             String problem = deckProblem(queueFormat, deck);   // the client only offers legal decks; this is the server's own check
             if (problem != null) return new Err(7000, PlayQueues.queueLabel(eventId) + ": " + problem);
         }
+        if (mode == PlayQueues.Mode.MOMIR) return startMomirMatch(s, deckName, human, printing, me, eventId);
         if (mode == PlayQueues.Mode.CASUAL) {
             if (peer == null) return new Err(7000, "Casual Play needs online matchmaking, which is switched off in this start (-Dmtga.p2p=off)");
             return startPeerMatch(s, deckName, human, printing, me, eventId, companion, commanders);
@@ -842,7 +843,8 @@ public final class FrontDoor {
             if (won != null && archenemy.recordResult(stage, won)) archenemyPrizes.put(matchId, stage);
         } : event ? won -> { if (won != null) events.recordResult(eventId, won); } : ranked ? won -> botRankedWins.put(matchId, won == null ? java.util.Optional.empty() : java.util.Optional.of(won)) : null;
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName, null,
-                onResult, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin, companion, ai.companion(), commanders, ai.commanders(), ai.schemes(), ai.life()));
+                onResult, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin, companion, ai.companion(), commanders, ai.commanders(), ai.schemes(), ai.life(),
+                PlayQueues.isMomir(eventId)));
         if (ranked) rank.botStartAsync(matchId, eventId);
         int total = human.values().stream().mapToInt(Integer::intValue).sum();
         botMatches.put(matchId, eventId);
@@ -851,6 +853,18 @@ public final class FrontDoor {
 
         pushMatchCreated(s, matchId, me, opponent, eventId, commanders, ai.commanders());
         return GSON.toJson(matchId);
+    }
+
+    /**
+     * Momir Basic (MomirPlay_Momir): a casual queue like Casual Play, with Momir Vig's avatar for both seats. Online it waits for another player in the
+     * coordinator's queue and plays the Forge AI when nobody comes ({@link #scheduleRankedBot}); a direct host/join pairs the two players; offline it
+     * plays the AI at once. No rank, only Mastery XP and the quests (the report path is the same as for any casual or bot match).
+     */
+    private Object startMomirMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId) {
+        if (peer == null) {
+            return launchBotMatch(s, deckName, human, printing, Map.of(), null, java.util.List.of(), new forge.mtga.AiDecks.Choice("Momir Basic", momirAiDeck()), profile.forAi(), me, eventId);
+        }
+        return startPeerMatch(s, deckName, human, printing, me, eventId, null, java.util.List.of());
     }
 
     /**
@@ -866,6 +880,7 @@ public final class FrontDoor {
         if (p.host() != null) {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
             forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
+            room.setMomir(PlayQueues.isMomir(eventId));
             forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing, Map.of(), companion, commanders));
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
             System.out.println("[mtga] FD P2P host: '" + deckName + "' waits for a guest (match " + matchId + ")");
@@ -928,16 +943,24 @@ public final class FrontDoor {
         return "Bronze".equals(rankClass) || "Silver".equals(rankClass) || "Gold".equals(rankClass);
     }
 
+    /** Momir Basic is casual: a queue nobody joins for this long plays a bot (the same human-looking bot as a low ranked queue, no rank to move). */
+    static final int MOMIR_BOT_MIN_SECS = 15, MOMIR_BOT_MAX_SECS = 30;
+
+    /** The AI's deck in Momir Basic: 12 of each basic land (the avatar makes the creatures). */
+    static Map<String, Integer> momirAiDeck() { return ForgeFormats.momirDeck(); }
+
     private void scheduleRankedBot(FdSession s, forge.mtga.peer.Coordinator.Ticket ticket, String deckName, Map<String, Integer> human, Map<String, Integer> printing,
                                    String companion, PublicProfile me, String eventId) {
-        if (!PlayQueues.isRanked(eventId) || !rankedBotClass(me.rankClass()) || Boolean.getBoolean("mtga.ranked.nobots")) return;
-        int secs = RANKED_BOT_MIN_SECS + java.util.concurrent.ThreadLocalRandom.current().nextInt(RANKED_BOT_MAX_SECS - RANKED_BOT_MIN_SECS + 1);
+        boolean momir = PlayQueues.isMomir(eventId);
+        if (!momir && (!PlayQueues.isRanked(eventId) || !rankedBotClass(me.rankClass())) || Boolean.getBoolean("mtga.ranked.nobots")) return;
+        int secs = momir ? MOMIR_BOT_MIN_SECS + java.util.concurrent.ThreadLocalRandom.current().nextInt(MOMIR_BOT_MAX_SECS - MOMIR_BOT_MIN_SECS + 1)
+                : RANKED_BOT_MIN_SECS + java.util.concurrent.ThreadLocalRandom.current().nextInt(RANKED_BOT_MAX_SECS - RANKED_BOT_MIN_SECS + 1);
         LATER.schedule(() -> {
             if (onlineTicket != ticket || !ticket.result().cancel(false)) return;   // left the queue, or a human was paired first
             ticket.cancel();
             onlineTicket = null;
             try {
-                forge.mtga.AiDecks.Choice ai = aiDeck(PlayQueues.formatOf(eventId));
+                forge.mtga.AiDecks.Choice ai = momir ? new forge.mtga.AiDecks.Choice("Momir Basic", momirAiDeck()) : aiDeck(PlayQueues.formatOf(eventId));
                 System.out.println("[mtga] FD ranked: nobody in " + eventId + " after " + secs + " s, bot of rank " + me.rankClass() + " " + me.rankTier());
                 launchBotMatch(s, deckName, human, printing, Map.of(), companion, java.util.List.of(), ai, profile.forAi(me.rankClass(), me.rankTier()), me, eventId);
             } catch (RuntimeException e) {
@@ -976,6 +999,7 @@ public final class FrontDoor {
                 forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing, sideboard, companion, commanders));
                 room.setGamesToWin(gamesToWin);
                 room.setFirstSeat(firstSeat);
+                room.setMomir(PlayQueues.isMomir(eventId));
                 forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
                 mine.setOutcomeListener(outcomeReport(paired, eventId));
                 p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), eventId, commanders, room.commanders(1))));

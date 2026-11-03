@@ -40,3 +40,4 @@ Premodern/Green Stompy.txt
 Premodern/Mono-Red Burn.txt
 Premodern/Mono-Red Goblins.txt
 Premodern/White Weenie.txt
+Momir/Momir Basic.txt

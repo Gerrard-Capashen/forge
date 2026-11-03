@@ -721,7 +721,7 @@ public final class StateSync {
         boolean hidden = (t == ZoneType.Library) || (t == ZoneType.Hand && seat != HUMAN_SEAT);
         for (Card c : cards) {
             if (c.isImmutable() && !(c.isEmblem() && grpIdOf(c) != 0)) continue;       // Forge effect cards have no client representation; emblems do (built from the card that made them)
-            if (c.getType().isScheme() && grpIdOf(c) == 0) continue;       // a scheme the client has no row for (card DB built before Archenemy)
+            if ((c.getType().isScheme() || c.getType().isVanguard()) && grpIdOf(c) == 0) continue;       // a scheme / avatar the client has no row for (card DB built before Archenemy / Momir)
             int iid = track(s, c, zid);
             z.addObjectInstanceIds(iid);
             s.objs.put(iid, objectInfo(s, c, iid, zid, t, hidden && !revealed.contains(c.getId()) && !keptRevealed(c)));
@@ -816,7 +816,7 @@ public final class StateSync {
         o.setGrpId(grp).setOverlayGrpId(grp);
         if (c.isFaceDown()) o.setIsFacedown(true);
         // a scheme (Archenemy) in the command zone is drawn as an emblem of its own card row: an ongoing scheme stays, any other is gone once it resolves
-        boolean scheme = c.getType().isScheme();
+        boolean scheme = c.getType().isScheme() || c.getType().isVanguard();      // Momir Basic's avatar the same
         if (c.isEmblem() || scheme) o.setType(GameObjectType.GameObjectType_Emblem).setObjectSourceGrpId(grp);
         int title = db.titleId(grp);
         if (title != 0) o.setName(title);
@@ -1071,7 +1071,7 @@ public final class StateSync {
      * so its trigger has no ability to draw. Arena runs these as rules; their results show as life, counter and zone changes.
      */
     private boolean isRuleTrigger(Card host) {
-        return host != null && (host.isImmutable() && !host.isEmblem() || host.getType().isScheme()) && grpIdOf(host) == 0;
+        return host != null && (host.isImmutable() && !host.isEmblem() || host.getType().isScheme() || host.getType().isVanguard()) && grpIdOf(host) == 0;
     }
 
     private GameObjectInfo abilityInfo(SpellAbilityStackInstance si, int iid, int parent) {

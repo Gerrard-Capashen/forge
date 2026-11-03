@@ -48,6 +48,14 @@ public final class ForgeMatch {
 
     int gamesToWin() { return gamesToWin; }
 
+    private boolean momir;
+
+    /** Momir Basic: both seats play their basic lands with Momir Vig's avatar (the {X}, discard a card: random creature token ability) in the command zone. */
+    public void setMomir(boolean on) { momir = on; }
+
+    /** The Momir Basic avatar card (a Forge variant card), null if Forge lacks it. */
+    public static final String MOMIR_AVATAR = forge.mtga.Archenemy.MOMIR_AVATAR;
+
     private int firstSeat = -1;
 
     /** The first game's starting player: seat 0 or 1 (a challenge's "play first" setting), -1 = the coin toss decides. */
@@ -213,11 +221,15 @@ public final class ForgeMatch {
         // a seat with a scheme deck is the Archenemy (Archenemy: Sparky); the game is a Brawl game with that variant on top
         boolean archenemy = false;
         for (Seat seat : seats) archenemy |= seat.schemes() != null && !seat.schemes().isEmpty();
+        if (momir) brawl = archenemy = false;      // Momir Basic is its own game: 24 life from the avatar, no command zone cards
         GameType type = brawl ? GameType.Brawl : GameType.Constructed;
         EnumSet<GameType> variants = EnumSet.of(type);
         if (archenemy) variants.add(GameType.Archenemy);
+        if (momir) variants.add(GameType.MomirBasic);
         GameRules rules = new GameRules(type);
         rules.setAppliedVariants(variants);
+        // the avatar copies a creature the client can draw: only cards it has a row for (Arena's own cards and the generated ones)
+        if (momir) rules.setRandomCopyPool(pc -> db.grpId(pc.getName()) != 0);
         rules.setGamesPerMatch(gamesToWin * 2 - 1);
         List<RegisteredPlayer> players = new ArrayList<>();
         Map<String, Integer>[] main = new Map[2];
@@ -245,7 +257,12 @@ public final class ForgeMatch {
                     else schemes.add(pc);
                 }
             }
-            RegisteredPlayer rp = brawl || archenemy ? RegisteredPlayer.forVariants(2, variants, deck, schemes, boss, null, null) : new RegisteredPlayer(deck);
+            if (momir) {
+                forge.item.PaperCard avatar = forge.StaticData.instance().getVariantCards().getUniqueByName(MOMIR_AVATAR);
+                if (avatar == null) throw new IllegalStateException("Forge has no card " + MOMIR_AVATAR);
+                deck.getOrCreate(forge.deck.DeckSection.Avatar).add(avatar, 1);
+            }
+            RegisteredPlayer rp = brawl || archenemy || momir ? RegisteredPlayer.forVariants(2, variants, deck, schemes, boss, null, null) : new RegisteredPlayer(deck);
             if (seats[i].life() > 0) rp.setStartingLife(seats[i].life());
             rp.setPlayer(humans[i] != null ? humans[i].newLobbyPlayer() : GamePlayerUtil.createAiPlayer(aiName, 1, ""));
             players.add(rp);

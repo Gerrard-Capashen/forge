@@ -63,6 +63,21 @@ public final class ForgeFormats {
      */
     public static final String BRAWL = "Brawl";
 
+    /**
+     * Momir Basic: 60 basic lands and nothing else (Momir Vig's avatar makes the creatures). A client format of its own so the deck picker only
+     * offers such decks; the match plays the deck's land split and ignores any other card.
+     */
+    public static final String MOMIR = "Momir";
+
+    private static final List<String> BASICS = List.of("Plains", "Island", "Swamp", "Mountain", "Forest");
+
+    /** The standard Momir Basic deck: 12 of each basic land. */
+    public static Map<String, Integer> momirDeck() {
+        Map<String, Integer> d = new LinkedHashMap<>();
+        for (String b : BASICS) d.put(b, 12);
+        return d;
+    }
+
     /** Client format order (ConstructedSortOrder): the first one is the client's default format. */
     public static final List<Spec> SPECS = List.of(
             new Spec("Standard", "Standard", 60, 250, 15, 0, 0, false, false),
@@ -74,6 +89,7 @@ public final class ForgeFormats {
             new Spec("Premodern", "Premodern", 60, 250, 15, 0, 0, false, false),
             new Spec("Commander", "Commander", 99, 99, 1, 1, 2, true, false),
             new Spec(BRAWL, "Commander", 99, 99, 1, 1, 2, true, false),
+            new Spec(MOMIR, null, 60, 60, 0, 0, 0, false, false),
             new Spec("Historic", "Historic", 60, 250, 15, 0, 0, false, true),
             new Spec("Alchemy", null, 60, 250, 15, 0, 0, false, true),
             new Spec("Timeless", null, 60, 250, 15, 0, 0, false, false),
@@ -129,6 +145,10 @@ public final class ForgeFormats {
     /** Names (Forge spelling) of the client's cards that are legal in a client format. */
     public synchronized Set<String> legalNames(Spec spec) {
         Set<String> out = new LinkedHashSet<>();
+        if (MOMIR.equals(spec.name())) {
+            for (String b : BASICS) if (forgeCards.containsKey(b)) out.add(b);
+            return out;
+        }
         GameFormat gf = spec.forgeFormat() == null ? null : FModel.getFormats().getFormat(spec.forgeFormat());
         Predicate<PaperCard> rules = gf == null ? null : gf.getFilterRules();
         for (Map.Entry<String, PaperCard> e : forgeCards.entrySet()) {

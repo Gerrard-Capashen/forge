@@ -446,6 +446,10 @@ public final class CardDbBuilder {
                 if (pc == null) System.out.println("[carddb] Forge has no scheme " + scheme);
                 else pieces.add(pc.getRules());
             }
+            // Momir Basic: the avatar in the command zone is drawn as an emblem of this row (only its ability, not the hand/life line)
+            pieces.add(CardRules.fromScript(List.of("Name:" + forge.mtga.Archenemy.MOMIR_AVATAR, "ManaCost:no cost", "Types:Vanguard",
+                    "Oracle:{X}, Discard a card: Create a token that's a copy of a creature card with mana value X chosen at random. "
+                            + "Activate only as a sorcery and only once each turn.")));
             int n = 0;
             for (CardRules r : pieces) {
                 if (existingNames.contains(r.getName())) continue;

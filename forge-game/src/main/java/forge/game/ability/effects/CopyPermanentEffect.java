@@ -163,6 +163,8 @@ public class CopyPermanentEffect extends TokenEffectBase {
                     cards = IterableUtil.filter(cards, cpp);
                 }
                 if (sa.hasParam("RandomCopied")) {
+                    Predicate<PaperCard> pool = game.getRules().getRandomCopyPool();
+                    if (pool != null) cards = IterableUtil.filter(cards, pool);
                     List<PaperCard> copysource = Lists.newArrayList(cards);
                     List<Card> choice = Lists.newArrayList();
                     final String num = sa.getParamOrDefault("RandomNum", "1");

@@ -12,8 +12,16 @@ public record MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<Str
                          Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
                          java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
                          String humanCompanion, String aiCompanion, java.util.List<String> humanCommanders, java.util.List<String> aiCommanders,
-                         java.util.List<String> aiSchemes, int aiLife) {
-    /** {@code aiLife}: the AI seat's starting life, 0 = what the rules give. */
+                         java.util.List<String> aiSchemes, int aiLife, boolean momir) {
+    /** {@code aiLife}: the AI seat's starting life, 0 = what the rules give. {@code momir}: a Momir Basic game (every deck is played as basic lands with Momir Vig's avatar). */
+    public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
+                      Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
+                      java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
+                      String humanCompanion, String aiCompanion, java.util.List<String> humanCommanders, java.util.List<String> aiCommanders,
+                      java.util.List<String> aiSchemes, int aiLife) {
+        this(matchId, humanDeck, aiDeck, grpOverrides, aiName, seat, onResult, humanSideboard, gamesToWin, humanCompanion, aiCompanion, humanCommanders, aiCommanders, aiSchemes, aiLife, false);
+    }
+
     public MatchSetup(String matchId, Map<String, Integer> humanDeck, Map<String, Integer> aiDeck,
                       Map<String, Integer> grpOverrides, String aiName, forge.mtga.net.GameBackend seat,
                       java.util.function.Consumer<Boolean> onResult, Map<String, Integer> humanSideboard, int gamesToWin,
