@@ -471,9 +471,10 @@ public final class CardDbBuilder {
             int[] link = LINKS.get(r.getSplitType());
             if (r.getSplitType() == CardSplitType.Split) {
                 boolean room = main.getType().hasSubtype("Room");
-                int parent = nextGrp++, left = nextGrp++, right = nextGrp++, art = nextArt++;
-                Map<String, Object> l = face(pc, main, main.getName(), left, art, false);
-                Map<String, Object> rt = face(pc, other, other.getName(), right, art, false);
+                int parent = nextGrp++, left = nextGrp++, right = nextGrp++, art = nextArt++, leftArt = nextArt++, rightArt = nextArt++;
+                // the card shows Scryfall's whole art crop (both arts side by side); each half has an art id of its own, the art server cuts its half out
+                Map<String, Object> l = face(pc, main, main.getName(), left, leftArt, false);
+                Map<String, Object> rt = face(pc, other, other.getName(), right, rightArt, false);
                 for (Map<String, Object> half : List.of(l, rt)) {
                     half.put("LinkedFaceType", room ? 15 : link[1]);
                     half.put("LinkedFaceGrpIds", Integer.toString(parent));

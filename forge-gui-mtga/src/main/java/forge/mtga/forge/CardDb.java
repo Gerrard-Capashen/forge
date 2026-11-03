@@ -118,8 +118,11 @@ public final class CardDb {
         }
     }
 
-    /** The Forge printing behind an art id: card name, Forge set code and collector number, and whether it is the back face. */
-    public record ArtRef(String name, String set, String collectorNumber, boolean back) { }
+    /** The Forge printing behind an art id: card name, Forge set code and collector number, whether it is the back face, and which half
+     *  of Scryfall's art crop it shows (1 left, 2 right) for the halves of a split card or Room: Scryfall has one image with both arts. */
+    public record ArtRef(String name, String set, String collectorNumber, boolean back, int half) {
+        public ArtRef(String name, String set, String collectorNumber, boolean back) { this(name, set, collectorNumber, back, 0); }
+    }
 
     /**
      * Forge printing of every art id at or above {@code minArtId} (the ids CardDbBuilder generated, which have no art bundle).
@@ -144,10 +147,15 @@ public final class CardDb {
         for (Row r : rows.values()) {
             if (r.primary() && r.title() != null) out.putIfAbsent(r.art(), new ArtRef(plainTitle(r.title()), r.set(), r.cn(), false));
         }
-        for (Row r : rows.values()) {
+        for (Map.Entry<Integer, Row> e : rows.entrySet()) {
+            Row r = e.getValue();
             if (r.primary() || out.containsKey(r.art()) || r.linked() == null || r.linked().isBlank()) continue;
             Row front = rows.get(num(r.linked().split(",")[0]));
-            if (front != null && front.primary() && front.title() != null) out.put(r.art(), new ArtRef(plainTitle(front.title()), front.set(), front.cn(), true));
+            if (front == null || !front.primary() || front.title() == null) continue;
+            // a split card's halves link to the card, which links back to both: left and right halves of its one art
+            String[] halves = front.linked() == null ? new String[0] : front.linked().split(",");
+            int half = halves.length == 2 ? (num(halves[0]) == e.getKey() ? 1 : num(halves[1]) == e.getKey() ? 2 : 0) : 0;
+            out.put(r.art(), new ArtRef(plainTitle(front.title()), front.set(), front.cn(), half == 0, half));
         }
         return out;
     }

@@ -92,7 +92,7 @@ public final class ArtServer {
                 ex.sendResponseHeaders(404, -1);
                 return;
             }
-            byte[] bytes = Files.readAllBytes(file.toPath());
+            byte[] bytes = ref != null && ref.half() != 0 ? half(file, ref.half()) : Files.readAllBytes(file.toPath());
             ex.getResponseHeaders().set("Content-Type", "image/jpeg");
             ex.sendResponseHeaders(200, bytes.length);
             System.out.println("[mtga] art " + id + " served (" + bytes.length + " bytes)");
@@ -102,6 +102,20 @@ public final class ArtServer {
         } catch (Exception e) {
             System.err.println("[art] request failed: " + e);
         }
+    }
+
+    /** One side of a split card's art crop (Scryfall puts both arts side by side in one image), as JPEG. */
+    private static byte[] half(File file, int half) throws java.io.IOException {
+        java.awt.image.BufferedImage src = javax.imageio.ImageIO.read(file);
+        if (src == null) return Files.readAllBytes(file.toPath());
+        int w = src.getWidth() / 2;
+        java.awt.image.BufferedImage out = new java.awt.image.BufferedImage(w, src.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = out.createGraphics();
+        g.drawImage(src, 0, 0, w, src.getHeight(), half == 1 ? 0 : src.getWidth() - w, 0, half == 1 ? w : src.getWidth(), src.getHeight(), null);
+        g.dispose();
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(out, "jpg", bos);
+        return bos.toByteArray();
     }
 
     private final Map<String, byte[]> eventArt = new java.util.concurrent.ConcurrentHashMap<>();

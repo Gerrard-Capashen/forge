@@ -23,11 +23,14 @@ import java.util.Set;
  * (the coordinator grants from it, the Front Door draws the track from it): {@code coordinator/src/mastery-track.json}.
  *
  * <p>Append-only: the levels of an existing file never move; cosmetics a client update added are shuffled among themselves
- * (seeded by the file's length) and appended, except the champion title ({@link Mastery#CHAMPION_TITLE}), which is always the last
+ * (seeded by the file's length) and inserted at random places after the first {@link #PROTECTED_ITEMS} items, except the champion title ({@link Mastery#CHAMPION_TITLE}), which is always the last
  * level. Usage: {@code MasteryTrackGen <client dir> <track json>}.
  */
 public final class MasteryTrackGen {
     private static final long SEED = 20261025L;
+    /** Cosmetics a client update added are mixed into the track from this item on (level 150): the first levels are what players
+     *  reach, and what they were granted must never change. The production maximum was level 9 on 2026-11-03. */
+    private static final int PROTECTED_ITEMS = 300;
 
     private MasteryTrackGen() { }
 
@@ -57,8 +60,10 @@ public final class MasteryTrackGen {
         add(fresh, known, "emote", catalog.stickers().stream().sorted().toList());
         add(fresh, known, "title", catalog.titles().stream().map(CosmeticCatalog.Title::id)
                 .filter(id -> !Mastery.ALWAYS_OWNED.contains(id) && !id.equals(Mastery.CHAMPION_TITLE)).sorted().toList());
-        Collections.shuffle(fresh, new Random(SEED + items.size()));
-        items.addAll(fresh);
+        Random rnd = new Random(SEED + items.size());
+        Collections.shuffle(fresh, rnd);
+        if (items.size() <= PROTECTED_ITEMS) items.addAll(fresh);                       // first generation: just the shuffled catalogue
+        else for (String[] f : fresh) items.add(PROTECTED_ITEMS + rnd.nextInt(items.size() - PROTECTED_ITEMS + 1), f);   // later: spread over the unreached levels
         if (catalog.hasTitle(Mastery.CHAMPION_TITLE)) items.add(new String[] {"title", Mastery.CHAMPION_TITLE});
 
         JsonArray arr = new JsonArray();
