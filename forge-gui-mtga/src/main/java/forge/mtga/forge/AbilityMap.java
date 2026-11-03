@@ -28,6 +28,8 @@ final class AbilityMap {
             int id = match(sa, db.grpId(from.getName()), true);
             if (id != 0) return id;
         }
+        int granted = grantedLoyaltyAbility(sa);
+        if (granted != 0) return granted;
         int id = match(sa, cardGrp, false);
         // a mana ability granted by a land type (Yavimaya, Cradle of Growth: every land is a Forest) is not one of the card's own
         if (id != 0 && sa.isManaAbility() && !db.abilities(cardGrp).isEmpty() && !ownManaText(id, cardGrp)) {
@@ -35,6 +37,18 @@ final class AbilityMap {
             if (basic != 0) return basic;
         }
         return id;
+    }
+
+    /** A loyalty ability another card grants to planeswalkers (Ichormoon Gauntlet): its own DB ability, found by loyalty cost and text; 0 if sa is the card's own. */
+    int grantedLoyaltyAbility(SpellAbility sa) {
+        if (sa == null || !sa.isPwAbility()) return 0;
+        Card host = sa.getHostCard(), from = sa.getOriginalHost();
+        if (host == null || from == null || from == host || from.getName().equals(host.getName())) return 0;
+        String desc = describe(sa);
+        String cost = loyaltyPrefix(desc);
+        if (cost == null) return 0;
+        String text = desc.replaceFirst("^\\s*\\[?[+−-]?(\\d+|X)\\]?\\s*:\\s*", "");
+        return db.loyaltyAbilityByText(cost, words(text, host));
     }
 
     private boolean ownManaText(int id, int cardGrp) {
@@ -61,6 +75,10 @@ final class AbilityMap {
                 if (s > top) { top = s; found = a.id(); }
             }
             return found;
+        }
+        // the sacrifice trigger of an evoked creature is the keyword's own, shown on Arena as the "Evoke {cost}" ability (not as the enters trigger)
+        if (sa.isTrigger() && desc != null && desc.toLowerCase().contains("evoke") && desc.toLowerCase().contains("sacrifice")) {
+            for (CardDb.Ability a : abs) if (a.text() != null && a.text().startsWith("Evoke")) return a.id();
         }
         int want = sa.isTrigger() ? 2 : sa.isSpell() ? 4 : 1;
         int best = 0;
@@ -131,7 +149,7 @@ final class AbilityMap {
 
     private static String loyaltyPrefix(String desc) {
         if (desc == null) return null;
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^\\s*([+−-]?\\d+|[+−-]X|0)\\s*:").matcher(desc);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("^\\s*\\[?([+−-]?\\d+|[+−-]X|0)\\]?\\s*:").matcher(desc);
         return m.find() ? m.group(1).replace("−", "-") : null;
     }
 

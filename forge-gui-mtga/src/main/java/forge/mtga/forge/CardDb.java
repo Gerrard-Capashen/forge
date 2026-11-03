@@ -279,6 +279,29 @@ public final class CardDb {
         return out;
     }
 
+    /** An activated loyalty ability by loyalty cost and text words (a planeswalker ability granted by another card, e.g. Ichormoon Gauntlet); 0 if none matches well. */
+    public synchronized int loyaltyAbilityByText(String cost, java.util.Set<String> words) {
+        int best = 0;
+        double bestScore = 0.6;
+        try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(
+                "select a.Id, l.Loc from Abilities a join Localizations_enUS l on l.LocId = a.TextId where a.Category = 1 and a.LoyaltyCost = ?")) {
+            ps.setString(1, cost);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    java.util.Set<String> other = new java.util.HashSet<>(java.util.Arrays.asList(rs.getString(2).toLowerCase().split("[^a-z0-9{}+/-]+")));
+                    other.remove("");
+                    int common = 0;
+                    for (String w : words) if (other.contains(w)) common++;
+                    double s = words.isEmpty() || other.isEmpty() ? 0 : (double) common / (words.size() + other.size() - common);
+                    if (s > bestScore) { bestScore = s; best = rs.getInt(1); }
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("[mtga] loyalty ability lookup failed: " + e);
+        }
+        return best;
+    }
+
     /** Text of any ability id (modal children are not in a card's AbilityIds list). */
     public synchronized Ability ability(int abilityId) {
         try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(

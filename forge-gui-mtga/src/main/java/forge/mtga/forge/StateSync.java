@@ -846,6 +846,15 @@ public final class StateSync {
                 }
             }
         }
+        if (t == ZoneType.Battlefield && c.isPlaneswalker()) {      // loyalty abilities granted by another card (Ichormoon Gauntlet): printed on the granter as separate ids
+            for (SpellAbility sa : c.getSpellAbilities()) {
+                if (!sa.isPwAbility()) continue;
+                int id = new AbilityMap(db).grantedLoyaltyAbility(sa);
+                if (id != 0 && printed.add(id)) {
+                    o.addUniqueAbilities(com.wizards.mtga.gre.UniqueAbilityInfo.newBuilder().setId(uniqueAbilityId(iid, id)).setGrpId(id));
+                }
+            }
+        }
         boolean priv = t == ZoneType.Hand || t == ZoneType.Library;
         o.setVisibility(priv ? Visibility.Visibility_Private : Visibility.Visibility_Public);
         if (t == ZoneType.Hand) o.addViewers(owner);
@@ -872,7 +881,10 @@ public final class StateSync {
             o.setPower(Int32Value.newBuilder().setValue(c.getNetPower()));
             o.setToughness(Int32Value.newBuilder().setValue(c.getNetToughness()));
         }
-        if (c.isPlaneswalker()) o.setLoyalty(UInt32Value.newBuilder().setValue(Math.max(0, c.getCurrentLoyalty())));
+        if (c.isPlaneswalker()) {      // off the battlefield it has no counters yet: show the printed starting loyalty (hand, library, stack...)
+            int loy = t == ZoneType.Battlefield ? c.getCurrentLoyalty() : baseLoyalty(c);
+            o.setLoyalty(UInt32Value.newBuilder().setValue(Math.max(0, loy)));
+        }
         if (t == ZoneType.Battlefield) {
             if (c.isCreature() || c.isPlaneswalker()) o.setDamage(c.getDamage());
             o.setIsTapped(c.isTapped());
@@ -1033,6 +1045,10 @@ public final class StateSync {
     static Card visibleSource(Card host) {
         if (host != null && host.isImmutable() && host.getEffectSource() != null) return host.getEffectSource();
         return host;
+    }
+
+    private static int baseLoyalty(Card c) {
+        try { return Integer.parseInt(c.getCurrentState().getBaseLoyalty().trim()); } catch (RuntimeException e) { return 0; }
     }
 
     /** Forge removed every ability (no spells/abilities besides casting itself, triggers, statics, replacements, keywords). */

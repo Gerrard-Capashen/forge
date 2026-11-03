@@ -951,6 +951,11 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("evoke".equals(rig)) {      // Island x6 in play; Mulldrifter x2 in hand (evoke one, hard-cast the other: the stack must name the evoke trigger "Evoke")
+            for (int i = 0; i < 6; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 2; i++) rigAdd(p, "Mulldrifter", ZoneType.Hand, 0);
+            return;
+        }
         if ("scepter".equals(rig)) {      // Plains x5 in play; Isochron Scepter, Orim's Chant, Wrath of the Skies in hand
             // made by name (rigAdd): the default playtest deck replaces the rig's deck, so taking them from the library found nothing
             for (int i = 0; i < 5; i++) rigAdd(p, "Plains", ZoneType.Battlefield, 0);
@@ -1881,56 +1886,89 @@ public final class ForgeBackend implements GameBackend {
     // ---- combat ------------------------------------------------------------------------------------------------
 
     void askAttackers(Player me, forge.game.combat.Combat combat) {
-        GameEntity defender = null;
-        for (GameEntity e : combat.getDefenders()) {
-            if (e instanceof Player) { defender = e; break; }
-        }
-        if (defender == null) return;
-        List<Card> candidates = new ArrayList<>();
+        // every defender the client can name: the opposing player and their planeswalkers (battles have no recipient type)
+        List<GameEntity> defenders = new ArrayList<>();
+        for (GameEntity e : combat.getDefenders()) if (e instanceof Player || (e instanceof Card && ((Card) e).isPlaneswalker())) defenders.add(e);
+        if (defenders.isEmpty()) return;
+        Map<Card, List<GameEntity>> legal = new java.util.LinkedHashMap<>();
         for (Card c : me.getCreaturesInPlay()) {
-            if (forge.game.combat.CombatUtil.canAttack(c, defender)) candidates.add(c);
+            List<GameEntity> ok = new ArrayList<>();
+            for (GameEntity d : defenders) if (forge.game.combat.CombatUtil.canAttack(c, d)) ok.add(d);
+            if (!ok.isEmpty()) legal.put(c, ok);
         }
-        if (candidates.isEmpty()) return;
-        List<Card> chosen = new ArrayList<>();
+        if (legal.isEmpty()) return;
+        List<Card> candidates = new ArrayList<>(legal.keySet());
+        Map<Card, GameEntity> chosen = new java.util.LinkedHashMap<>();      // attacker -> the defender the player picked
         System.out.println("[mtga] turn " + game.getPhaseHandler().getTurn() + " asking attackers among " + candidates.size());
-        sendRequest(attackersReq(candidates, chosen));
+        sendRequest(attackersReq(legal, chosen));
 
         while (true) {
             ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_DeclareAttackersResp, ClientMessageType.ClientMessageType_SubmitAttackersReq));
             System.out.println("[mtga] client combat message " + r.getType() + " " + r.toString().replace("\n", " "));
             if (r.getType() == ClientMessageType.ClientMessageType_DeclareAttackersResp) {
                 // each response only lists the attackers the player just toggled (DeclareAttackerRequest.UpdateAttacker)
-                if (r.getDeclareAttackersResp().getAutoDeclare()) { chosen.clear(); chosen.addAll(candidates); }
+                if (r.getDeclareAttackersResp().getAutoDeclare()) {
+                    chosen.clear();
+                    for (Card c : candidates) chosen.put(c, preferredDefender(legal.get(c)));
+                }
                 for (com.wizards.mtga.gre.Attacker a : r.getDeclareAttackersResp().getSelectedAttackersList()) {
                     Card c = sync.card(a.getAttackerInstanceId());
-                    if (c == null || !candidates.contains(c)) continue;
-                    if (a.hasSelectedDamageRecipient()) { if (!chosen.contains(c)) chosen.add(c); }
-                    else chosen.remove(c);
+                    if (c == null || !legal.containsKey(c)) continue;
+                    if (a.hasSelectedDamageRecipient()) {
+                        GameEntity d = defenderOf(a.getSelectedDamageRecipient(), legal.get(c));
+                        chosen.put(c, d != null ? d : preferredDefender(legal.get(c)));
+                    } else chosen.remove(c);
                 }
-                sendRequest(attackersReq(candidates, chosen));      // echo (also after "All Attack": it only selects); the client then submits
+                sendRequest(attackersReq(legal, chosen));      // echo (also after "All Attack": it only selects); the client then submits
                 continue;
             }
             break;
         }
-        for (Card c : chosen) combat.addAttacker(c, defender);
+        for (Map.Entry<Card, GameEntity> e : chosen.entrySet()) combat.addAttacker(e.getKey(), e.getValue());
         session.sendGre(req(GREMessageType.GREMessageType_SubmitAttackersResp));
     }
 
-    private GREToClientMessage.Builder attackersReq(List<Card> candidates, List<Card> chosen) {
+    /** The default target of a mass or auto attack: the player when legal, else the first planeswalker. */
+    private static GameEntity preferredDefender(List<GameEntity> options) {
+        for (GameEntity d : options) if (d instanceof Player) return d;
+        return options.get(0);
+    }
+
+    private GameEntity defenderOf(com.wizards.mtga.gre.DamageRecipient dr, List<GameEntity> options) {
+        for (GameEntity d : options) {
+            if (dr.getType() == com.wizards.mtga.gre.DamageRecType.DamageRecType_PlanesWalker && d instanceof Card && iid((Card) d) == dr.getPlaneswalkerInstanceId()) return d;
+            if (dr.getType() == com.wizards.mtga.gre.DamageRecType.DamageRecType_Player && d instanceof Player) return d;
+        }
+        return null;
+    }
+
+    private GREToClientMessage.Builder attackersReq(Map<Card, List<GameEntity>> legal, Map<Card, GameEntity> chosen) {
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_DeclareAttackersReq);
-        for (Card c : candidates) {
-            com.wizards.mtga.gre.Attacker.Builder a = attackerOf(c).toBuilder();
-            if (chosen.contains(c)) a.setSelectedDamageRecipient(a.getLegalDamageRecipients(0));
-            req.getDeclareAttackersReqBuilder().addAttackers(a).addQualifiedAttackers(attackerOf(c));
+        for (Map.Entry<Card, List<GameEntity>> e : legal.entrySet()) {
+            Card c = e.getKey();
+            com.wizards.mtga.gre.Attacker plain = attackerOf(c, e.getValue());
+            com.wizards.mtga.gre.Attacker.Builder a = plain.toBuilder();
+            GameEntity pick = chosen.get(c);
+            if (pick != null) a.setSelectedDamageRecipient(recipientOf(pick));
+            req.getDeclareAttackersReqBuilder().addAttackers(a).addQualifiedAttackers(plain);
         }
         req.getDeclareAttackersReqBuilder().setCanSubmitAttackers(true);
         return req;
     }
 
-    private com.wizards.mtga.gre.Attacker attackerOf(Card c) {
-        com.wizards.mtga.gre.DamageRecipient dr = com.wizards.mtga.gre.DamageRecipient.newBuilder()
+    private com.wizards.mtga.gre.DamageRecipient recipientOf(GameEntity d) {
+        if (d instanceof Card) {
+            return com.wizards.mtga.gre.DamageRecipient.newBuilder()
+                    .setType(com.wizards.mtga.gre.DamageRecType.DamageRecType_PlanesWalker).setPlaneswalkerInstanceId(iid((Card) d)).build();
+        }
+        return com.wizards.mtga.gre.DamageRecipient.newBuilder()
                 .setType(com.wizards.mtga.gre.DamageRecType.DamageRecType_Player).setPlayerSystemSeatId(StateSync.AI_SEAT).build();
-        return com.wizards.mtga.gre.Attacker.newBuilder().setAttackerInstanceId(iid(c)).addLegalDamageRecipients(dr).build();
+    }
+
+    private com.wizards.mtga.gre.Attacker attackerOf(Card c, List<GameEntity> options) {
+        com.wizards.mtga.gre.Attacker.Builder b = com.wizards.mtga.gre.Attacker.newBuilder().setAttackerInstanceId(iid(c));
+        for (GameEntity d : options) b.addLegalDamageRecipients(recipientOf(d));
+        return b.build();
     }
 
     private GREToClientMessage.Builder blockersReq(List<Card> blockers, List<Card> attackers, Map<Card, Card> assignment) {

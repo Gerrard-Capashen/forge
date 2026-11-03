@@ -90,6 +90,13 @@ final class ArchenemyEvent {
                 "CardPoolByCollation", null, "CardStyles", new JsonArray(), "DraftId", null, "TournamentId", null, "MadeChoice", null);
     }
 
+    /** Back to an empty deck selection (the stages beaten are kept): the page must not show the deck of the last visit. */
+    private void clearDeck() {
+        JsonObject fresh = newCourse("Join");
+        course.add("CourseDeckSummary", fresh.get("CourseDeckSummary"));
+        course.add("CourseDeck", fresh.get("CourseDeck"));
+    }
+
     private synchronized void save() {
         try {
             Files.writeString(file.toPath(), course.toString(), StandardCharsets.UTF_8);
@@ -109,7 +116,7 @@ final class ArchenemyEvent {
     /** EventJoin: free, straight to deck selection; a course in progress (stages beaten) is kept. */
     synchronized Object join() {
         if (course == null) course = newCourse("DeckSelect");
-        else if ("Join".equals(str(course, "CurrentModule"))) course.addProperty("CurrentModule", "DeckSelect");
+        else if ("Join".equals(str(course, "CurrentModule"))) { clearDeck(); course.addProperty("CurrentModule", "DeckSelect"); }
         save();
         return obj("Course", course, "InventoryInfo", null);
     }
@@ -129,6 +136,7 @@ final class ArchenemyEvent {
     /** EventDrop / EventResign: back to Join; the stages beaten are kept (joining again continues). */
     synchronized Object drop(boolean wrapped) {
         if (course == null) course = newCourse("Join");
+        clearDeck();
         course.addProperty("CurrentModule", "Join");
         save();
         return wrapped ? obj("Course", course, "InventoryInfo", null) : course;
