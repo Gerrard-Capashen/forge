@@ -899,6 +899,12 @@ public final class ForgeBackend implements GameBackend {
             rigAdd(opponent, "Ocelot Pride", ZoneType.Battlefield, 0);
             return;
         }
+        if ("vorinclex".equals(System.getProperty("mtga.rig"))) {      // trigger burst: you hold 15 Forests (untapped) + Worldspine Wurm {11} in hand; the AI has Vorinclex, Voice of Hunger in play (a trigger per land you tap)
+            for (int i = 0; i < 15; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);
+            rigAdd(p, "Worldspine Wurm", ZoneType.Hand, 0);
+            rigAdd(opponent, "Vorinclex, Voice of Hunger", ZoneType.Battlefield, 0);
+            return;
+        }
         if ("menace".equals(System.getProperty("mtga.rig"))) {      // my 2 Bears vs the AI's Moonshadow (full 7/7 menace, ready to attack)
             for (Player pl : game.getPlayers()) {
                 String name = pl == p ? "Grizzly Bears" : "Moonshadow";
