@@ -100,6 +100,11 @@ public final class CosmeticCatalog {
             if (avatar != null) {
                 Set<String> thumb = new TreeSet<>(avatar.keys("ALT_Avatar.ThumbnailPayload", "Cosmetic_AvatarId"));
                 Set<String> bust = new TreeSet<>(avatar.keys("ALT_Avatar.BustPayload", "Cosmetic_AvatarId"));
+                if (thumb.isEmpty() && bust.isEmpty()) {
+                    // newer builds merged the per-image trees into one tree whose payload carries every image of an avatar
+                    thumb.addAll(avatar.keys("ALT_Avatar.CosmeticData", "Cosmetic_AvatarId"));
+                    bust.addAll(thumb);
+                }
                 thumb.retainAll(bust);      // drawn in the picker and in the match: both images must exist
                 thumb.removeIf(id -> !id.startsWith("Avatar_Basic_"));      // NPE_BOLAS...: tutorial opponents, not for players
                 if (!thumb.isEmpty()) { c.avatars.clear(); c.avatars.addAll(thumb); }
