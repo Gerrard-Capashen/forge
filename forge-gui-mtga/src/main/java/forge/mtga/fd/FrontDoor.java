@@ -384,6 +384,19 @@ public final class FrontDoor {
 
     private volatile forge.mtga.social.SocialClient social;
 
+    /**
+     * The opponent of an online match as the coordinator knows it. A peer's handshake profile says whatever its server wants, so
+     * when the coordinator vouches for the opponent (a signed-in account) its name and player id replace the claimed ones (the
+     * player id also decides the orange developer name). An opponent nobody vouched for keeps its cosmetics but is labelled
+     * "(unverified)" and has no player id.
+     */
+    static PublicProfile vouched(PublicProfile theirs, forge.mtga.peer.Coordinator.Paired paired) {
+        boolean ok = paired.opponentVerified() && !paired.opponentId().isBlank();
+        String name = ok ? paired.opponent() : theirs.name() + " (unverified)";
+        return new PublicProfile(ok ? paired.opponentId() : "", name, theirs.avatar(), theirs.sleeve(), theirs.pet(), theirs.title(),
+                theirs.emotes(), theirs.rankClass(), theirs.rankTier());
+    }
+
     /** Orange name: this player from the profile (copied from the coordinator), an opponent asked of the coordinator (never taken from what a peer sends about itself). */
     private boolean isDev(PublicProfile p) {
         if (p.playerId().equals(profile.self().playerId())) return profile.isDev();
@@ -876,7 +889,18 @@ public final class FrontDoor {
     private Object startPeerMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, String companion,
                                   java.util.List<String> commanders) {
         Peer p = peer;
-        if (p.coordinator() != null) return startOnlineMatch(s, deckName, human, printing, me, eventId, p, null, companion, commanders);
+        if (p.coordinator() != null) {
+            // signed in = the opponent is shown this account's own name; without it the match still plays, the name shows as unverified
+            String session = null;
+            if (rank.online()) {
+                try {
+                    session = rank.session();
+                } catch (java.io.IOException e) {
+                    System.out.println("[mtga] FD casual: cannot sign in, the opponent will see this name as unverified (" + e.getMessage() + ")");
+                }
+            }
+            return startOnlineMatch(s, deckName, human, printing, me, eventId, p, session, companion, commanders);
+        }
         if (p.host() != null) {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
             forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
@@ -1002,7 +1026,7 @@ public final class FrontDoor {
                 room.setMomir(PlayQueues.isMomir(eventId));
                 forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
                 mine.setOutcomeListener(outcomeReport(paired, eventId));
-                p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(guest), eventId, commanders, room.commanders(1))));
+                p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(vouched(guest, paired)), eventId, commanders, room.commanders(1))));
                 link = forge.mtga.peer.Coordinator.openRoom(paired);
                 p.host().serveOnline(link);              // returns when the guest has left
                 return;
@@ -1017,7 +1041,7 @@ public final class FrontDoor {
             j.backend().setMetricsListener(m -> forge.mtga.forge.QuestMetrics.publish(j.matchId(), m));
             onlineMatches.put(j.matchId(), eventId);
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(j.matchId(), human, Map.of(), printing, "", j.backend()));
-            pushMatchCreated(s, j.matchId(), me, profile.sanitize(j.host()), eventId, commanders, j.hostCommanders());
+            pushMatchCreated(s, j.matchId(), me, profile.sanitize(vouched(j.host(), paired)), eventId, commanders, j.hostCommanders());
         } catch (Exception e) {
             System.out.println("[mtga] FD online: " + e);
             if (link != null) link.close();

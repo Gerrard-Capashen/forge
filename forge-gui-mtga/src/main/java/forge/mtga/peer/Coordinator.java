@@ -28,8 +28,12 @@ public final class Coordinator {
         return t;
     });
 
-    /** {@code role} = "host" | "guest"; {@code token} opens the room as that role. */
-    public record Paired(String base, String role, String match, String token, String opponent) {
+    /**
+     * {@code role} = "host" | "guest"; {@code token} opens the room as that role. {@code opponentVerified}: the coordinator vouches
+     * for the opponent, a signed-in account; {@code opponent} is then that account's name and {@code opponentId} its player id.
+     * Otherwise {@code opponent} is only what the other side claimed and {@code opponentId} is empty.
+     */
+    public record Paired(String base, String role, String match, String token, String opponent, boolean opponentVerified, String opponentId) {
         public boolean host() { return "host".equals(role); }
     }
 
@@ -97,8 +101,9 @@ public final class Coordinator {
                                 try {
                                     JsonObject o = JsonParser.parseString(msg).getAsJsonObject();
                                     if ("paired".equals(o.get("t").getAsString())) {
+                                        boolean vouched = o.has("oppVerified") && o.get("oppVerified").getAsBoolean() && o.has("oppId");
                                         t.result.complete(new Paired(trim(base), o.get("role").getAsString(), o.get("match").getAsString(),
-                                                o.get("token").getAsString(), o.get("opp").getAsString()));
+                                                o.get("token").getAsString(), o.get("opp").getAsString(), vouched, vouched ? o.get("oppId").getAsString() : ""));
                                         t.close();
                                     }
                                 } catch (RuntimeException e) {

@@ -223,8 +223,12 @@ final class ChallengeService {
             System.out.println("[mtga] FD challenge " + id + ": match arrived without a deck issued here, ignored");
             return;
         }
+        // the coordinator's own record of the friend (Name#12345 and id), not what the opponent's server will claim in the handshake
+        JsonObject opp = m.getAsJsonObject("opponent");
+        String full = opp.get("fullName").getAsString();
+        String name = full.contains("#") ? full.substring(0, full.lastIndexOf('#')) : full;
         Coordinator.Paired paired = new Coordinator.Paired(fd.peer().coordinator(), m.get("role").getAsString(), m.get("match").getAsString(), m.get("token").getAsString(),
-                m.getAsJsonObject("opponent").get("fullName").getAsString());
+                name, true, opp.get("playerId").getAsString());
         Thread t = new Thread(() -> fd.playOnline(s, paired, p.human(), p.printing(), p.sideboard(), p.gamesToWin(), p.firstSeat(), p.me(), EVENT, fd.peer(), p.companion(), p.commanders()), "challenge-match");
         t.setDaemon(true);
         t.start();
