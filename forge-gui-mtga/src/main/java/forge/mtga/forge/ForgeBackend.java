@@ -471,6 +471,7 @@ public final class ForgeBackend implements GameBackend {
         // The deaths that follow (and life changes, counters...) belong to the same frame; mass moves out of the graveyard
         // or into exile during a resolving effect ("exile all graveyards") are one diff too, not one per card.
         if (sync.holdForBatch(ev)) return;
+        if (Boolean.getBoolean("mtga.debugEv")) System.out.println("[mtga] DEBUG event " + ev.getClass().getSimpleName() + " resolving=" + game.getStack().isResolving());
         if (ev instanceof forge.game.event.GameEventSpellAbilityCast && !game.getStack().isEmpty()) {
             // a trigger of the combat damage (Ragavan) must not appear together with the damage animation
             GameStateMessage.Builder dmg = sync.diffHeldCombatWithoutStack();
@@ -980,6 +981,13 @@ public final class ForgeBackend implements GameBackend {
             for (int i = 0; i < 3; i++) rigAdd(p, "Ornithopter", ZoneType.Battlefield, 0);
             rigAdd(p, "Sami, Wildcat Captain", ZoneType.Battlefield, 0);
             rigAdd(p, "Wurmcoil Engine", ZoneType.Hand, 0);
+            return;
+        }
+        if ("mill".equals(rig)) {      // Island x5 + Swamp x3 in play; Doomsday (exiles the whole library) and Traumatize (mills half the target's library) in hand
+            for (int i = 0; i < 5; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
+            rigAdd(p, "Doomsday", ZoneType.Hand, 0);
+            rigAdd(p, "Traumatize", ZoneType.Hand, 0);
             return;
         }
         if ("evoke".equals(rig)) {      // Island x6 in play; Mulldrifter x2 in hand (evoke one, hard-cast the other: the stack must name the evoke trigger "Evoke")

@@ -149,6 +149,11 @@ public final class SelfPlay {
                 System.out.println("  sami rig: Wurmcoil Engine was never offered (WRONG)");
                 failed++;
             }
+            if ("mill".equals(System.getProperty("mtga.rig"))) {      // Traumatize mills half a library: one diff, a capped number of announced transfers
+                boolean ok = fc.massMoves >= 15 && fc.maxMillAnimated <= forge.mtga.forge.StateSync.MASS_MOVE_ANIMATED;
+                System.out.println("  mill rig: largest move " + fc.massMoves + " cards, " + fc.maxMillAnimated + " Mill animations" + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if (!done || !fc.problems.isEmpty()) failed++;
             backend.onDisconnect(fc);
         }
@@ -670,6 +675,7 @@ public final class SelfPlay {
         }
 
         boolean samiOffered;
+        int massMoves, maxMillAnimated;
 
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
 
@@ -707,7 +713,12 @@ public final class SelfPlay {
 
         private static ClientToGREMessage.Builder msg(ClientMessageType t) { return ClientToGREMessage.newBuilder().setType(t); }
 
-        private static Action preferred(List<Action> acts) {
+        private Action preferred(List<Action> acts) {
+            if ("mill".equals(System.getProperty("mtga.rig"))) {      // rig mill: cast the mass-move spells (Traumatize first, then Doomsday)
+                for (String n : List.of("Traumatize", "Doomsday")) {
+                    for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
+                }
+            }
             long want = Long.getLong("selfplay.prefer", 0);
             if (want == 0) return null;
             for (Action a : acts) {
@@ -789,7 +800,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -1354,8 +1365,14 @@ public final class SelfPlay {
                 if (o != null && o.getLifeTotal() != p.getLifeTotal()
                         && lifeAnn.getOrDefault(p.getSystemSeatNumber(), 0) != p.getLifeTotal() - o.getLifeTotal()) problem("life changed without matching ModifiedLife");
             }
+            // a mass move out of a library / graveyard announces only its first cards (StateSync.MASS_MOVE_ANIMATED): the others arrive silently
+            int millTransfers = 0, silentMoves = 0;
+            for (AnnotationInfo a : anns) if (a.getType(0) == AnnotationType.AnnotationType_ZoneTransfer && "Mill".equals(category(a))) millTransfers++;
+            boolean massDiff = transferred.size() >= forge.mtga.forge.StateSync.MASS_MOVE_ANIMATED;
             for (GameObjectInfo o : objs.values()) {
                 GameObjectInfo old = oldObjs.get(o.getInstanceId());
+                if (massDiff && old == null && !transferred.contains(o.getInstanceId()) && !created.contains(o.getInstanceId())
+                        && (o.getZoneId() == 33 || o.getZoneId() == 43 || o.getZoneId() == 29)) { silentMoves++; continue; }      // 29 = exile
                 if (old != null && old.getZoneId() == 28 && o.getZoneId() == 28 && old.getIsTapped() != o.getIsTapped() && !tappedAnn.contains(o.getInstanceId())) {
                     problem("tap state changed without TappedUntappedPermanent");
                 }
@@ -1363,6 +1380,11 @@ public final class SelfPlay {
                         && !inAnyZone(oldZones, o.getInstanceId()) && o.getType() != GameObjectType.GameObjectType_RevealedCard) {
                     problem("new object without ZoneTransfer/TokenCreated/AbilityInstanceCreated (zone " + o.getZoneId() + " " + debugName(o.getInstanceId()) + ")");
                 }
+            }
+            if (silentMoves > 0 || millTransfers > 0 && "mill".equals(System.getProperty("mtga.rig"))) {
+                massMoves = Math.max(massMoves, silentMoves + transferred.size());
+                maxMillAnimated = Math.max(maxMillAnimated, millTransfers);
+                System.out.println("[selfplay] mass move: " + (silentMoves + transferred.size()) + " cards changed zone, " + millTransfers + " Mill transfers announced");
             }
         }
 

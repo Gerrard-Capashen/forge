@@ -194,6 +194,13 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("mill".equals(rig)) {      // test rig: Traumatize (mill half a library) vs a passive opponent; ForgeBackend.rigHand sets the board
+            green.clear();
+            green.put("Island", 20);
+            green.put("Swamp", 20);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("passage".equals(rig)) {      // test rig: "choose a basic land type" as a land enters (Multiversal Passage) vs a passive opponent
             green.clear();
             green.put("Multiversal Passage", 10);

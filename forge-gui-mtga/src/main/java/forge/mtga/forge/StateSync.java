@@ -1354,8 +1354,18 @@ public final class StateSync {
                 out.add(ann(AnnotationType.AnnotationType_RevealedCardCreated, o.getInstanceId(), o.getInstanceId()).build());
             }
         }
+        Map<Long, Integer> animated = new HashMap<>();
         for (IdChange ch : s.idChanges) {
             GameObjectInfo now = s.objs.get(ch.newId());
+            // a mass move out of a library or graveyard (a library exiled or milled, a graveyard exiled): the client plays one animation
+            // per card, so only the first few of each source/destination pair are announced. The rest change zone without a transfer
+            // (the state is still right; the client just shows them in their new zone).
+            boolean fromPile = ch.srcZone() == 31 || ch.srcZone() == 41 || ch.srcZone() == 33 || ch.srcZone() == 43;
+            long pair = ((long) ch.srcZone() << 32) | (ch.dstZone() & 0xffffffffL);
+            if (fromPile && animated.merge(pair, 1, Integer::sum) > MASS_MOVE_ANIMATED) {
+                categoryHint.remove(ch.card().getId());
+                continue;
+            }
             out.add(ann(AnnotationType.AnnotationType_ObjectIdChanged, 0, ch.oldId())
                     .addDetails(intDetail("orig_id", ch.oldId())).addDetails(intDetail("new_id", ch.newId())).build());
             String cat = categoryHint.remove(ch.card().getId());
@@ -1429,6 +1439,9 @@ public final class StateSync {
         }
         return out;
     }
+
+    /** Cards of one zone-to-zone move in a single diff that still get a ZoneTransfer animation (-Dmtga.massmove=n). */
+    public static final int MASS_MOVE_ANIMATED = Integer.getInteger("mtga.massmove", 6);
 
     private static boolean isOldIdOfMove(Snapshot s, int id) {
         for (IdChange ch : s.idChanges) if (ch.oldId() == id) return true;
@@ -1514,6 +1527,11 @@ public final class StateSync {
         if (ev instanceof forge.game.event.GameEventTurnPhase || ev instanceof forge.game.event.GameEventTurnBegan
                 || ev instanceof forge.game.event.GameEventGameFinished || ev instanceof forge.game.event.GameEventGameOutcome) return false;
         if (inCombatDamage()) { heldCombat = true; return true; }
+        if (ev instanceof forge.game.event.GameEventZone z && game.getStack().isResolving()) {
+            // the per-card zone notification that follows each move: it would flush the held diff after every card of a mill / exile
+            ZoneType zt = z.zoneType();
+            return zt == ZoneType.Library || zt == ZoneType.Graveyard || zt == ZoneType.Exile;
+        }
         if (ev instanceof forge.game.event.GameEventCardChangeZone e && game.getStack().isResolving()) {
             ZoneType from = e.from() == null ? null : e.from().zoneType(), to = e.to() == null ? null : e.to().zoneType();
             return from == ZoneType.Graveyard || to == ZoneType.Exile || to == ZoneType.Graveyard && from != ZoneType.Stack;
