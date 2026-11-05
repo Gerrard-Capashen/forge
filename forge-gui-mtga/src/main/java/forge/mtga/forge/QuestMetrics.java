@@ -16,7 +16,7 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Gameplay counters of one seat for the daily quests (coordinator/src/quests.ts, docs/results-rank-mastery.md section 3.5), fed by the
+ * Gameplay counters of one seat for the daily quests (coordinator/src/quests.ts), fed by the
  * Forge game's events: creatures attacked with, spells cast (per colour, instants/sorceries, creatures, artifacts/enchantments), lands
  * played, damage dealt to opponents, opponent creatures that died. The names are the quest metrics the coordinator knows.
  */

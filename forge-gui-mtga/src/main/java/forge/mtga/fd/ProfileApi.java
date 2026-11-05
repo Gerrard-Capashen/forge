@@ -57,7 +57,7 @@ public final class ProfileApi {
     int inventorySeq() { return inventorySeq.incrementAndGet(); }
 
     // ---- ownership ----------------------------------------------------------------------------------------------
-    // owned.all (offline): the whole catalogue. Otherwise (online, docs/results-rank-mastery.md section 3) the always-owned set
+    // owned.all (offline): the whole catalogue. Otherwise (online, coordinator/src/mastery.ts) the always-owned set
     // (Mastery.ALWAYS_OWNED: the Adventurer, the default card back, the basic phrases) plus the coordinator's grants.
 
     private List<String> ownedAvatars(Profile p) {

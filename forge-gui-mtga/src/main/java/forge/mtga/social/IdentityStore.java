@@ -23,7 +23,7 @@ import java.util.Base64;
 /**
  * The device key that proves who this install is to the coordinator: an ECDSA P-256 key pair in {@code identity.json} in the data
  * directory, made on first use. The private key never leaves the machine; losing the file loses the identity (the launcher
- * offers a backup). See docs/online-identity-friends.md.
+ * offers a backup). See docs/architecture.md, "Accounts and identity".
  */
 public final class IdentityStore {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();

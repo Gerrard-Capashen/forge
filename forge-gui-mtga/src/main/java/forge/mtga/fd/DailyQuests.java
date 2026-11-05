@@ -8,7 +8,7 @@ import forge.mtga.social.QuestService;
 import static forge.mtga.fd.FrontDoor.obj;
 
 /**
- * Daily quests through the client's own quest bar (home page objectives; findings in docs/results-rank-mastery.md section 3.5):
+ * Daily quests through the client's own quest bar (home page objectives; rules in coordinator/src/quests.ts):
  * QuestGetQuests answers ClientQuestCollection {canSwap, newQuests, quests: [ClientQuestDescription]}; a quest's text is the loc key
  * {@code Forge/Quest/<kind>_Text} with {quantity} = the goal (bridge FormatLoc), its reward the chest (mastery XP); QuestSwapQuest {QuestId}
  * answers the new collection; a match report's questUpdates carry startingProgress -> endingProgress (the bar animates) and, for a finished

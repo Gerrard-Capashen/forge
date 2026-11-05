@@ -12,7 +12,7 @@ import static forge.mtga.fd.FrontDoor.obj;
 
 /**
  * The mastery track as the client's own "SetMastery" campaign graph (decompiled AwsSetMasteryStrategy; findings in
- * docs/results-rank-mastery.md section 3.1): a chain of Progress nodes (one per level, Threshold = XP of the level) from
+ * coordinator/src/mastery.ts): a chain of Progress nodes (one per level, Threshold = XP of the level) from
  * StartingLevelNodeId, each with a TieredReward child whose ChestDescriptions are the level's rewards per tier (Free = the top row,
  * Premium = the second row; everybody owns the premium tier: the RewardTierNodeId node is Completed);
  * RepeatingLevelNodeId is a last level that repeats forever (no reward). The level whose node is Available is the current one

@@ -19,7 +19,7 @@ import static forge.mtga.fd.FrontDoor.obj;
  * (EventJoin, EventSetDeckV3, EventEnterPairing) and the server starts the match on EventEnterPairing.
  * Casual Play and Ranked pair two players through the coordinator, which keys its queues on the event name. Ranked events carry the
  * "Ranked" flag (the client animates pips on the end screen only for those) and sit in the blade's Ranked list; every ranked format
- * moves the same Constructed rank (the client shows one), see docs/results-rank-mastery.md.
+ * moves the same Constructed rank (the client shows one), see coordinator/src/rank.ts.
  */
 final class PlayQueues {
     enum Mode {

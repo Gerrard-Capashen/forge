@@ -39,7 +39,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Format: the challenge screen has fixed slots; ours are re-skinned: DirectGame = Standard, DirectGameBrawl = Pioneer,
  * DirectGameTournamentExplorer = Brawl, DirectGameTournamentTimeless = Historic, DirectGameAlchemy = Modern, DirectGameLimited = Legacy, DirectGameTournamentMode = Vintage, DirectGameTournamentLimited = Pauper, DirectGameTournamentHistoric = Premodern (the bridge's
- * ChallengeSlots rebuilds the client's spinners to match; docs/online-identity-friends.md, section 8). Best of 3 and "who plays first"
+ * ChallengeSlots rebuilds the client's spinners to match; ForgeFormats.DIRECT_SLOTS). Best of 3 and "who plays first"
  * are not supported yet (one game, the engine decides).
  */
 final class ChallengeService {

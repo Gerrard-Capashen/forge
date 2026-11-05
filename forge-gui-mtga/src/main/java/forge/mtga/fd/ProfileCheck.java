@@ -108,7 +108,7 @@ public final class ProfileCheck {
             check(em.getEmotesCount() == 25 && stickers == 10, "emotes: owned only, no duplicates, 15 phrases + 10 stickers at most (" + em.getEmotesCount() + ")");
         }
 
-        // ownership online (mastery, docs/results-rank-mastery.md section 3): the always-owned set + the coordinator's grants
+        // ownership online (mastery, coordinator/src/mastery.ts): the always-owned set + the coordinator's grants
         if (real) {
             System.out.println("mastery ownership:");
             String sleeve = catalog.sleeves().stream().filter(x -> !x.equals(Profile.DEFAULT_SLEEVE)).findFirst().orElseThrow();

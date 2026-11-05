@@ -220,7 +220,7 @@ public final class ForgeFormats {
                 }
             }
             b.addFormats(f);
-            for (String alias : DIRECT_SLOTS.getOrDefault(s.name(), List.of())) {      // the challenge screen's fixed slots, re-skinned (docs/online-identity-friends.md, section 8)
+            for (String alias : DIRECT_SLOTS.getOrDefault(s.name(), List.of())) {      // the challenge screen's fixed slots, re-skinned
                 b.addFormats(f.clone().setName(alias));
                 legal.put(alias, allowed);
             }

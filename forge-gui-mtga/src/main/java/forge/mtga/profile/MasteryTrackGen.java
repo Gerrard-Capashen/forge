@@ -19,7 +19,7 @@ import java.util.Set;
 
 /**
  * Writes the mastery track: every cosmetic of the client's catalogue that is not always owned, one per level, in an order that
- * is random but the same for every player (docs/results-rank-mastery.md section 3). The file is the single source of truth
+ * is random but the same for every player (coordinator/src/mastery.ts). The file is the single source of truth
  * (the coordinator grants from it, the Front Door draws the track from it): {@code coordinator/src/mastery-track.json}.
  *
  * <p>Append-only: the levels of an existing file never move; cosmetics a client update added are shuffled among themselves

@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Mastery rules shared by the profile and the Front Door (docs/results-rank-mastery.md section 3): what every player owns from
+ * Mastery rules shared by the profile and the Front Door (coordinator/src/mastery.ts): what every player owns from
  * the start, and the XP of a level. Everything else is earned on the mastery track (coordinator/src/mastery-track.json).
  */
 public final class Mastery {
@@ -13,7 +13,7 @@ public final class Mastery {
 
     /** The only avatar a new player owns. */
     public static final String DEFAULT_AVATAR = "Avatar_Basic_Adventurer";
-    /** Always the LAST level of the track (after every other cosmetic): the hardest thing to earn (user, session 20). */
+    /** Always the LAST level of the track (after every other cosmetic): the hardest thing to earn. */
     public static final String CHAMPION_TITLE = "Title_Core_Champion";
     public static final int LEVEL_XP = 1_000;
 
