@@ -73,6 +73,8 @@ public final class ForgeBackend implements GameBackend {
     /** The winning team of each game of the match so far (0 = draw). */
     private final List<Integer> gameWinners = new ArrayList<>();
     private boolean introSent, playStageSent;
+    /** A game of this match reached this client (unlike introSent, never reset between games): leaving from here on concedes. */
+    private volatile boolean played;
     /** This seat's keep/mulligan question is out and unanswered (the second seat's goes out with the opening state). */
     private boolean mulliganAsked;
     /** While Forge redraws a mulligan hand, send one diff at the next prompt instead of one per card move. */
@@ -207,8 +209,23 @@ public final class ForgeBackend implements GameBackend {
     @Override
     public void onDisconnect(MatchSession s) {
         disconnected = true;
+        if (played) concedeByLeaving();
         inbox.add(POISON);
         room.seatLeft(this);
+    }
+
+    /**
+     * This seat's client left a started match that has no result yet: that concedes it. Online, the coordinator only confirms the
+     * opponent's win when this seat reports the loss too (otherwise a host that quits leaves its guest's win unconfirmed). Quest
+     * counters are dropped: leaving a match does not count as playing one.
+     */
+    private void concedeByLeaving() {
+        java.util.function.Consumer<String> l = outcomeListener;
+        outcomeListener = null;
+        metricsListener = null;
+        if (l == null) return;                 // the match already ended, or this seat reports nothing (a bot match)
+        System.out.println("[mtga] match " + matchId + ": this player's client left mid-match, reporting a loss");
+        l.accept("loss");
     }
 
     /** The other seat's client left: a pending decision here must end too. */
@@ -743,7 +760,7 @@ public final class ForgeBackend implements GameBackend {
             session.sendRoomState(MatchGameRoomStateType.MatchGameRoomStateType_Playing, matchId);
         } else if (withMulliganReq) session.sendGre(opening, mulliganReq());
         else session.sendGre(opening);
-        introSent = true;
+        introSent = played = true;
         batching = true;       // mulligan stage: one diff per prompt (the opponent's mulligans included), like the real GRE
     }
 
@@ -761,7 +778,7 @@ public final class ForgeBackend implements GameBackend {
         question.getChooseStartingPlayerReqBuilder().setTeamType(com.wizards.mtga.gre.TeamType.TeamType_Individual)
                 .addSystemSeatIds(StateSync.HUMAN_SEAT).addSystemSeatIds(StateSync.AI_SEAT);
         session.sendGre(opening, question);
-        introSent = true;
+        introSent = played = true;
         batching = true;
         ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_ChooseStartingPlayerResp, ClientMessageType.ClientMessageType_ConcedeReq));
         room.startChoiceClosed(this);
@@ -779,7 +796,7 @@ public final class ForgeBackend implements GameBackend {
         if (introSent || session == null || sync == null || disconnected) return;
         sync.setDecisionPlayer(chooser);
         session.sendGre(gameState(sync.full(sync.info())));
-        introSent = true;
+        introSent = played = true;
         batching = true;
     }
 

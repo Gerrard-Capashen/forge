@@ -24,9 +24,17 @@ public final class ResultReporter {
         this.profiles = profiles;
     }
 
+    /** Reports still on their way (incl. retries). The launcher waits for 0 before it stops the server (GET /results/pending). */
+    private static final java.util.concurrent.atomic.AtomicInteger PENDING = new java.util.concurrent.atomic.AtomicInteger();
+
+    public static int pending() { return PENDING.get(); }
+
     /** {@code outcome} = "win" | "loss" | "draw" from this player's side; {@code pool} = the queue / event the match was paired in. */
     public void report(Coordinator.Paired paired, String pool, String outcome) {
-        Thread t = new Thread(() -> send(paired, pool, outcome), "result-report");
+        PENDING.incrementAndGet();
+        Thread t = new Thread(() -> {
+            try { send(paired, pool, outcome); } finally { PENDING.decrementAndGet(); }
+        }, "result-report");
         t.setDaemon(true);
         t.start();
     }

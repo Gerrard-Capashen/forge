@@ -105,6 +105,13 @@ public final class ForgeMtgaMain {
                 ex.sendResponseHeaders(200, body.length);
                 try (var out = ex.getResponseBody()) { out.write(body); }
             });
+            // the launcher asks before it stops this server: a match result still on its way to the coordinator would be lost
+            art.addContext("/results/pending", ex -> {
+                byte[] body = ("{\"pending\":" + forge.mtga.social.ResultReporter.pending() + "}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                ex.getResponseHeaders().set("Content-Type", "application/json");
+                ex.sendResponseHeaders(200, body.length);
+                try (var out = ex.getResponseBody()) { out.write(body); }
+            });
             art.start();
         }
         else System.out.println("[mtga] Art server disabled (artport=0)");

@@ -16,6 +16,8 @@ public final class RemoteSeatBackend implements GameBackend {
     private volatile MatchSession session;
     private volatile boolean leaving;
     private volatile boolean resultSeen;
+    /** The host's engine sent this client a game state: the game has started, so leaving from here on concedes it. */
+    private volatile boolean sawGame;
     private volatile java.util.function.Consumer<String> outcomeListener;
 
     private volatile java.util.function.Consumer<com.google.gson.JsonObject> metricsListener;
@@ -51,6 +53,9 @@ public final class RemoteSeatBackend implements GameBackend {
 
     @Override
     public void onDisconnect(MatchSession s) {
+        // this player's client left a started match with no result yet: report the loss, or the host's win stays unconfirmed
+        if (sawGame && !resultSeen) System.out.println("[mtga] peer: this player's client left mid-match, reporting a loss");
+        if (sawGame) tellOutcome("loss");
         leaving = true;
         try {
             link.send(PeerLink.BYE, new byte[0]);
@@ -73,6 +78,8 @@ public final class RemoteSeatBackend implements GameBackend {
             while ((f = link.read()) != null) {
                 if (f.type() == PeerLink.TO_GUEST) {
                     MatchServiceToClientMessage.Builder b = MatchServiceToClientMessage.parseFrom(f.body()).toBuilder();
+                    if (!sawGame && b.hasGreToClientEvent() && b.getGreToClientEvent().getGreToClientMessagesList().stream()
+                            .anyMatch(m -> m.getType() == com.wizards.mtga.gre.GREMessageType.GREMessageType_GameStateMessage)) sawGame = true;
                     MatchSession s = session;
                     if (s != null) s.send(b, b.getRequestId());
                 } else if (f.type() == PeerLink.METRICS) {
