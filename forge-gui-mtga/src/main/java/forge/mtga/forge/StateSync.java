@@ -81,6 +81,7 @@ public final class StateSync {
     private int gsId;
     private int annId;
     private Map<Integer, GameObjectInfo> sentObjs = new HashMap<>();
+    private Map<Integer, Integer> sentDoors = new HashMap<>();
     private Map<Integer, ZoneInfo> sentZones = new HashMap<>();
     private TurnInfo sentTurn;
     private final Map<Integer, PlayerInfo> sentPlayers = new HashMap<>();
@@ -406,6 +407,7 @@ public final class StateSync {
         final List<Integer> createdTokens = new ArrayList<>();
         final Map<Integer, Integer> createdAbilities = new LinkedHashMap<>();   // ability iid -> parent iid
         final Map<Integer, Map<Integer, Integer>> counters = new HashMap<>();   // iid -> counter type -> count
+        final Map<Integer, Integer> doors = new HashMap<>();    // Room iid -> unlocked doors (bit 1 left, 2 right)
         // id bookkeeping, applied only when the snapshot is sent (commit)
         final Map<String, int[]> binds = new HashMap<>();       // key -> {iid, zone}
         final Map<Integer, Integer> newForge = new HashMap<>();  // iid -> forge card id
@@ -725,8 +727,33 @@ public final class StateSync {
             int iid = track(s, c, zid);
             z.addObjectInstanceIds(iid);
             s.objs.put(iid, objectInfo(s, c, iid, zid, t, hidden && !revealed.contains(c.getId()) && !keptRevealed(c)));
+            if (t == ZoneType.Battlefield && c.isRoom()) addRoomHalves(s, z, c, iid, zid);
         }
         s.zones.put(zid, z.build());
+    }
+
+    /** Instance ids of a Room's two halves on the battlefield, by the Room's own instance id (left, right). */
+    private final Map<Integer, int[]> roomHalfIids = new HashMap<>();
+
+    /**
+     * The client builds a Room from the card plus two child objects, RoomLeft and RoomRight (linked to it by parentId): which half is locked is
+     * read from the parent's door designations through them. Without the children it cannot tell the halves apart and marks both as locked.
+     */
+    private void addRoomHalves(Snapshot s, ZoneInfo.Builder z, Card c, int parentIid, int zid) {
+        int grp = grpIdOf(c);
+        int[] faces = {db.linkedFace(grp), db.secondFace(grp)};
+        if (faces[0] == 0 || faces[1] == 0) return;
+        int[] ids = roomHalfIids.computeIfAbsent(parentIid, k -> { int a = fresh(); usedIids.add(a); int b = fresh(); usedIids.add(b); return new int[] {a, b}; });
+        for (int i = 0; i < 2; i++) {
+            z.addObjectInstanceIds(ids[i]);
+            GameObjectInfo.Builder half = GameObjectInfo.newBuilder().setInstanceId(ids[i]).setZoneId(zid)
+                    .setType(i == 0 ? GameObjectType.GameObjectType_RoomLeft : GameObjectType.GameObjectType_RoomRight)
+                    .setGrpId(faces[i]).setOverlayGrpId(faces[i]).setParentId(parentIid)
+                    .setOwnerSeatId(seatOf(c.getOwner())).setControllerSeatId(seatOf(c.getController()))
+                    .setVisibility(Visibility.Visibility_Public);
+            for (CardDb.Ability a : db.abilities(faces[i])) half.addUniqueAbilities(com.wizards.mtga.gre.UniqueAbilityInfo.newBuilder().setId(uniqueAbilityId(ids[i], a.id())).setGrpId(a.id()));
+            s.objs.put(ids[i], half.build());
+        }
     }
 
     private void addStack(Snapshot s) {
@@ -832,6 +859,9 @@ public final class StateSync {
                 if (!abilityIds.contains(id) && !printedType.hasSubtype(new String[]{"Plains", "Island", "Swamp", "Mountain", "Forest"}[id - 1001])) abilityIds.add(id);
             }
         }
+        // The client refreshes a card (and its door locks) only when its ability id sequence changes, and designations alone do not count:
+        // flip the order each time a door opens (none/both: as printed, one open: reversed), so every unlock is a visible change.
+        if (t == ZoneType.Battlefield && c.isRoom() && c.getUnlockedRooms().size() % 2 == 1) java.util.Collections.reverse(abilityIds);
         if (t == ZoneType.Battlefield && hasNoAbilities(c)) abilityIds.clear();      // "loses all abilities" (Oko's Elk...)
         for (int id : abilityIds) {
             printed.add(id);
@@ -924,6 +954,9 @@ public final class StateSync {
             AnnotationInfo.Builder dev = devotionWord(c, iid);
             if (dev != null) s.persistent.put("devotion:" + iid, dev);
             if (c.isRoom()) {       // which doors are open: the client marks the locked half of the card from these
+                int mask = 0;
+                for (CardStateName door : c.getUnlockedRooms()) mask |= door == CardStateName.LeftSplit ? 1 : door == CardStateName.RightSplit ? 2 : 0;
+                s.doors.put(iid, mask);
                 for (CardStateName door : c.getUnlockedRooms()) {
                     int type = door == CardStateName.LeftSplit ? com.wizards.mtga.gre.Designation.Designation_LeftUnlocked_VALUE
                             : door == CardStateName.RightSplit ? com.wizards.mtga.gre.Designation.Designation_RightUnlocked_VALUE : 0;
@@ -1244,7 +1277,9 @@ public final class StateSync {
         }
         for (GameObjectInfo o : s.objs.values()) {
             if (gameOver) break;
-            if (!o.equals(sentObjs.get(o.getInstanceId()))) {
+            // the client refreshes a card's view only when its object comes in a diff: a door opening must resend the Room
+            boolean doorChanged = s.doors.containsKey(o.getInstanceId()) && !s.doors.get(o.getInstanceId()).equals(sentDoors.get(o.getInstanceId()));
+            if (doorChanged || !o.equals(sentObjs.get(o.getInstanceId()))) {
                 m.addGameObjects(o);
                 changed = true;
             }
@@ -1465,6 +1500,7 @@ public final class StateSync {
         // annotations() reads sentTokens of the previous state, so commit after it ran (remember is called last)
         commit(s);
         sentObjs = new HashMap<>(s.objs);
+        sentDoors = new HashMap<>(s.doors);
         sentZones = new HashMap<>(s.zones);
         sentTurn = s.turn;
         sentPlayers.clear();

@@ -194,6 +194,12 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("room".equals(rig)) {      // test rig: a Room in hand (choose the half, then unlock the other door) vs a passive opponent
+            green.clear();
+            green.put("Plains", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("mill".equals(rig)) {      // test rig: Traumatize (mill half a library) vs a passive opponent; ForgeBackend.rigHand sets the board
             green.clear();
             green.put("Island", 20);

@@ -154,6 +154,11 @@ public final class SelfPlay {
                 System.out.println("  mill rig: largest move " + fc.massMoves + " cards, " + fc.maxMillAnimated + " Mill animations" + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            if ("room".equals(System.getProperty("mtga.rig"))) {      // both halves offered, and the other door offered for unlocking after the right half was cast
+                boolean ok = fc.roomBothOffered && fc.roomUnlockOffered;
+                System.out.println("  room rig: both halves offered " + fc.roomBothOffered + ", unlock offered " + fc.roomUnlockOffered + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if (!done || !fc.problems.isEmpty()) failed++;
             backend.onDisconnect(fc);
         }
@@ -674,7 +679,7 @@ public final class SelfPlay {
             return b.toString();
         }
 
-        boolean samiOffered;
+        boolean samiOffered, roomBothOffered, roomUnlockOffered;
         int massMoves, maxMillAnimated;
 
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
@@ -800,7 +805,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -827,6 +832,31 @@ public final class SelfPlay {
                             System.out.println("[selfplay] sami rig: Wurmcoil Engine offered, shown cost " + pips + " " + a.getManaCostList().toString().replaceAll("\s+", " "));
                             if (pips != 3) problem("sami rig: Wurmcoil Engine shown at " + pips + " mana, expected 3");
                             samiOffered = true;
+                        }
+                    }
+                    if ("room".equals(System.getProperty("mtga.rig"))) {      // rig room: both halves of the Room in hand are offered; once cast, the other door can be unlocked
+                        boolean left = false, right = false;
+                        for (Action a : acts) {
+                            if (a.getActionType() == ActionType.ActionType_CastLeftRoom) left = true;
+                            if (a.getActionType() == ActionType.ActionType_CastRightRoom) right = true;
+                            if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).contains("Surgical")) problem("room rig: a Room half offered as a plain Cast");
+                        }
+                        if (left != right) problem("room rig: only one half of the Room offered (left=" + left + " right=" + right + ")");
+                        if (left && right) roomBothOffered = true;
+                        for (Action a : acts) {
+                            if (a.getActionType() == ActionType.ActionType_Special && (a.getAbilityGrpId() == 349 || a.getAbilityGrpId() == 350)) {
+                                roomUnlockOffered = true;
+                                if (a.getManaCostCount() == 0) problem("room rig: unlock offered without a cost");
+                            }
+                        }
+                        Action pick = null;
+                        for (Action a : acts) if (a.getActionType() == ActionType.ActionType_CastRightRoom) pick = a;      // the right half on purpose: the old code could only cast the left
+                        if (pick == null) for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Special && a.getAbilityGrpId() == 349) pick = a;
+                        if (pick != null) {
+                            ClientToGREMessage.Builder rr = msg(ClientMessageType.ClientMessageType_PerformActionResp);
+                            rr.getPerformActionRespBuilder().addActions(pick);
+                            reply(rr);
+                            break;
                         }
                     }
                     acts.removeIf(a -> a.getActionType() == ActionType.ActionType_Pass);
@@ -1180,6 +1210,10 @@ public final class SelfPlay {
             }
             for (int id : gs.getDiffDeletedInstanceIdsList()) objs.remove(id);
             for (AnnotationInfo a : gs.getPersistentAnnotationsList()) persistent.put(a.getId(), a);
+            if ("room".equals(System.getProperty("mtga.rig"))) {
+                for (AnnotationInfo a : gs.getPersistentAnnotationsList()) if (a.getType(0) == AnnotationType.AnnotationType_Designation) System.out.println("[selfplay] room: designation " + a.getDetails(0).getValueInt32List() + " on " + a.getAffectedIdsList() + " (gs " + gs.getGameStateId() + ")");
+                for (int id : gs.getDiffDeletedPersistentAnnotationIdsList()) { AnnotationInfo old = persistent.get(id); if (old != null && old.getType(0) == AnnotationType.AnnotationType_Designation) System.out.println("[selfplay] room: designation removed " + id); }
+            }
             for (int id : gs.getDiffDeletedPersistentAnnotationIdsList()) {
                 if (persistent.remove(id) == null) problem("deleted unknown persistent annotation");
             }
@@ -1377,7 +1411,8 @@ public final class SelfPlay {
                     problem("tap state changed without TappedUntappedPermanent");
                 }
                 if (old == null && !transferred.contains(o.getInstanceId()) && !created.contains(o.getInstanceId())
-                        && !inAnyZone(oldZones, o.getInstanceId()) && o.getType() != GameObjectType.GameObjectType_RevealedCard) {
+                        && !inAnyZone(oldZones, o.getInstanceId()) && o.getType() != GameObjectType.GameObjectType_RevealedCard
+                        && o.getType() != GameObjectType.GameObjectType_RoomLeft && o.getType() != GameObjectType.GameObjectType_RoomRight) {      // a Room's halves are children of the card, not moved objects
                     problem("new object without ZoneTransfer/TokenCreated/AbilityInstanceCreated (zone " + o.getZoneId() + " " + debugName(o.getInstanceId()) + ")");
                 }
             }

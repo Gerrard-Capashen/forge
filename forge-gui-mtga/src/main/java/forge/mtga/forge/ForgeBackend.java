@@ -17,6 +17,7 @@ import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
 import forge.game.Game;
 import forge.game.GameEntity;
+import forge.card.CardStateName;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
 import forge.game.card.CardCollectionView;
@@ -867,6 +868,20 @@ public final class ForgeBackend implements GameBackend {
         return bottom;
     }
 
+    /** Ability ids the client reads as "unlock the left / right door" on a Room's Special action (it picks the half to show from them). */
+    private static final int ROOM_UNLOCK_LEFT = 349, ROOM_UNLOCK_RIGHT = 350;
+
+    /**
+     * The door a Room ability is about: the half a spell in hand casts, or the locked door an unlock ability opens.
+     * Null for anything else (so the Room's own triggers and the like are offered as usual).
+     */
+    private static CardStateName roomDoor(SpellAbility sa) {
+        Card host = sa.getHostCard();
+        if (host == null || !host.isRoom() || !(sa.isSpell() || sa.isUnlock())) return null;
+        CardStateName s = sa.getCardStateName();
+        return s == CardStateName.LeftSplit || s == CardStateName.RightSplit ? s : null;
+    }
+
     /** Rig helper: a fresh copy of a card by name straight into a zone (planeswalkers get the given loyalty), not taken from the deck. */
     private void rigAdd(Player p, String name, ZoneType zone, int loyalty) {
         forge.item.PaperCard pc = forge.StaticData.instance().getCommonCards().getUniqueByName(name);
@@ -988,6 +1003,12 @@ public final class ForgeBackend implements GameBackend {
             for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
             rigAdd(p, "Doomsday", ZoneType.Hand, 0);
             rigAdd(p, "Traumatize", ZoneType.Hand, 0);
+            return;
+        }
+        if ("room".equals(rig)) {      // Plains x6 in play, Surgical Suite (Room) in hand, a Grizzly Bears in the graveyard (the unlock trigger's target)
+            for (int i = 0; i < 6; i++) rigAdd(p, "Plains", ZoneType.Battlefield, 0);
+            rigAdd(p, "Grizzly Bears", ZoneType.Graveyard, 0);
+            rigAdd(p, "Surgical Suite", ZoneType.Hand, 0);
             return;
         }
         if ("evoke".equals(rig)) {      // Island x6 in play; Mulldrifter x2 in hand (evoke one, hard-cast the other: the stack must name the evoke trigger "Evoke")
@@ -1802,11 +1823,16 @@ public final class ForgeBackend implements GameBackend {
             boolean elsewhere = !companion && !host.isInZone(ZoneType.Hand) && !host.isInZone(ZoneType.Battlefield) && !host.getType().isVanguard();      // an avatar's ability is always on offer, never a "castable from there" card
             if (!canAfford && !elsewhere) continue;
             if (!elsewhere && !sa.isLandAbility() && !hasLegalTargets(sa)) continue;      // Dismember with no creature around
-            ActionType at = companion ? ActionType.ActionType_Special : sa.isLandAbility() ? ActionType.ActionType_Play : sa.isAdventure() ? ActionType.ActionType_CastAdventure
+            CardStateName door = roomDoor(sa);      // a Room: the half being cast from hand, or the locked door being unlocked on the battlefield
+            boolean unlockDoor = door != null && sa.isUnlock();
+            ActionType at = companion || unlockDoor ? ActionType.ActionType_Special : sa.isLandAbility() ? ActionType.ActionType_Play : sa.isAdventure() ? ActionType.ActionType_CastAdventure
+                    : door != null && sa.isSpell() ? (door == CardStateName.LeftSplit ? ActionType.ActionType_CastLeftRoom : ActionType.ActionType_CastRightRoom)
                     : sa.isSpell() ? ActionType.ActionType_Cast : ActionType.ActionType_Activate;
             int iid = iid(host);
             int abilityGrp = 0;
-            if (at == ActionType.ActionType_Activate || (at == ActionType.ActionType_Cast && sa.getAlternativeCost() != null)) {
+            if (unlockDoor) {
+                abilityGrp = door == CardStateName.LeftSplit ? ROOM_UNLOCK_LEFT : ROOM_UNLOCK_RIGHT;      // the client builds its "Unlock <room>" confirm from these two ids
+            } else if (at == ActionType.ActionType_Activate || (at == ActionType.ActionType_Cast && sa.getAlternativeCost() != null)) {
                 abilityGrp = abilities.abilityId(sa, grp(host));
             } else if (companion) {
                 abilityGrp = sync.companionAbilityId(host);      // "Companion — {3}: put it into your hand" is a special action on the card

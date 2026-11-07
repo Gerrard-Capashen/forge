@@ -23,6 +23,7 @@ public final class CardDb {
     private final Map<Integer, List<Ability>> abilityCache = new HashMap<>();
     private final Map<String, Integer> promptByText = new HashMap<>();
     private final Map<Integer, String> linkedTokens = new HashMap<>();
+    private final Map<Integer, Integer> secondFace = new HashMap<>();
     private final Map<Integer, Integer> linkedFace = new HashMap<>();      // card grpId -> first linked face (adventure half...)
     private final Map<String, Integer> keywordAbility = new HashMap<>();   // "haste" -> 9 (static keyword abilities)
     private final Map<String, List<int[]>> tokensByName = new HashMap<>();   // name -> {grpId, power, toughness}
@@ -84,7 +85,11 @@ public final class CardDb {
                     titleByGrp.put(grp, rs.getInt(7));
                     abilityIdsByGrp.put(grp, rs.getString(8));
                     String faces = rs.getString(12);
-                    if (faces != null && !faces.isBlank()) linkedFace.put(grp, num(faces.split(",")[0]));
+                    if (faces != null && !faces.isBlank()) {
+                        linkedFace.put(grp, num(faces.split(",")[0]));
+                        String[] fs = faces.split(",");
+                        if (fs.length == 2) secondFace.put(grp, num(fs[1]));
+                    }
                     String linked = rs.getString(9);
                     if (linked != null && !linked.isBlank()) linkedTokens.put(grp, linked);
                     if (rs.getInt(4) == 1) tokensByName.computeIfAbsent(name, k -> new ArrayList<>()).add(new int[] {grp, num(rs.getString(10)), num(rs.getString(11))});
@@ -193,6 +198,9 @@ public final class CardDb {
     }
 
     public String name(int grpId) { return nameByGrp.get(grpId); }
+
+    /** The right half of a Room / split printing ("A // B" links to both halves, left first), 0 if none. */
+    public int secondFace(int grpId) { return Math.max(0, secondFace.getOrDefault(grpId, 0)); }
 
     /** The other face of a two-faced/adventure printing (Bonecrusher Giant -> Stomp), 0 if none. */
     public int linkedFace(int grpId) { return Math.max(0, linkedFace.getOrDefault(grpId, 0)); }
