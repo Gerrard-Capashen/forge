@@ -413,6 +413,7 @@ public final class StateSync {
         final Map<Integer, Integer> newForge = new HashMap<>();  // iid -> forge card id
         final Map<Integer, Integer> newStack = new HashMap<>();  // iid -> stack instance id
         final Set<String> liveStack = new HashSet<>();
+        boolean stackKept;      // the stack as last sent (held combat frame): its ids stay bound
         final Set<Integer> forgeIds = new HashSet<>();
         final Set<Integer> tokens = new HashSet<>();
         TurnInfo turn;
@@ -466,7 +467,7 @@ public final class StateSync {
         for (Map.Entry<String, int[]> e : s.binds.entrySet()) bind(e.getKey(), e.getValue()[0], e.getValue()[1]);
         forgeByIid.putAll(s.newForge);
         stackByIid.putAll(s.newStack);
-        iidByKey.keySet().removeIf(k -> k.startsWith("s") && !s.liveStack.contains(k));
+        if (!s.stackKept) iidByKey.keySet().removeIf(k -> k.startsWith("s") && !s.liveStack.contains(k));
         sentTokens.clear();
         sentTokens.addAll(s.tokens);
     }
@@ -518,6 +519,7 @@ public final class StateSync {
         }
         addZone(s, ZoneType.Battlefield, 0, game.getCardsIn(ZoneType.Battlefield));
         if (!hideStack) addStack(s);
+        else keepSentStack(s);
         addZone(s, ZoneType.Exile, 0, game.getCardsIn(ZoneType.Exile));
         findCompanions();
         List<Card> command = new ArrayList<>();
@@ -581,8 +583,7 @@ public final class StateSync {
         s.zones.put(Z_REVEALED, revealedMine.build());
         // zones the client looks up unconditionally (LocalSideboard in library searches, OpponentRevealed, PhasedOut)
         s.zones.put(Z_REVEALED_OPP, revealedTheirs.build());
-        s.zones.put(Z_PHASED_OUT, ZoneInfo.newBuilder().setZoneId(Z_PHASED_OUT).setType(com.wizards.mtga.gre.ZoneType.ZoneType_PhasedOut)
-                .setVisibility(Visibility.Visibility_Public).build());
+        addPhasedOut(s);
         // a companion is revealed information: both seats see the card in its owner's sideboard zone (the client draws it by that player's hand)
         for (Player p : new Player[] {human, ai}) {
             int zid = seatOf(p) == HUMAN_SEAT ? Z_SIDEBOARD : Z_SIDEBOARD_OPP;
@@ -727,6 +728,44 @@ public final class StateSync {
         if (lastScheme != null && lastScheme.getGame() == game && !now.contains(lastScheme.getId())) command.add(lastScheme);
     }
 
+    /**
+     * The combat damage frame sent ahead of a damage trigger (diffHeldCombatWithoutStack) leaves the new trigger out, but not what was
+     * already on the stack: dropping those objects deleted them while the client's stack zone still listed them, and their ids were
+     * re-created a diff later. The stack goes out exactly as last sent.
+     */
+    private void keepSentStack(Snapshot s) {
+        s.stackKept = true;
+        ZoneInfo z = sentZones.get(Z_STACK);
+        if (z == null) return;
+        s.zones.put(Z_STACK, z);
+        for (int id : z.getObjectInstanceIdsList()) {
+            GameObjectInfo o = sentObjs.get(id);
+            if (o != null) s.objs.put(id, o);
+        }
+        for (Map.Entry<String, AnnotationInfo> e : sentPersistent.entrySet()) {
+            if (e.getKey().startsWith("target:")) s.persistent.put(e.getKey(), e.getValue().toBuilder());
+        }
+    }
+
+    /**
+     * Phased-out permanents. Forge hides them from the battlefield; Arena keeps the same object in the shared PhasedOut zone (the client still
+     * draws it on the battlefield, faded) and marks the change with PhasedOut / PhasedIn. The id stays bound to the battlefield, so phasing
+     * never changes it.
+     */
+    private void addPhasedOut(Snapshot s) {
+        ZoneInfo.Builder z = ZoneInfo.newBuilder().setZoneId(Z_PHASED_OUT).setType(com.wizards.mtga.gre.ZoneType.ZoneType_PhasedOut)
+                .setVisibility(Visibility.Visibility_Public);
+        for (Player p : game.getPlayers()) {
+            for (Card c : p.getZone(ZoneType.Battlefield).getCards(false)) {
+                if (!c.isPhasedOut() || c.isImmutable()) continue;
+                int iid = track(s, c, Z_BF);
+                z.addObjectInstanceIds(iid);
+                s.objs.put(iid, objectInfo(s, c, iid, Z_PHASED_OUT, ZoneType.Battlefield, false));
+            }
+        }
+        s.zones.put(Z_PHASED_OUT, z.build());
+    }
+
     private void addZone(Snapshot s, ZoneType t, int seat, Iterable<Card> cards) {
         int zid = zoneId(t, seat);
         ZoneInfo.Builder z = zoneHeader(t, seat, zid);
@@ -834,11 +873,14 @@ public final class StateSync {
     }
 
     /**
-     * A token on the battlefield, or a dungeon in the command zone (no DungeonStatus room tracker yet), appears out of nowhere: announced as
-     * TokenCreated. So does a spell copy cast straight onto the stack (Isochron Scepter's copy of the imprinted card).
+     * A token on the battlefield, or a dungeon, scheme or emblem in the command zone (no DungeonStatus room tracker yet), appears out of
+     * nowhere: announced as TokenCreated (the client's generic CardCreatedEvent). So does a spell copy put onto the stack (Make Disappear's
+     * casualty copy, Isochron Scepter's copy of the imprinted card): Forge marks those COPIED_SPELL, not token. A token copy made in exile
+     * to be cast from there (Emeritus of Ideation) is created the same way.
      */
     private boolean appearsFromNowhere(Card c, int zid) {
-        return gsId > 0 && (c.isToken() && (zid == Z_BF || zid == Z_STACK) || (c.getType().isDungeon() || c.getType().isScheme()) && zid == Z_COMMAND);
+        return gsId > 0 && ((c.isToken() || c.isCopiedSpell()) && (zid == Z_BF || zid == Z_STACK || zid == Z_EXILE)
+                || (c.getType().isDungeon() || c.getType().isScheme() || c.isEmblem()) && zid == Z_COMMAND);
     }
 
     /** Instance id for c now in zone zid; a zone change allocates a new id (recorded as an IdChange). */
@@ -1445,10 +1487,13 @@ public final class StateSync {
             GameObjectInfo now = s.objs.get(ch.newId());
             // a mass move out of a library or graveyard (a library exiled or milled, a graveyard exiled): the client plays one animation
             // per card, so only the first few of each source/destination pair are announced. The rest change zone without a transfer
-            // (the state is still right; the client just shows them in their new zone).
+            // (the state is still right; the client just shows them in their new zone). Only moves into a graveyard or exile:
+            // cards drawn into a hand (a mulligan redraws 7) or put onto the battlefield / stack each need their ZoneTransfer,
+            // or the client never learns the object and refuses actions on it.
             boolean fromPile = ch.srcZone() == 31 || ch.srcZone() == 41 || ch.srcZone() == 33 || ch.srcZone() == 43;
+            boolean toPile = ch.dstZone() == 29 || ch.dstZone() == 33 || ch.dstZone() == 43;
             long pair = ((long) ch.srcZone() << 32) | (ch.dstZone() & 0xffffffffL);
-            if (fromPile && animated.merge(pair, 1, Integer::sum) > MASS_MOVE_ANIMATED) {
+            if (fromPile && toPile && animated.merge(pair, 1, Integer::sum) > MASS_MOVE_ANIMATED) {
                 categoryHint.remove(ch.card().getId());
                 continue;
             }
@@ -1479,6 +1524,12 @@ public final class StateSync {
                     .addDetails(intDetail("actionType", pa.type().getNumber())).addDetails(intDetail("abilityGrpId", pa.abilityGrp())).build());
         }
         pendingActions.clear();
+        for (GameObjectInfo o : s.objs.values()) {      // phasing keeps the object: only its zone flips between the battlefield and PhasedOut
+            GameObjectInfo old = sentObjs.get(o.getInstanceId());
+            if (old == null) continue;
+            if (old.getZoneId() == Z_BF && o.getZoneId() == Z_PHASED_OUT) out.add(ann(AnnotationType.AnnotationType_PhasedOut, 0, o.getInstanceId()).build());
+            else if (old.getZoneId() == Z_PHASED_OUT && o.getZoneId() == Z_BF) out.add(ann(AnnotationType.AnnotationType_PhasedIn, 0, o.getInstanceId()).build());
+        }
         for (GameObjectInfo o : s.objs.values()) {
             GameObjectInfo old = sentObjs.get(o.getInstanceId());
             if (old == null || o.getZoneId() != Z_BF || old.getZoneId() != Z_BF) continue;

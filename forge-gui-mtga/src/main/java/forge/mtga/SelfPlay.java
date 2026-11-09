@@ -149,6 +149,12 @@ public final class SelfPlay {
                 System.out.println("  sami rig: Wurmcoil Engine was never offered (WRONG)");
                 failed++;
             }
+            if ("phasing".equals(System.getProperty("mtga.rig"))) {      // Kaito phases out (same object -> PhasedOut zone) and back in
+                int out = fc.annCounts.getOrDefault("PhasedOut", 0), in = fc.annCounts.getOrDefault("PhasedIn", 0);
+                boolean ok = out >= 1 && in >= 1;
+                System.out.println("  phasing rig: PhasedOut " + out + ", PhasedIn " + in + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if ("mill".equals(System.getProperty("mtga.rig"))) {      // Traumatize mills half a library: one diff, a capped number of announced transfers
                 boolean ok = fc.massMoves >= 15 && fc.maxMillAnimated <= forge.mtga.forge.StateSync.MASS_MOVE_ANIMATED;
                 System.out.println("  mill rig: largest move " + fc.massMoves + " cards, " + fc.maxMillAnimated + " Mill animations" + (ok ? "" : "  (WRONG)"));
@@ -719,6 +725,9 @@ public final class SelfPlay {
         private static ClientToGREMessage.Builder msg(ClientMessageType t) { return ClientToGREMessage.newBuilder().setType(t); }
 
         private Action preferred(List<Action> acts) {
+            if ("phasing".equals(System.getProperty("mtga.rig"))) {      // rig phasing: cast Kaito Shizuki
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith("Kaito")) return a;
+            }
             if ("mill".equals(System.getProperty("mtga.rig"))) {      // rig mill: cast the mass-move spells (Traumatize first, then Doomsday)
                 for (String n : List.of("Traumatize", "Doomsday")) {
                     for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
@@ -805,7 +814,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -1104,6 +1113,19 @@ public final class SelfPlay {
                     r.getDeclareAttackersRespBuilder().addSelectedAttackers(next);
                     reply(r);
                 }
+                case GREMessageType_SelectReplacementReq -> {      // dredge (AllDredge): click the card to dredge, or decline and draw
+                    requests++;
+                    var sr = g.getSelectReplacementReq();
+                    if (sr.getReplacementsCount() == 0) problem("SelectReplacementReq without replacements");
+                    for (var re : sr.getReplacementsList()) if (!objs.containsKey(re.getObjectInstance())) problem("replacement names an object the client does not have");
+                    if (sr.getReplacementsCount() > 0 && rnd.nextBoolean()) {
+                        ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_SelectReplacementResp);
+                        r.getSelectReplacementRespBuilder().setReplacement(sr.getReplacements(0));
+                        reply(r);
+                    } else if (sr.getIsOptional()) {
+                        reply(msg(ClientMessageType.ClientMessageType_CancelActionReq));
+                    } else problem("mandatory SelectReplacementReq without replacements");
+                }
                 case GREMessageType_DeclareBlockersReq -> {
                     requests++;
                     reply(msg(ClientMessageType.ClientMessageType_SubmitBlockersReq));
@@ -1241,7 +1263,7 @@ public final class SelfPlay {
                     if (seen.put(id, z.getZoneId()) != null) problem("object listed in two zones");
                     GameObjectInfo o = objs.get(id);
                     boolean hiddenZone = z.getType() == ZoneType.ZoneType_Library || (z.getType() == ZoneType.ZoneType_Hand && z.getOwnerSeatId() != 1);
-                    if (o == null && !hiddenZone) problem("public zone " + z.getType() + " lists id without object");
+                    if (o == null && !hiddenZone) problem("public zone " + z.getType() + " lists id without object" + (Boolean.getBoolean("selfplay.verbose") ? " #" + id + " " + debugName(id) : ""));
                     if (o != null && o.getZoneId() != z.getZoneId() && o.getType() != GameObjectType.GameObjectType_RevealedCard) problem("object zoneId differs from listing zone");
                     // player vs player: what the opponent holds must not reach this client (a revealed hand card is allowed, counted)
                     if (o != null && z.getOwnerSeatId() == 2 && o.getGrpId() != 0) {
@@ -1266,8 +1288,11 @@ public final class SelfPlay {
             for (AnnotationInfo p : persistent.values()) {
                 boolean attachment = p.getType(0) == AnnotationType.AnnotationType_Attachment || p.getType(0) == AnnotationType.AnnotationType_Designation
                         || p.getType(0) == AnnotationType.AnnotationType_Counter || p.getType(0) == AnnotationType.AnnotationType_TargetSpec || p.getType(0) == AnnotationType.AnnotationType_DungeonStatus;      // a spell can target a player; a player designation (companion) names the seat; a player's counters (rad, energy, poison) sit on it
+                // a LinkInfo Choose (Color, Parity...) lists the chosen values as affected ids; only AttributedInstance names an object
+                boolean chosenValues = p.getType(0) == AnnotationType.AnnotationType_LinkInfo && p.getDetailsList().stream()
+                        .anyMatch(d -> d.getKey().equals("ChooseLinkType") && d.getValueStringCount() > 0 && !"AttributedInstance".equals(d.getValueString(0)));
                 for (int id : p.getAffectedIdsList()) {
-                    if (!objs.containsKey(id) && !(attachment && id <= 2)) problem("persistent annotation on missing object " + p.getType(0));      // a curse is attached to a player
+                    if (!chosenValues && !objs.containsKey(id) && !(attachment && id <= 2)) problem("persistent annotation on missing object " + p.getType(0));      // a curse is attached to a player
                 }
                 if (p.getType(0) == AnnotationType.AnnotationType_Attachment) {      // equipment / aura -> the permanent it is attached to, both on the battlefield
                     ATTACH_SEEN.incrementAndGet();
@@ -1388,6 +1413,13 @@ public final class SelfPlay {
                     }
                     case AnnotationType_CounterAdded, AnnotationType_CounterRemoved -> {
                         if (a.getAffectedIds(0) > 2 && !oldObjs.containsKey(a.getAffectedIds(0))) problem(t + " on object not in old state");      // a player (seat 1 or 2) has rad/energy/poison counters
+                    }
+                    case AnnotationType_PhasedOut, AnnotationType_PhasedIn -> {      // the same object flips between the battlefield (28) and PhasedOut (23)
+                        for (int id : a.getAffectedIdsList()) {
+                            GameObjectInfo before = oldObjs.get(id), now = objs.get(id);
+                            int want = t == AnnotationType.AnnotationType_PhasedOut ? 23 : 28;
+                            if (before == null || now == null || now.getZoneId() != want) problem(t + " on object not moved to zone " + want);
+                        }
                     }
                     case AnnotationType_ResolutionStart, AnnotationType_ResolutionComplete -> {
                         int id = a.getAffectorId();

@@ -1005,6 +1005,11 @@ public final class ForgeBackend implements GameBackend {
             rigAdd(p, "Traumatize", ZoneType.Hand, 0);
             return;
         }
+        if ("phasing".equals(rig)) {      // Island x2 + Swamp x2 in play, Kaito Shizuki in hand: cast, it phases out at the end step and back in at the next untap
+            for (int i = 0; i < 2; i++) { rigAdd(p, "Island", ZoneType.Battlefield, 0); rigAdd(p, "Swamp", ZoneType.Battlefield, 0); }
+            rigAdd(p, "Kaito Shizuki", ZoneType.Hand, 0);
+            return;
+        }
         if ("arrow".equals(rig)) {      // 3 Mountain + 3 Island and Prodigal Sorcerer (tap: 1 damage to any target) in play; Lightning Bolt, Shock, Sleep of the Dead
                                         // in hand; the AI has two Grizzly Bears and a Hill Giant: every cast or activation shows an arrow to its target
             for (int i = 0; i < 3; i++) { rigAdd(p, "Mountain", ZoneType.Battlefield, 0); rigAdd(p, "Island", ZoneType.Battlefield, 0); }
