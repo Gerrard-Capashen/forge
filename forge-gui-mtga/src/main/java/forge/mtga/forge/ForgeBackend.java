@@ -1013,6 +1013,11 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Grizzly Bears", "Grizzly Bears", "Hill Giant")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
             return;
         }
+        if ("gollum".equals(rig)) {      // Swamp x3 in play, Gollum, Riddle Master in hand: casting it must ask odd or even (client parity buttons)
+            for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
+            rigAdd(p, "Gollum, Riddle Master", ZoneType.Hand, 0);
+            return;
+        }
         if ("ghast".equals(rig)) {      // 2 Shambling Ghast (dies: choose one, -1/-1 on an opponent's creature or a Treasure) + Carrion Feeder and Bloodthrone Vampire
                                         // (sacrifice a creature, free / {B}) in play; the AI has two Grizzly Bears, a Hill Giant and a Mortician Beetle to target
             for (int i = 0; i < 4; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
@@ -1657,6 +1662,29 @@ public final class ForgeBackend implements GameBackend {
             }
         }
         return null;
+    }
+
+    /**
+     * "Choose odd or even" (Gollum, Riddle Master; Dwarven Hammer-style parity cards): the client's parity workflow, a SelectNReq over the
+     * static Parities list with NonRepeatable validation, answered with the Parity value (Even 0, Odd 1). Returns true for odd; null if cancelled.
+     */
+    Boolean askParity(Card source) {
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(1).setMaxSel(1)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Static)
+                .setStaticList(com.wizards.mtga.gre.StaticList.StaticList_Parities)
+                .setValidationType(com.wizards.mtga.gre.SelectionValidationType.SelectionValidationType_NonRepeatable)
+                .addIds(0).addIds(1);
+        if (source != null) sn.setSourceId(iid(source));
+        sn.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);
+        req.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);
+        System.out.println("[mtga] asking odd or even for " + source);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp || r.getSelectNResp().getIdsCount() == 0) return null;
+        System.out.println("[mtga] client chose parity " + r.getSelectNResp().getIdsList());
+        return r.getSelectNResp().getIds(0) == 1;
     }
 
     /** GRE CardColor value of a Forge color mask (Colorless 0, White 1, Blue 2, Black 3, Red 4, Green 5). */
@@ -3431,6 +3459,15 @@ public final class ForgeBackend implements GameBackend {
             if (!live() || !(basic || "Creature".equalsIgnoreCase(kindOfType)) || validTypes.size() < 2) return super.chooseSomeType(kindOfType, sa, validTypes, isOptional);
             String type = askSubType(sa == null ? null : sa.getHostCard(), validTypes, isOptional, basic ? "basic land" : "creature");
             return type == null ? super.chooseSomeType(kindOfType, sa, validTypes, isOptional) : type;
+        }
+
+        @Override
+        public boolean chooseBinary(SpellAbility sa, String question, forge.game.player.PlayerController.BinaryChoiceType kindOfChoice, Boolean defaultChoice) {
+            if (live() && kindOfChoice == forge.game.player.PlayerController.BinaryChoiceType.OddsOrEvens) {
+                Boolean odd = askParity(sa == null ? null : sa.getHostCard());
+                if (odd != null) return odd;
+            }
+            return super.chooseBinary(sa, question, kindOfChoice, defaultChoice);
         }
 
         @Override

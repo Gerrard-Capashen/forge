@@ -993,6 +993,17 @@ public final class StateSync {
             }
             AnnotationInfo.Builder dev = devotionWord(c, iid);
             if (dev != null) s.persistent.put("devotion:" + iid, dev);
+            if (c.hasChosenEvenOdd()) {      // "choose odd or even" (Gollum, Riddle Master): the client prints the choice in blue in the text box
+                s.persistent.put("link-parity:" + iid, linkChoose(iid, "Parity", c.getChosenEvenOdd() == forge.game.EvenOdd.Odd ? 1 : 0));
+            }
+            if (c.hasChosenColor()) {      // chosen color(s): same blue text (Cavern-style "As it enters, choose a color")
+                for (String name : c.getChosenColors()) {
+                    byte mask = forge.card.MagicColor.fromName(name);
+                    for (int i = 0; i < forge.card.MagicColor.WUBRG.length; i++) {
+                        if (forge.card.MagicColor.WUBRG[i] == mask) s.persistent.put("link-color:" + iid + ":" + (i + 1), linkChoose(iid, "Color", i + 1));
+                    }
+                }
+            }
             if (c.isRoom()) {       // which doors are open: the client marks the locked half of the card from these
                 int mask = 0;
                 for (CardStateName door : c.getUnlockedRooms()) mask |= door == CardStateName.LeftSplit ? 1 : door == CardStateName.RightSplit ? 2 : 0;
@@ -1550,6 +1561,15 @@ public final class StateSync {
 
     private AnnotationInfo.Builder ann(AnnotationType type, int affector, int affected) {
         return AnnotationInfo.newBuilder().setId(++annId).setAffectorId(affector).addAffectedIds(affected).addType(type);
+    }
+
+    /** A LinkInfo "Choose" annotation on a card: the client turns it into blue text in the card's text box (ChooseLinkType Parity / Color). */
+    private static AnnotationInfo.Builder linkChoose(int iid, String kind, int value) {
+        return AnnotationInfo.newBuilder().setAffectorId(iid).addAffectedIds(value)
+                .addType(AnnotationType.AnnotationType_LinkInfo)
+                .addDetails(intDetail("LinkType", com.wizards.mtga.gre.LinkType.LinkType_Choose_VALUE))
+                .addDetails(intDetail("sourceAbilityGRPID", 0))
+                .addDetails(KeyValuePairInfo.newBuilder().setKey("ChooseLinkType").setType(KeyValuePairValueType.KeyValuePairValueType_string).addValueString(kind));
     }
 
     private static KeyValuePairInfo.Builder intDetail(String key, int v) {
