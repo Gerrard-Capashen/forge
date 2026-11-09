@@ -206,6 +206,12 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("ghast".equals(rig)) {      // test rig: modal dies trigger (Shambling Ghast) with a sacrifice outlet vs a passive opponent
+            green.clear();
+            green.put("Swamp", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("mill".equals(rig)) {      // test rig: Traumatize (mill half a library) vs a passive opponent; ForgeBackend.rigHand sets the board
             green.clear();
             green.put("Island", 20);

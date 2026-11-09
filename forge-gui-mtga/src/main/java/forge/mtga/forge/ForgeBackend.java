@@ -1013,6 +1013,13 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Grizzly Bears", "Grizzly Bears", "Hill Giant")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
             return;
         }
+        if ("ghast".equals(rig)) {      // 2 Shambling Ghast (dies: choose one, -1/-1 on an opponent's creature or a Treasure) + Carrion Feeder and Bloodthrone Vampire
+                                        // (sacrifice a creature, free / {B}) in play; the AI has two Grizzly Bears, a Hill Giant and a Mortician Beetle to target
+            for (int i = 0; i < 4; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
+            for (String name : List.of("Shambling Ghast", "Shambling Ghast", "Carrion Feeder", "Bloodthrone Vampire")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Grizzly Bears", "Grizzly Bears", "Hill Giant", "Mortician Beetle")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
+            return;
+        }
         if ("room".equals(rig)) {      // Plains x6 in play, Surgical Suite (Room) in hand, a Grizzly Bears in the graveyard (the unlock trigger's target)
             for (int i = 0; i < 6; i++) rigAdd(p, "Plains", ZoneType.Battlefield, 0);
             rigAdd(p, "Grizzly Bears", ZoneType.Graveyard, 0);
@@ -3183,9 +3190,19 @@ public final class ForgeBackend implements GameBackend {
         @Override
         public void orderAndPlaySimultaneousSa(List<SpellAbility> activePlayerSAs) {
             for (SpellAbility sa : activePlayerSAs) {
+                // Modal triggers (Shambling Ghast): Forge's AI path picks the modes but never the targets of the chosen ones,
+                // so choose the modes here and let the player pick the targets below.
+                if (live() && sa.isTrigger() && !sa.isCopied() && sa.getApi() == forge.game.ability.ApiType.Charm && !sa.hasParam("Random")) {
+                    if (!forge.game.ability.effects.CharmEffect.makeChoices(sa)) continue;      // no mode chosen: the trigger is removed
+                }
                 boolean targeted = false;
                 for (SpellAbility cur = sa; cur != null; cur = cur.getSubAbility()) targeted |= cur.usesTargeting();
-                if (!live() || !sa.isTrigger() || sa.isCopied() || !targeted || sa.getApi() == forge.game.ability.ApiType.Charm) {
+                if (!live() || !sa.isTrigger() || sa.isCopied() || !targeted || (sa.getApi() == forge.game.ability.ApiType.Charm && sa.hasParam("Random"))) {
+                    if (sa.getApi() == forge.game.ability.ApiType.Charm && !sa.hasParam("Random") && live() && sa.isTrigger() && !sa.isCopied()) {
+                        // modes already chosen above and none needs a target
+                        forge.ai.ComputerUtil.playStack(sa, player, game);
+                        continue;
+                    }
                     super.orderAndPlaySimultaneousSa(List.of(sa));
                     continue;
                 }
@@ -3196,7 +3213,7 @@ public final class ForgeBackend implements GameBackend {
                     ok &= askTargets(cur);
                 }
                 if (ok && sa.isTargetNumberValid()) forge.ai.ComputerUtil.playStack(sa, player, game);
-                else super.orderAndPlaySimultaneousSa(List.of(sa));
+                else if (sa.getApi() != forge.game.ability.ApiType.Charm) super.orderAndPlaySimultaneousSa(List.of(sa));      // a modal trigger whose targeting failed is dropped (it must not ask for its modes again)
             }
         }
 
