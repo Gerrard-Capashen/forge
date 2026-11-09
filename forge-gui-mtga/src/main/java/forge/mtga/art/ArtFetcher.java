@@ -4,7 +4,6 @@ import forge.item.PaperCard;
 import forge.localinstance.properties.ForgeConstants;
 import forge.localinstance.properties.ForgePreferences.FPref;
 import forge.model.FModel;
-import forge.util.BuildInfo;
 import forge.util.ImageFetcher;
 import forge.util.ScryfallRateLimiter;
 
@@ -102,7 +101,7 @@ final class ArtFetcher extends ImageFetcher {
             ScryfallRateLimiter.acquire(url);
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setRequestProperty("Accept", "*/*");
-            c.setRequestProperty("User-Agent", BuildInfo.getUserAgent());
+            c.setRequestProperty("User-Agent", forge.gui.GuiBase.getInterface().getUserAgent());
             c.setConnectTimeout(10_000);
             c.setReadTimeout(30_000);
             int code = c.getResponseCode();

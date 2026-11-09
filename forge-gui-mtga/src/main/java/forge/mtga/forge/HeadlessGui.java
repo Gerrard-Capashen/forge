@@ -30,6 +30,7 @@ public final class HeadlessGui implements IGuiBase {
     @Override public boolean isRunningOnDesktop() { return true; }
     @Override public boolean isLibgdxPort() { return false; }
     @Override public String getCurrentVersion() { return "mtga-bridge"; }
+    @Override public String getUserAgent() { return "Forge/" + forge.util.BuildInfo.getVersionString() + " (mtga-forge)"; }
     @Override public void invokeInEdtNow(Runnable runnable) { runnable.run(); }
     @Override public void invokeInEdtLater(Runnable runnable) { runnable.run(); }
     @Override public void invokeInEdtAndWait(Runnable proc) { proc.run(); }
