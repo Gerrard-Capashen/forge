@@ -767,9 +767,10 @@ public final class StateSync {
                 int iid = track(s, host, Z_STACK);
                 z.addObjectInstanceIds(iid);
                 s.objs.put(iid, objectInfo(s, host, iid, Z_STACK, ZoneType.Stack, false));
+                addTargetSpecs(s, iid, si);
                 continue;
             }
-            if (isRuleTrigger(host)) continue;       // the client has no ability for it: its effects show as life, counters and mills
+            if (isRuleTrigger(host)) continue;      // the client has no ability for it: its effects show as life, counters and mills
             String key = "s" + si.getId();
             s.liveStack.add(key);
             Integer iid = iidByKey.get(key);
@@ -783,6 +784,7 @@ public final class StateSync {
             }
             z.addObjectInstanceIds(iid);
             s.objs.put(iid, abilityInfo(si, iid, parent));
+            addTargetSpecs(s, iid, si);
         }
         for (Card c : game.getCardsIn(ZoneType.Stack)) {      // spell copies etc. not matched to a stack item
             if (!stackCards.contains(c.getId())) continue;
@@ -791,6 +793,34 @@ public final class StateSync {
             s.objs.put(iid, objectInfo(s, c, iid, Z_STACK, ZoneType.Stack, false));
         }
         s.zones.put(Z_STACK, z.build());
+    }
+
+    /**
+     * Persistent TargetSpec annotation per targeting part of a stack object (affector = the spell/ability, affected = what it
+     * targets, details index (1-based) and abilityGrpId): the client draws the target arrow and the "targets X" text from it.
+     */
+    private void addTargetSpecs(Snapshot s, int stackIid, SpellAbilityStackInstance si) {
+        int index = 0;
+        for (SpellAbility sa = si.getSpellAbility(); sa != null; sa = sa.getSubAbility()) {
+            if (!sa.usesTargeting() || sa.getTargets() == null) continue;
+            index++;
+            List<Integer> ids = new ArrayList<>();
+            for (Card c : sa.getTargets().getTargetCards()) {
+                int id = idIn(s, c);
+                if (id != 0 && s.objs.containsKey(id)) ids.add(id);
+            }
+            for (Player p : sa.getTargets().getTargetPlayers()) ids.add(seatOf(p));
+            for (SpellAbility t : sa.getTargets().getTargetSpells()) {
+                Card tc = t.getHostCard();
+                int id = tc == null ? 0 : idIn(s, tc);
+                if (id != 0 && s.objs.containsKey(id)) ids.add(id);
+            }
+            if (ids.isEmpty()) continue;
+            AnnotationInfo.Builder a = AnnotationInfo.newBuilder().setAffectorId(stackIid).addAllAffectedIds(ids)
+                    .addType(AnnotationType.AnnotationType_TargetSpec)
+                    .addDetails(intDetail("index", index)).addDetails(intDetail("abilityGrpId", abilityGrp.applyAsInt(sa)));
+            s.persistent.put("target:" + stackIid + ":" + index, a);
+        }
     }
 
     /**

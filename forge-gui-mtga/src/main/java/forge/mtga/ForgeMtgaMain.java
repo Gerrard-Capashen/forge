@@ -194,6 +194,12 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("arrow".equals(rig)) {      // test rig: targeted spells and abilities on the stack must show their target arrow
+            green.clear();
+            green.put("Mountain", 20);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("room".equals(rig)) {      // test rig: a Room in hand (choose the half, then unlock the other door) vs a passive opponent
             green.clear();
             green.put("Plains", 40);

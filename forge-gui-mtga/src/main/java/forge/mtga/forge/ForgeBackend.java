@@ -1005,6 +1005,14 @@ public final class ForgeBackend implements GameBackend {
             rigAdd(p, "Traumatize", ZoneType.Hand, 0);
             return;
         }
+        if ("arrow".equals(rig)) {      // 3 Mountain + 3 Island and Prodigal Sorcerer (tap: 1 damage to any target) in play; Lightning Bolt, Shock, Sleep of the Dead
+                                        // in hand; the AI has two Grizzly Bears and a Hill Giant: every cast or activation shows an arrow to its target
+            for (int i = 0; i < 3; i++) { rigAdd(p, "Mountain", ZoneType.Battlefield, 0); rigAdd(p, "Island", ZoneType.Battlefield, 0); }
+            rigAdd(p, "Prodigal Sorcerer", ZoneType.Battlefield, 0);
+            for (String name : List.of("Lightning Bolt", "Shock", "Sleep of the Dead")) rigAdd(p, name, ZoneType.Hand, 0);
+            for (String name : List.of("Grizzly Bears", "Grizzly Bears", "Hill Giant")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
+            return;
+        }
         if ("room".equals(rig)) {      // Plains x6 in play, Surgical Suite (Room) in hand, a Grizzly Bears in the graveyard (the unlock trigger's target)
             for (int i = 0; i < 6; i++) rigAdd(p, "Plains", ZoneType.Battlefield, 0);
             rigAdd(p, "Grizzly Bears", ZoneType.Graveyard, 0);

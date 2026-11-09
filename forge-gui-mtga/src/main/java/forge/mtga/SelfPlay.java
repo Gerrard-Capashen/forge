@@ -805,7 +805,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -876,8 +876,7 @@ public final class SelfPlay {
                     requests++;
                     TargetSelection ts = g.getSelectTargetsReq().getTargets(0);
                     if (g.getSelectTargetsReq().getSourceId() != 0 && !objs.containsKey(g.getSelectTargetsReq().getSourceId())) problem("target prompt source the client has no view for");
-                    if (!g.hasPrompt()) problem("SelectTargetsReq without prompt");
-                    for (Target t : ts.getTargetsList()) {
+                    if (!g.hasPrompt()) problem("SelectTargetsReq without prompt");                    for (Target t : ts.getTargetsList()) {
                         int id = t.getTargetInstanceId();
                         if (id > 2 && !objs.containsKey(id)) problem("target id not in state");
                     }
@@ -1266,7 +1265,7 @@ public final class SelfPlay {
             }
             for (AnnotationInfo p : persistent.values()) {
                 boolean attachment = p.getType(0) == AnnotationType.AnnotationType_Attachment || p.getType(0) == AnnotationType.AnnotationType_Designation
-                        || p.getType(0) == AnnotationType.AnnotationType_Counter;      // a player designation (companion) names the seat; a player's counters (rad, energy, poison) sit on it
+                        || p.getType(0) == AnnotationType.AnnotationType_Counter || p.getType(0) == AnnotationType.AnnotationType_TargetSpec;      // a spell can target a player; a player designation (companion) names the seat; a player's counters (rad, energy, poison) sit on it
                 for (int id : p.getAffectedIdsList()) {
                     if (!objs.containsKey(id) && !(attachment && id <= 2)) problem("persistent annotation on missing object " + p.getType(0));      // a curse is attached to a player
                 }
@@ -1279,6 +1278,13 @@ public final class SelfPlay {
                         if (z == null || z.getType() != ZoneType.ZoneType_Battlefield) problem("Attachment on an object not on the battlefield: "
                                 + id + " " + debugName(id));
                     }
+                }
+                if (p.getType(0) == AnnotationType.AnnotationType_TargetSpec) {      // the client's TargetSpec parser needs both details, on a stack object
+                    for (String k : List.of("index", "abilityGrpId")) {
+                        if (p.getDetailsList().stream().noneMatch(d -> d.getKey().equals(k))) problem("TargetSpec without detail " + k);
+                    }
+                    GameObjectInfo o = objs.get(p.getAffectorId());
+                    if (o == null || o.getZoneId() != 27) problem("TargetSpec affector is not on the stack: " + p.getAffectorId());
                 }
                 if (p.getType(0) == AnnotationType.AnnotationType_DisplayCardUnderCard) {      // cards exiled under a permanent
                     UNDER_SEEN.incrementAndGet();
