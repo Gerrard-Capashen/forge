@@ -249,6 +249,23 @@ public final class CardDb {
         return s == null ? "" : s.toLowerCase().replaceAll("<[^>]+>", "").replaceAll("[^a-z0-9{}+/-]+", " ").trim();
     }
 
+    /**
+     * Client ability id of a dungeon's room, 0 if unknown. Room abilities read "Forge — Put two +1/+1 counters...": the room name is the
+     * text before the dash (Forge calls the Undercity room "Archive", the client "Archives").
+     */
+    public int roomAbility(int dungeonGrp, String room) {
+        String name = roomKey(room);
+        if (name.isEmpty()) return 0;
+        for (Ability a : abilities(dungeonGrp)) {
+            String[] parts = a.text() == null ? new String[0] : a.text().split("\\s[^\\w\\s]\\s", 2);
+            String text = parts.length == 2 ? roomKey(parts[0]) : "";
+            if (text.equals(name) || text.equals(name + "s")) return a.id();
+        }
+        return 0;
+    }
+
+    private static String roomKey(String s) { return s == null ? "" : s.replace('’', '\'').trim().toLowerCase(java.util.Locale.ROOT); }
+
     /** The printed abilities of a card (AbilityIds order), with their text. */
     public synchronized List<Ability> abilities(int grpId) {
         List<Ability> cached = abilityCache.get(grpId);

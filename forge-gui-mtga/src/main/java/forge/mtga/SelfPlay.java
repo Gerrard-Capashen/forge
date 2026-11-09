@@ -1265,7 +1265,7 @@ public final class SelfPlay {
             }
             for (AnnotationInfo p : persistent.values()) {
                 boolean attachment = p.getType(0) == AnnotationType.AnnotationType_Attachment || p.getType(0) == AnnotationType.AnnotationType_Designation
-                        || p.getType(0) == AnnotationType.AnnotationType_Counter || p.getType(0) == AnnotationType.AnnotationType_TargetSpec;      // a spell can target a player; a player designation (companion) names the seat; a player's counters (rad, energy, poison) sit on it
+                        || p.getType(0) == AnnotationType.AnnotationType_Counter || p.getType(0) == AnnotationType.AnnotationType_TargetSpec || p.getType(0) == AnnotationType.AnnotationType_DungeonStatus;      // a spell can target a player; a player designation (companion) names the seat; a player's counters (rad, energy, poison) sit on it
                 for (int id : p.getAffectedIdsList()) {
                     if (!objs.containsKey(id) && !(attachment && id <= 2)) problem("persistent annotation on missing object " + p.getType(0));      // a curse is attached to a player
                 }

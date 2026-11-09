@@ -454,10 +454,31 @@ public final class CardDbBuilder {
             for (CardRules r : pieces) {
                 if (existingNames.contains(r.getName())) continue;
                 PaperCard pc = new PaperCard(r, "CLB", forge.card.CardRarity.Special);
-                insert(face(pc, r.getMainPart(), r.getName(), nextGrp++, nextArt++, false));
+                Map<String, Object> v = face(pc, r.getMainPart(), r.getName(), nextGrp++, nextArt++, false);
+                if (r.getType().isDungeon()) dungeonFrame(v, r.getMainPart());
+                insert(v);
                 n++;
             }
             return n;
+        }
+
+        /**
+         * Experimental: draw a generated dungeon (Undercity) with the AFR dungeon frame, as the client does for its own three. That frame's
+         * textbox (CDCPart_TextBox_Dungeon) fills its room slots from the card's abilities in order, splitting each at the em dash into
+         * room name and effect, so only the room abilities are kept: lines without a dash ("You can't enter this dungeon unless...") are
+         * dropped. Which room layout the client picks for an unknown dungeon is up to its asset lookup, not visible in code.
+         */
+        private static void dungeonFrame(Map<String, Object> v, ICardFace face) {
+            v.put("RawFrameDetail", "Dungeon");
+            v.put("AdditionalFrameDetails", "dungeon");
+            String oracle = face.getOracleText() == null ? "" : face.getOracleText().replace("\\n", "\n");
+            List<String> lines = new ArrayList<>();
+            for (String line : oracle.split("\n")) if (!line.isBlank()) lines.add(line.trim());
+            String[] refs = ((String) v.get("AbilityIds")).split(",");
+            if (refs.length != lines.size()) return;        // one ref per oracle line, or the order is unknown: keep them all
+            List<String> rooms = new ArrayList<>();
+            for (int i = 0; i < refs.length; i++) if (lines.get(i).contains("—")) rooms.add(refs[i]);
+            v.put("AbilityIds", String.join(",", rooms));
         }
 
         void add(PaperCard pc) throws Exception {

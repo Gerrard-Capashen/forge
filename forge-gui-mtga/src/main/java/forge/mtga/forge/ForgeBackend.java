@@ -1020,6 +1020,13 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Grizzly Bears", "Grizzly Bears", "Hill Giant", "Mortician Beetle")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
             return;
         }
+        if ("venture".equals(rig)) {      // Forest x8 + Nadaar, Selfless Paladin (venture when it attacks) in play, Avenging Hunter (take the initiative)
+                                          // the first venture enters Undercity's Secret Entrance, the next one (Nadaar attacking, or the next upkeep) must ask which room: Forge or Lost Well
+            for (int i = 0; i < 8; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);
+            rigAdd(p, "Nadaar, Selfless Paladin", ZoneType.Battlefield, 0);
+            rigAdd(p, "Avenging Hunter", ZoneType.Hand, 0);
+            return;
+        }
         if ("room".equals(rig)) {      // Plains x6 in play, Surgical Suite (Room) in hand, a Grizzly Bears in the graveyard (the unlock trigger's target)
             for (int i = 0; i < 6; i++) rigAdd(p, "Plains", ZoneType.Battlefield, 0);
             rigAdd(p, "Grizzly Bears", ZoneType.Graveyard, 0);
@@ -1505,6 +1512,72 @@ public final class ForgeBackend implements GameBackend {
             if (sub != null) out.add(sub);
         }
         return out;
+    }
+
+    /**
+     * "Venture into the dungeon" outside a dungeon: which one to enter. A SelectNReq over the dungeons' card grpIds opens the client's
+     * dungeon browser (DungeonSelectWorkflow: the dungeon cards, flipped to their map on hover, Done). Null if a dungeon is not in the
+     * client's card database, or the client cancelled (the AI's pick is used then).
+     */
+    forge.card.ICardFace askDungeon(SpellAbility sa, List<forge.card.ICardFace> faces) {
+        Map<Integer, forge.card.ICardFace> byGrp = new LinkedHashMap<>();
+        for (forge.card.ICardFace f : faces) {
+            int grp = db.grpId(f.getName());
+            if (grp == 0) return null;
+            byGrp.put(grp, f);
+        }
+        Card host = sa.getHostCard();
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(1).setMaxSel(1)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Dynamic)
+                .setIdType(com.wizards.mtga.gre.IdType.IdType_CardGrpId).addAllIds(byGrp.keySet());
+        if (host != null) sn.setSourceId(iid(host));
+        sn.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);
+        req.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);
+        System.out.println("[mtga] asking dungeon " + byGrp.keySet() + " for " + host);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp) return null;
+        for (int id : r.getSelectNResp().getIdsList()) {
+            forge.card.ICardFace f = byGrp.get(id);
+            if (f != null) return f;
+        }
+        return null;
+    }
+
+    /**
+     * "Venture into the dungeon": which room to enter next. The client lists the dungeon's room abilities (a SelectNReq over their ability
+     * grpIds, answered by the one clicked); each room's ability text starts with its name. Null if the dungeon or a room is not in the
+     * client's card database, or the client cancelled (the AI's pick is used then).
+     */
+    SpellAbility askRoom(SpellAbility sa, List<SpellAbility> rooms) {
+        Card dungeon = rooms.get(0).getHostCard();
+        int dungeonGrp = db.grpId(dungeon.getName());
+        if (dungeonGrp == 0) return null;
+        Map<Integer, SpellAbility> byAbility = new LinkedHashMap<>();
+        for (SpellAbility room : rooms) {
+            int id = db.roomAbility(dungeonGrp, room.getParam("RoomName"));
+            if (id != 0) byAbility.put(id, room);
+        }
+        if (byAbility.size() != rooms.size()) return null;
+        Card host = sa.getHostCard();
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(1).setMaxSel(1)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Dynamic)
+                .setIdType(com.wizards.mtga.gre.IdType.IdType_AbilityGrpId).setSourceId(iid(host)).addAllIds(byAbility.keySet());
+        sn.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);
+        req.getPromptBuilder().setPromptId(PROMPT_CHOOSE_OPTIONS);
+        System.out.println("[mtga] asking dungeon room " + byAbility.keySet() + " for " + host);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp) return null;
+        for (int id : r.getSelectNResp().getIdsList()) {
+            SpellAbility room = byAbility.get(id);
+            if (room != null) return room;
+        }
+        return null;
     }
 
     /** The client's "Choose options." prompt (Prompts table). */
@@ -3332,6 +3405,24 @@ public final class ForgeBackend implements GameBackend {
             if (!live() || allowRepeat) return super.chooseModeForAbility(sa, possible, min, num, allowRepeat);
             List<AbilitySub> chosen = askModes(sa, possible, min, num);
             return chosen == null ? super.chooseModeForAbility(sa, possible, min, num, allowRepeat) : chosen;
+        }
+
+        @Override
+        public SpellAbility chooseSingleSpellForEffect(List<SpellAbility> spells, SpellAbility sa, String title, Map<String, Object> params) {
+            if (live() && sa != null && sa.getApi() == forge.game.ability.ApiType.Venture && spells.size() > 1) {
+                SpellAbility room = askRoom(sa, spells);
+                if (room != null) return room;
+            }
+            return super.chooseSingleSpellForEffect(spells, sa, title, params);
+        }
+
+        @Override
+        public forge.card.ICardFace chooseSingleCardFace(SpellAbility sa, List<forge.card.ICardFace> faces, String message) {
+            if (live() && sa != null && sa.getApi() == forge.game.ability.ApiType.Venture && faces.size() > 1) {
+                forge.card.ICardFace dungeon = askDungeon(sa, faces);
+                if (dungeon != null) return dungeon;
+            }
+            return super.chooseSingleCardFace(sa, faces, message);
         }
 
         @Override

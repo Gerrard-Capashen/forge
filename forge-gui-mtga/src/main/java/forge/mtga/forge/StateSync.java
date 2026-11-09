@@ -536,6 +536,16 @@ public final class StateSync {
                         .addDetails(intDetail("DesignationType", com.wizards.mtga.gre.Designation.Designation_Commander_VALUE)));
             }
         }
+        // the dungeon a player is in: the client's room picker reads the dungeon, its instance and the current room from this annotation
+        for (Card c : command) {
+            if (!c.getType().isDungeon()) continue;
+            int cid = idIn(s, c), grp = grpIdOf(c), room = db.roomAbility(grp, c.getCurrentRoom());
+            if (!s.objs.containsKey(cid) || grp == 0) continue;
+            int seat = seatOf(c.getController());
+            s.persistent.put("dungeon:" + seat, AnnotationInfo.newBuilder().setAffectorId(seat).addAffectedIds(seat)
+                    .addType(AnnotationType.AnnotationType_DungeonStatus)
+                    .addDetails(intDetail("CurrentDungeon", grp)).addDetails(intDetail("CurrentDungeonZCID", cid)).addDetails(intDetail("CurrentRoom", room)));
+        }
         addExiledUnder(s);
         addAttachments(s);
         for (Map.Entry<String, AnnotationInfo.Builder> e : extraPersistent.entrySet()) s.persistent.put(e.getKey(), e.getValue());
