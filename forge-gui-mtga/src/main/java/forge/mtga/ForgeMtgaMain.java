@@ -212,6 +212,12 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("addcost".equals(rig)) {      // test rig: optional and alternative additional costs (Bitter Triumph, Iridescent Vinelasher's offspring) vs a passive opponent
+            green.clear();
+            green.put("Swamp", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("gollum".equals(rig)) {      // test rig: Gollum, Riddle Master (choose odd or even as it enters) vs a passive opponent
             green.clear();
             green.put("Swamp", 40);

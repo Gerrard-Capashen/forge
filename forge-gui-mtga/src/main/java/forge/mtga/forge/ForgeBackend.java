@@ -1018,6 +1018,12 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Grizzly Bears", "Grizzly Bears", "Hill Giant")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
             return;
         }
+        if ("addcost".equals(rig)) {      // 3 Swamps in play; Bitter Triumph (discard a card or pay 3 life) and Iridescent Vinelasher (offspring {2}) in hand with two Grizzly Bears to discard; the AI has a Grizzly Bears
+            for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
+            for (String name : List.of("Bitter Triumph", "Iridescent Vinelasher", "Grizzly Bears", "Grizzly Bears")) rigAdd(p, name, ZoneType.Hand, 0);
+            rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
+            return;
+        }
         if ("gollum".equals(rig)) {      // Swamp x3 in play, Gollum, Riddle Master in hand: casting it must ask odd or even (client parity buttons)
             for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
             rigAdd(p, "Gollum, Riddle Master", ZoneType.Hand, 0);
@@ -2387,6 +2393,114 @@ public final class ForgeBackend implements GameBackend {
         return chosen;
     }
 
+    // client prompt ids for the choices of an "additional cost: A or B" spell (Bitter Triumph): "Discard a card" and "Pay N life."
+    private static final int PROMPT_COST_DISCARD = 1024;
+    private static final Map<Integer, Integer> PROMPT_COST_LIFE = Map.of(1, 4215, 2, 4271, 3, 4275, 4, 4249, 5, 4214, 6, 4327, 7, 4326, 10, 7022, 50, 4244);
+
+    /**
+     * "As an additional cost to cast this spell, A or B" (AlternateAdditionalCost, Bitter Triumph): Forge's own cast flow makes the
+     * player pick one of the spell's variants before anything else; here the client's ChooseOrCost question does. Returns the variant
+     * to cast, or null if none can be paid or the player cancelled.
+     */
+    SpellAbility askAlternativeAdditionalCost(SpellAbility sa) {
+        Card host = sa.getHostCard();
+        List<SpellAbility> alts = forge.game.GameActionUtil.getAdditionalCostSpell(sa);
+        if (alts.size() == 1 && alts.get(0) == sa) return sa;      // no such keyword
+        if (alts.size() <= 1) return alts.isEmpty() ? null : alts.get(0);
+        // the cost each variant added, in the same order as getAdditionalCostSpell builds them
+        List<forge.game.cost.Cost> costs = new ArrayList<>();
+        for (forge.game.keyword.KeywordInterface ki : host.getKeywords()) {
+            String k = ki.getOriginal();
+            if (!k.startsWith("AlternateAdditionalCost")) continue;
+            for (String s : k.split(":", 2)[1].split(":")) {
+                SpellAbility probe = sa.copy();
+                probe.setBasicSpell(false);
+                probe.getPayCosts().add(new forge.game.cost.Cost(s, false));
+                if (probe.canPlay()) costs.add(new forge.game.cost.Cost(s, false));
+            }
+        }
+        if (costs.size() != alts.size()) return alts.get(0);
+        List<Integer> prompts = new ArrayList<>();
+        for (forge.game.cost.Cost c : costs) {
+            int pid = 0;
+            for (forge.game.cost.CostPart part : c.getCostParts()) {
+                if (part instanceof forge.game.cost.CostDiscard d && "Card".equals(d.getType()) && "1".equals(d.getAmount())) pid = PROMPT_COST_DISCARD;
+                else if (part instanceof forge.game.cost.CostPayLife l && l.getAmount().matches("\\d+")) pid = PROMPT_COST_LIFE.getOrDefault(Integer.parseInt(l.getAmount()), 0);
+            }
+            prompts.add(pid);
+        }
+        int shown = iid(promptCard(host));
+        int pick = -1;
+        if (!prompts.contains(0)) {
+            GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_CastingTimeOptionsReq);
+            com.wizards.mtga.gre.SelectNReq.Builder sn = com.wizards.mtga.gre.SelectNReq.newBuilder().setMinSel(1).setMaxSel(1)
+                    .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                    .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Dynamic)
+                    .setIdType(com.wizards.mtga.gre.IdType.IdType_PromptParameterIndex).setSourceId(shown);
+            sn.getPromptBuilder().setPromptId(PROMPT_FORGE_TEXT);
+            // the client reads option N from Parameters[id - 1]: the options come first, the heading text last
+            for (int i = 0; i < prompts.size(); i++) {
+                sn.getPromptBuilder().addParameters(PromptParameter.newBuilder().setParameterName("Option" + (i + 1))
+                        .setType(ParameterType.ParameterType_PromptId).setPromptId(prompts.get(i)));
+                sn.addIds(i + 1);
+            }
+            sn.getPromptBuilder().addParameters(textParam("Text", "Choose an additional cost to cast " + host.getName()));
+            req.getCastingTimeOptionsReqBuilder().addCastingTimeOptionReq(com.wizards.mtga.gre.CastingTimeOptionReq.newBuilder().setCtoId(1)
+                    .setCastingTimeOptionType(com.wizards.mtga.gre.CastingTimeOptionType.CastingTimeOptionType_ChooseOrCost)
+                    .setAffectorId(shown).setAffectedId(shown).setPlayerIdToPrompt(StateSync.HUMAN_SEAT).setIsRequired(true).setSelectNReq(sn));
+            System.out.println("[mtga] asking additional cost " + costs.stream().map(forge.game.cost.Cost::toSimpleString).toList() + " for " + host);
+            sendRequest(req);
+            ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_CastingTimeOptionsResp, ClientMessageType.ClientMessageType_CancelActionReq));
+            System.out.println("[mtga] client casting-time option " + r.toString().replace("\n", " "));
+            if (r.getType() != ClientMessageType.ClientMessageType_CastingTimeOptionsResp) return null;
+            com.wizards.mtga.gre.CastingTimeOptionResp resp = r.getCastingTimeOptionsResp().getCastingTimeOptionResp();
+            if (resp.getSelectNResp().getIdsCount() > 0) pick = (int) resp.getSelectNResp().getIds(0) - 1;
+            if (pick < 0 || pick >= alts.size()) return null;
+        } else {
+            // a cost the client has no wording for: ask about each variant in turn, the last one is what is left
+            for (int i = 0; i < alts.size() - 1 && pick < 0; i++) {
+                if (askOptional(host, PROMPT_FORGE_TEXT, List.of(textParam("Text", "Pay " + costs.get(i).toSimpleString() + " as an additional cost?")), "additional cost " + costs.get(i))) pick = i;
+            }
+            if (pick < 0) pick = alts.size() - 1;
+        }
+        return alts.get(pick);
+    }
+
+    /**
+     * An optional keyword cost (Offspring, Casualty, Squad, Conspire, ...): the player decides whether to pay it. The client's
+     * AdditionalCost question lists the card's own ability (Offspring's), with the cost to pay.
+     */
+    boolean askKeywordCost(SpellAbility sa, forge.game.cost.Cost cost, forge.game.keyword.KeywordInterface keyword) {
+        Card host = sa.getHostCard();
+        int shown = iid(promptCard(host));
+        String name = keyword.getKeyword().toString();
+        int abilityId = 0;
+        for (CardDb.Ability a : db.abilities(grp(host))) {
+            if (a.text() != null && a.text().regionMatches(true, 0, name, 0, name.length())) { abilityId = a.id(); break; }
+        }
+        if (abilityId == 0) {
+            return askOptional(host, PROMPT_FORGE_TEXT, List.of(textParam("Text", "Pay " + name + " " + cost.toSimpleString() + "?")), name + " " + host);
+        }
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_CastingTimeOptionsReq);
+        com.wizards.mtga.gre.CastingTimeOptionReq.Builder o = com.wizards.mtga.gre.CastingTimeOptionReq.newBuilder().setCtoId(1)
+                .setCastingTimeOptionType(com.wizards.mtga.gre.CastingTimeOptionType.CastingTimeOptionType_AdditionalCost)
+                .setAffectorId(shown).setAffectedId(shown).setPlayerIdToPrompt(StateSync.HUMAN_SEAT).setGrpId(abilityId);
+        if (cost.hasManaCost()) o.addAllManaCost(manaRequirements(cost.getTotalMana(), shown));
+        req.getCastingTimeOptionsReqBuilder().addCastingTimeOptionReq(o);
+        req.getCastingTimeOptionsReqBuilder().addCastingTimeOptionReq(com.wizards.mtga.gre.CastingTimeOptionReq.newBuilder().setCtoId(2)
+                .setCastingTimeOptionType(com.wizards.mtga.gre.CastingTimeOptionType.CastingTimeOptionType_Done)
+                .setAffectorId(shown).setAffectedId(shown).setPlayerIdToPrompt(StateSync.HUMAN_SEAT));
+        System.out.println("[mtga] asking keyword cost " + name + " " + cost.toSimpleString() + " for " + host);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_CastingTimeOptionsResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        System.out.println("[mtga] client casting-time option " + r.toString().replace("\n", " "));
+        if (r.getType() != ClientMessageType.ClientMessageType_CastingTimeOptionsResp) return false;
+        List<com.wizards.mtga.gre.CastingTimeOptionResp> resps = new ArrayList<>(r.getCastingTimeOptionsResp().getCastingTimeOptionRespsList());
+        if (r.getCastingTimeOptionsResp().hasCastingTimeOptionResp()) resps.add(r.getCastingTimeOptionsResp().getCastingTimeOptionResp());
+        for (com.wizards.mtga.gre.CastingTimeOptionResp resp : resps) if (resp.getCtoId() == 1) return true;
+        return false;
+    }
+
     // ---- manual mana payment -----------------------------------------------------------------------------------
 
     /** Interactive payment (client full control / manual mana): the client taps sources one by one. */
@@ -3241,6 +3355,10 @@ public final class ForgeBackend implements GameBackend {
         }
 
         private boolean castChosen(SpellAbility sa) {
+            if (sa.isSpell() && live()) {
+                sa = askAlternativeAdditionalCost(sa);      // "discard a card or pay 3 life": the player picks first
+                if (sa == null) return false;
+            }
             int phyrexianLife = 0;
             if (live() && sa.getPayCosts() != null && sa.getPayCosts().hasManaCost()) {
                 PhyrexianPlan plan = askPhyrexian(sa);
@@ -3530,6 +3648,15 @@ public final class ForgeBackend implements GameBackend {
         public CardCollectionView orderMoveToZoneList(CardCollectionView cards, ZoneType destinationZone, SpellAbility source) {
             if (!live() || destinationZone != ZoneType.Library || cards.size() < 2) return super.orderMoveToZoneList(cards, destinationZone, source);
             return askOrder(cards, true);
+        }
+
+        /** Offspring, Casualty, Squad, Replicate, ...: the player decides, the AI's choice only says how many can be afforded. */
+        @Override
+        public int chooseNumberForKeywordCost(SpellAbility sa, forge.game.cost.Cost cost, forge.game.keyword.KeywordInterface keyword, String prompt, int max) {
+            int affordable = super.chooseNumberForKeywordCost(sa, cost, keyword, prompt, max);
+            if (!live() || affordable <= 0 || sa.hasOptionalKeywordAmount(keyword)) return affordable;
+            if (max == 1) return askKeywordCost(sa, cost, keyword) ? 1 : 0;
+            return askNumber(sa.getHostCard(), 0, affordable);
         }
 
         @Override

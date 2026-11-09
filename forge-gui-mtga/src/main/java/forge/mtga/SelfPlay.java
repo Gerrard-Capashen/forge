@@ -160,6 +160,11 @@ public final class SelfPlay {
                 System.out.println("  mill rig: largest move " + fc.massMoves + " cards, " + fc.maxMillAnimated + " Mill animations" + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            if ("addcost".equals(System.getProperty("mtga.rig"))) {      // the player is asked about offspring and about Bitter Triumph's additional cost
+                boolean ok = fc.costChoiceAsked && fc.offspringAsked;
+                System.out.println("  addcost rig: additional cost choice asked " + fc.costChoiceAsked + ", offspring asked " + fc.offspringAsked + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if ("room".equals(System.getProperty("mtga.rig"))) {      // both halves offered, and the other door offered for unlocking after the right half was cast
                 boolean ok = fc.roomBothOffered && fc.roomUnlockOffered;
                 System.out.println("  room rig: both halves offered " + fc.roomBothOffered + ", unlock offered " + fc.roomUnlockOffered + (ok ? "" : "  (WRONG)"));
@@ -685,7 +690,7 @@ public final class SelfPlay {
             return b.toString();
         }
 
-        boolean samiOffered, roomBothOffered, roomUnlockOffered;
+        boolean samiOffered, roomBothOffered, roomUnlockOffered, costChoiceAsked, offspringAsked;
         int massMoves, maxMillAnimated;
 
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
@@ -725,6 +730,11 @@ public final class SelfPlay {
         private static ClientToGREMessage.Builder msg(ClientMessageType t) { return ClientToGREMessage.newBuilder().setType(t); }
 
         private Action preferred(List<Action> acts) {
+            if ("addcost".equals(System.getProperty("mtga.rig"))) {      // rig addcost: cast Iridescent Vinelasher first (3 mana: offspring must be asked), then Bitter Triumph
+                for (String n : List.of("Iridescent", "Bitter")) {
+                    for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
+                }
+            }
             if ("phasing".equals(System.getProperty("mtga.rig"))) {      // rig phasing: cast Kaito Shizuki
                 for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith("Kaito")) return a;
             }
@@ -814,7 +824,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -917,6 +927,24 @@ public final class SelfPlay {
                             case CastingTimeOptionType_OptionalCost, CastingTimeOptionType_Multikicker, CastingTimeOptionType_CastThroughAbility,
                                  CastingTimeOptionType_OptionalCostPaid, CastingTimeOptionType_None -> problem("CastingTimeOption type the client cannot show: " + o.getCastingTimeOptionType());
                             default -> { }
+                        }
+                    }
+                    for (CastingTimeOptionReq o : opts) {
+                        if (o.getCastingTimeOptionType() == CastingTimeOptionType.CastingTimeOptionType_ChooseOrCost) {
+                            // "discard a card or pay 3 life": one SelectN over the prompt parameters; the client takes the ids as parameter indexes
+                            com.wizards.mtga.gre.SelectNReq sn = o.getSelectNReq();
+                            if (sn.getIdType() != com.wizards.mtga.gre.IdType.IdType_PromptParameterIndex || sn.getIdsCount() < 2 || sn.getPromptOrBuilder().getParametersCount() < sn.getIdsCount()) problem("bad ChooseOrCost request " + o);
+                            System.out.println("[selfplay] addcost rig: additional cost question " + sn.getPrompt().getParametersList().toString().replaceAll("\s+", " "));
+                            costChoiceAsked = true;
+                            ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_CastingTimeOptionsResp);
+                            r.getCastingTimeOptionsRespBuilder().getCastingTimeOptionRespBuilder().setCtoId(o.getCtoId()).setCastingTimeOptionType(o.getCastingTimeOptionType())
+                                    .getSelectNRespBuilder().addIds(sn.getIds(rnd.nextInt(sn.getIdsCount())));
+                            reply(r);
+                            return;
+                        }
+                        if (o.getCastingTimeOptionType() == CastingTimeOptionType.CastingTimeOptionType_AdditionalCost && "addcost".equals(System.getProperty("mtga.rig"))) {
+                            offspringAsked = true;
+                            System.out.println("[selfplay] addcost rig: additional cost option ability " + o.getGrpId() + " cost " + o.getManaCostList().toString().replaceAll("\s+", " "));
                         }
                     }
                     CastingTimeOptionReq modal = opts.stream().filter(o -> o.getCastingTimeOptionType() == CastingTimeOptionType.CastingTimeOptionType_Modal).findFirst().orElse(null);
