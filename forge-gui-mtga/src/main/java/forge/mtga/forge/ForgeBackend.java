@@ -1024,6 +1024,11 @@ public final class ForgeBackend implements GameBackend {
             rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
             return;
         }
+        if ("sprawl".equals(rig)) {      // 3 Forests in play; Utopia Sprawl (choose a color), Wild Growth, Lightning Bolt ({R}) and Hill Giant ({3}{R}) in hand: the Auras' extra mana must count for what is castable and auto-tapped
+            for (int i = 0; i < 3; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);
+            for (String name : List.of("Utopia Sprawl", "Wild Growth", "Lightning Bolt", "Hill Giant")) rigAdd(p, name, ZoneType.Hand, 0);
+            return;
+        }
         if ("gollum".equals(rig)) {      // Swamp x3 in play, Gollum, Riddle Master in hand: casting it must ask odd or even (client parity buttons)
             for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
             rigAdd(p, "Gollum, Riddle Master", ZoneType.Hand, 0);
@@ -2517,6 +2522,7 @@ public final class ForgeBackend implements GameBackend {
                 phyLife += 2;
                 sa.setSpendPhyrexianMana(true);
             }
+            if (!toPay.isPaid()) me.getManaPool().payManaCostFromPool(toPay, sa, false, sa.getPayingMana());      // bonus mana (Wild Growth) floats after a tap
             if (toPay.isPaid()) break;
             byte canUse = 0;
             for (byte color : forge.card.mana.ManaAtom.MANATYPES) {
@@ -2530,7 +2536,7 @@ public final class ForgeBackend implements GameBackend {
             for (Card c : me.getCardsIn(ZoneType.Battlefield)) {
                 for (SpellAbility ma : c.getManaAbilities()) {
                     ma.setActivatingPlayer(me);
-                    if (ma.canPlay(true) && ma.isManaAbilityFor(sa, canUse)) sources.putIfAbsent(iid(c) + ":" + abilities.abilityId(ma, grp(c)), ma);
+                    if (ma.canPlay(true) && (ma.isManaAbilityFor(sa, canUse) || bonusPays(ma, me, canUse))) sources.putIfAbsent(iid(c) + ":" + abilities.abilityId(ma, grp(c)), ma);
                 }
             }
             if (sources.isEmpty()) return false;
@@ -2882,7 +2888,15 @@ public final class ForgeBackend implements GameBackend {
             generic--;
         }
         int missing = 0;
+        // mana a tapped source adds beyond what was asked of it (an enchanted land's extra {G} / chosen color): it floats and pays later pips
+        List<String> floating = new ArrayList<>();
         for (forge.card.mana.ManaCostShard shard : colored) {
+            boolean fromFloating = false;
+            for (java.util.Iterator<String> it = floating.iterator(); it.hasNext(); ) {
+                String unit = it.next();
+                if (matches(unit, colorCodes(shard.getColorMask()))) { it.remove(); fromFloating = true; break; }
+            }
+            if (fromFloating) continue;
             Card best = null;
             SpellAbility bestMa = null;
             int bestColors = 99, bestColor = -1;
@@ -2892,7 +2906,7 @@ public final class ForgeBackend implements GameBackend {
                 for (SpellAbility ma : sources.get(c)) {
                     int pick = -1;
                     for (int i = 0; i < 5 && pick < 0; i++) {
-                        if ((shard.getColorMask() & COLOR_MASKS[i]) != 0 && ma.getManaPart().canProduce(COLOR_CODES[i], ma)) pick = i;
+                        if ((shard.getColorMask() & COLOR_MASKS[i]) != 0 && canMake(ma, me, COLOR_CODES[i])) pick = i;
                     }
                     if (pick >= 0) { best = c; bestMa = ma; bestColors = n; bestColor = pick; break; }
                 }
@@ -2901,7 +2915,25 @@ public final class ForgeBackend implements GameBackend {
             free.remove(best);
             taps.add(tapAction(best, bestMa, COLOR_ENUMS[bestColor]));
             chosenSources.add(bestMa);
-            colors.put(bestMa, COLOR_CODES[bestColor]);
+            boolean ownColor = bestMa.getManaPart().canProduce(COLOR_CODES[bestColor], bestMa);
+            if (ownColor) colors.put(bestMa, COLOR_CODES[bestColor]);      // a color only a bonus trigger makes is not the ability's to choose
+            // what else the tap adds floats: the ability's other units, and the bonus ones
+            List<String> units = new ArrayList<>();
+            for (int k = Math.max(1, bestMa.amountOfManaGenerated(false)); k > 0; k--) units.add(ownColor ? COLOR_CODES[bestColor] : ownCodes(bestMa));
+            units.addAll(bonusMana(bestMa, me));
+            for (java.util.Iterator<String> it = units.iterator(); it.hasNext(); ) {
+                if (it.next().contains(COLOR_CODES[bestColor])) { it.remove(); break; }
+            }
+            floating.addAll(units);
+        }
+        for (java.util.Iterator<String> it = floating.iterator(); colorless > 0 && it.hasNext(); ) {
+            if (!it.next().equals("C")) continue;
+            it.remove();
+            colorless--;
+        }
+        while (generic > 0 && !floating.isEmpty()) {
+            floating.remove(0);
+            generic--;
         }
         free.sort(java.util.Comparator.comparingInt(c -> colorCount(sources.get(c))));      // spend the least flexible sources first
         while (colorless > 0) {      // {C} shards: the source making the most colorless mana (Eldrazi Temple {C}{C} pays two)
@@ -2927,7 +2959,7 @@ public final class ForgeBackend implements GameBackend {
             int pickAmount = 0;
             for (Card c : free) {
                 for (SpellAbility ma : sources.get(c)) {
-                    int amount = Math.max(1, ma.amountOfManaGenerated(false));
+                    int amount = manaUnits(ma, me);
                     // the biggest that still fits, else the smallest overpay; ties keep the least flexible source
                     boolean better = pick == null || (amount <= generic
                             ? pickAmount > generic || amount > pickAmount
@@ -2947,6 +2979,151 @@ public final class ForgeBackend implements GameBackend {
         else lastAutoTapComplete = true;
         if (taps.isEmpty()) return null;
         return com.wizards.mtga.gre.AutoTapSolution.newBuilder().addAllAutoTapActions(taps).build();
+    }
+
+    /**
+     * Mana a source adds on top of its own ability through TapsForMana triggers (Wild Growth: an extra {G}; Utopia Sprawl: one mana of the
+     * chosen color; Overgrowth, Fertile Ground...). Forge adds it to the pool when the source is tapped, but it is not part of the land's own
+     * mana ability, so neither Forge's affordability check nor our source picking saw it. One entry per unit: the codes it may be (W U B R G C).
+     */
+    private static List<String> bonusMana(SpellAbility ma, Player me) {
+        List<String> out = new ArrayList<>();
+        if (ma.getManaPart() == null || me.getGame() == null) return out;
+        try {
+            Map<forge.game.ability.AbilityKey, Object> run = forge.game.ability.AbilityKey.mapFromCard(ma.getHostCard());
+            run.put(forge.game.ability.AbilityKey.Activator, me);
+            run.put(forge.game.ability.AbilityKey.AbilityMana, ma);
+            run.put(forge.game.ability.AbilityKey.Produced, forge.game.GameActionUtil.generatedTotalMana(ma));
+            for (forge.game.trigger.Trigger tr : me.getGame().getTriggerHandler().getActiveTrigger(forge.game.trigger.TriggerType.TapsForMana, run)) {
+                SpellAbility t = tr.ensureAbility();
+                if (t == null || t.getApi() != forge.game.ability.ApiType.Mana) continue;
+                String produced = t.getParam("Produced");
+                if (produced == null) continue;
+                if (produced.equals("Chosen")) {
+                    Card h = t.getHostCard();
+                    if (!h.hasChosenColor()) continue;
+                    produced = forge.card.MagicColor.toShortString(h.getChosenColor());
+                }
+                int amount = forge.game.ability.AbilityUtils.calculateAmount(t.getHostCard(), t.getParamOrDefault("Amount", "1"), t);
+                for (String code : produced.split(" ")) {
+                    String units = code.equals("Any") ? "WUBRG" : code.matches("[WUBRGC]") ? code : null;      // Combo / special mana: not predicted
+                    if (units != null) for (int k = 0; k < amount; k++) out.add(units);
+                }
+            }
+        } catch (RuntimeException e) {
+            out.clear();
+        }
+        return out;
+    }
+
+    /** Can the source make this color (W U B R G C) with its own ability or through a bonus trigger? */
+    private static boolean canMake(SpellAbility ma, Player me, String code) {
+        if (ma.getManaPart() != null && ma.getManaPart().canProduce(code, ma)) return true;
+        for (String unit : bonusMana(ma, me)) if (unit.contains(code)) return true;
+        return false;
+    }
+
+    /** The codes (W U B R G C) the ability itself can make. */
+    private static String ownCodes(SpellAbility ma) {
+        StringBuilder b = new StringBuilder();
+        for (String code : new String[] {"W", "U", "B", "R", "G", "C"}) if (ma.getManaPart().canProduce(code, ma)) b.append(code);
+        return b.toString();
+    }
+
+    /** The codes (W U B R G) of the colors in a shard's color mask. */
+    private static String colorCodes(int mask) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < COLOR_CODES.length; i++) if ((mask & COLOR_MASKS[i]) != 0) b.append(COLOR_CODES[i]);
+        return b.toString();
+    }
+
+    /** Mana units tapping the source adds: its own ability's amount plus the bonus ones. */
+    private static int manaUnits(SpellAbility ma, Player me) {
+        return Math.max(1, ma.amountOfManaGenerated(false)) + bonusMana(ma, me).size();
+    }
+
+    /** Does the source's bonus mana (see bonusMana) make a color in the mask? */
+    private static boolean bonusPays(SpellAbility ma, Player me, byte mask) {
+        for (String unit : bonusMana(ma, me)) {
+            for (int i = 0; i < COLOR_CODES.length; i++) if (unit.contains(COLOR_CODES[i]) && (mask & COLOR_MASKS[i]) != 0) return true;
+            if (unit.contains("C") && (mask & forge.card.mana.ManaAtom.COLORLESS) != 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Fallback when Forge's check says no: sources that add bonus mana (an enchanted land) can pay colors their own ability cannot, which Forge's
+     * source matching does not consider. Tries every way to pay the colored pips with single units of the free sources, then the generic rest.
+     */
+    private static boolean affordableWithBonusMana(SpellAbility sa, Player me) {
+        if (sa.getPayCosts() == null) return false;
+        forge.card.mana.ManaCost cost = sa.getPayCosts().getTotalMana();
+        if (cost == null || cost.isNoCost() || cost.countX() > 0) return false;
+        List<String> pips = new ArrayList<>();      // each: the codes that may pay it
+        for (forge.card.mana.ManaCostShard shard : cost) {
+            if (shard.isPhyrexian() || shard.isOr2Generic()) return false;      // not modelled
+            if (shard == forge.card.mana.ManaCostShard.COLORLESS) { pips.add("C"); continue; }
+            if (shard.getColorMask() == 0) continue;
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < COLOR_CODES.length; i++) if ((shard.getColorMask() & COLOR_MASKS[i]) != 0) b.append(COLOR_CODES[i]);
+            pips.add(b.toString());
+        }
+        boolean tapsHost = sa.getPayCosts().hasTapCost();
+        List<List<String>> sources = new ArrayList<>();      // per source: its units, each the codes it may be
+        boolean anyBonus = false;
+        for (Card c : me.getCardsIn(ZoneType.Battlefield)) {
+            if (c.isTapped() || (tapsHost && c == sa.getHostCard())) continue;
+            for (SpellAbility ma : c.getManaAbilities()) {
+                ma.setActivatingPlayer(me);
+                boolean allowed = ma.getManaPart() == null || ma.getManaPart().meetsManaRestrictions(sa);
+                if (!allowed || !ma.canPlay() || !producesMana(ma) || (ma.getPayCosts() != null && ma.getPayCosts().getTotalMana().getCMC() > 0)) continue;
+                StringBuilder own = new StringBuilder();
+                for (String code : new String[] {"W", "U", "B", "R", "G", "C"}) if (ma.getManaPart().canProduce(code, ma)) own.append(code);
+                List<String> units = new ArrayList<>();
+                for (int k = Math.max(1, ma.amountOfManaGenerated(false)); k > 0; k--) units.add(own.toString());
+                List<String> bonus = bonusMana(ma, me);
+                anyBonus |= !bonus.isEmpty();
+                units.addAll(bonus);
+                sources.add(units);
+                break;      // one ability per source is tapped
+            }
+        }
+        for (forge.game.mana.Mana m : me.getManaPool()) {
+            if (m.meetsManaRestrictions(sa)) sources.add(new ArrayList<>(List.of(m.isColorless() ? "C" : forge.card.MagicColor.toShortString(m.getColor()))));
+        }
+        if (!anyBonus || sources.size() > 18) return false;
+        boolean[][] used = new boolean[sources.size()][];
+        for (int i = 0; i < used.length; i++) used[i] = new boolean[sources.get(i).size()];
+        return payPips(pips, 0, sources, new boolean[sources.size()], used, cost.getGenericCost());
+    }
+
+    /** Assign pip i.. to unused units of sources (tapping a source makes all its units available), then check the generic rest. */
+    private static boolean payPips(List<String> pips, int i, List<List<String>> sources, boolean[] tapped, boolean[][] used, int generic) {
+        if (i == pips.size()) {
+            int free = 0;
+            for (int s = 0; s < sources.size(); s++) {
+                int n = sources.get(s).size();
+                if (tapped[s]) { for (int u = 0; u < n; u++) if (!used[s][u]) free++; } else free += n;
+            }
+            return free >= generic;
+        }
+        for (int s = 0; s < sources.size(); s++) {
+            for (int u = 0; u < sources.get(s).size(); u++) {
+                if (used[s][u] || !matches(sources.get(s).get(u), pips.get(i))) continue;
+                boolean was = tapped[s];
+                tapped[s] = true;
+                used[s][u] = true;
+                if (payPips(pips, i + 1, sources, tapped, used, generic)) return true;
+                used[s][u] = false;
+                tapped[s] = was;
+            }
+        }
+        return false;
+    }
+
+    private static boolean matches(String unit, String pip) {
+        for (char ch : pip.toCharArray()) if (unit.indexOf(ch) >= 0) return true;
+        return false;
     }
 
     /** Whether a mana ability would add any mana now (Command Tower without a commander adds none). */
@@ -3030,7 +3207,7 @@ public final class ForgeBackend implements GameBackend {
         sa = withGrantedAffinity(sa, me);
         try {
             sa.setActivatingPlayer(me);
-            return forge.ai.ComputerUtilMana.canPayManaCost(sa, me, 0, false) || affordableWithLife(sa, me);
+            return forge.ai.ComputerUtilMana.canPayManaCost(sa, me, 0, false) || affordableWithLife(sa, me) || affordableWithBonusMana(sa, me);
         } catch (RuntimeException e) {
             return true;
         }

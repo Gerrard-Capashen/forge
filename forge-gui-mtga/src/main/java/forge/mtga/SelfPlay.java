@@ -165,6 +165,10 @@ public final class SelfPlay {
                 System.out.println("  addcost rig: additional cost choice asked " + fc.costChoiceAsked + ", offspring asked " + fc.offspringAsked + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            if ("sprawl".equals(System.getProperty("mtga.rig"))) {      // once Utopia Sprawl resolved, its chosen color is published as a LinkInfo Choose annotation
+                System.out.println("  sprawl rig: chosen color linked on Utopia Sprawl " + fc.sprawlColorLinked + (fc.sprawlColorLinked ? "" : "  (WRONG)"));
+                if (!fc.sprawlColorLinked) failed++;
+            }
             if ("room".equals(System.getProperty("mtga.rig"))) {      // both halves offered, and the other door offered for unlocking after the right half was cast
                 boolean ok = fc.roomBothOffered && fc.roomUnlockOffered;
                 System.out.println("  room rig: both halves offered " + fc.roomBothOffered + ", unlock offered " + fc.roomUnlockOffered + (ok ? "" : "  (WRONG)"));
@@ -691,6 +695,7 @@ public final class SelfPlay {
         }
 
         boolean samiOffered, roomBothOffered, roomUnlockOffered, costChoiceAsked, offspringAsked;
+        boolean sprawlColorLinked;
         int massMoves, maxMillAnimated;
 
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
@@ -824,7 +829,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -1321,6 +1326,10 @@ public final class SelfPlay {
                         .anyMatch(d -> d.getKey().equals("ChooseLinkType") && d.getValueStringCount() > 0 && !"AttributedInstance".equals(d.getValueString(0)));
                 for (int id : p.getAffectedIdsList()) {
                     if (!chosenValues && !objs.containsKey(id) && !(attachment && id <= 2)) problem("persistent annotation on missing object " + p.getType(0));      // a curse is attached to a player
+                }
+                if (p.getType(0) == AnnotationType.AnnotationType_LinkInfo && String.valueOf(debugName(p.getAffectorId())).contains("Utopia Sprawl")
+                        && p.getDetailsList().stream().anyMatch(d -> d.getKey().equals("ChooseLinkType") && d.getValueStringCount() > 0 && "Color".equals(d.getValueString(0)))) {
+                    sprawlColorLinked = true;      // rig sprawl: the chosen color is shown on the Aura
                 }
                 if (p.getType(0) == AnnotationType.AnnotationType_Attachment) {      // equipment / aura -> the permanent it is attached to, both on the battlefield
                     ATTACH_SEEN.incrementAndGet();
