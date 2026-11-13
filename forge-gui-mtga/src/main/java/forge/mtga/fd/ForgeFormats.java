@@ -179,7 +179,7 @@ public final class ForgeFormats {
     private static final Map<String, List<String>> DIRECT_SLOTS = Map.of("Standard", List.of("DirectGame"), "Pioneer", List.of("DirectGameBrawlRebalanced"),
             "Modern", List.of("DirectGameAlchemy"), "Legacy", List.of("DirectGameLimited"), "Vintage", List.of("DirectGameVintage"),
             "Pauper", List.of("DirectGamePauper"), "Premodern", List.of("DirectGamePremodern"), BRAWL, List.of("DirectGameBrawl"),
-            "Historic", List.of("DirectGameHistoric"));
+            "Historic", List.of("DirectGameHistoric"), "Timeless", List.of("DirectGameTimeless"));
 
     public synchronized GetFormatsResponse response() {
         GetFormatsResponse.Builder b = GetFormatsResponse.newBuilder();
