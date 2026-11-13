@@ -1034,6 +1034,11 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Searing Spear", "Impulse")) rigAdd(p, name, ZoneType.Hand, 0);
             return;
         }
+        if ("reflect".equals(rig)) {      // Reflecting Pool, Island, Plains and Mountain in play; Lightning Bolt, Wrath of God and Counterspell in hand: the Pool is a mana ability that makes what the other lands could, so it must be offered for a manual tap and pay for spells
+            for (String name : List.of("Reflecting Pool", "Island", "Plains", "Mountain")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Lightning Bolt", "Wrath of God", "Counterspell")) rigAdd(p, name, ZoneType.Hand, 0);
+            return;
+        }
         if ("reduce".equals(rig)) {      // Goblin Anarchomancer, 3 Mountains and an Island in play; Hill Giant ({3}{R}, red: costs {2}{R}) and Lightning Bolt in hand: the reduced cost must be shown and auto-tapped, leaving the spare land untapped
             for (int i = 0; i < 3; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
             rigAdd(p, "Island", ZoneType.Battlefield, 0);
@@ -2686,7 +2691,7 @@ public final class ForgeBackend implements GameBackend {
                     ma.setActivatingPlayer(me);
                     if (!ma.canPlay(true) || ma.getManaPart() == null) continue;
                     for (int i = 0; i < COLOR_CODES.length; i++) {
-                        if ((shard.getColorMask() & COLOR_MASKS[i]) != 0 && ma.getManaPart().canProduce(COLOR_CODES[i], ma)) return true;
+                        if ((shard.getColorMask() & COLOR_MASKS[i]) != 0 && canMake(ma, COLOR_CODES[i])) return true;
                     }
                 }
             }
@@ -2895,7 +2900,7 @@ public final class ForgeBackend implements GameBackend {
         if (ma == null || ma.getManaPart() == null) return false;
         for (forge.card.mana.ManaCostShard shard : cost) {
             for (int i = 0; i < 5; i++) {
-                if ((shard.getColorMask() & COLOR_MASKS[i]) != 0 && ma.getManaPart().canProduce(COLOR_CODES[i], ma)) return true;
+                if ((shard.getColorMask() & COLOR_MASKS[i]) != 0 && canMake(ma, COLOR_CODES[i])) return true;
             }
         }
         return false;
@@ -2990,7 +2995,7 @@ public final class ForgeBackend implements GameBackend {
             free.remove(best);
             taps.add(tapAction(best, bestMa, COLOR_ENUMS[bestColor]));
             chosenSources.add(bestMa);
-            boolean ownColor = bestMa.getManaPart().canProduce(COLOR_CODES[bestColor], bestMa);
+            boolean ownColor = canMake(bestMa, COLOR_CODES[bestColor]);
             if (ownColor) colors.put(bestMa, COLOR_CODES[bestColor]);      // a color only a bonus trigger makes is not the ability's to choose
             // what else the tap adds floats: the ability's other units, and the bonus ones
             List<String> units = new ArrayList<>();
@@ -3017,7 +3022,7 @@ public final class ForgeBackend implements GameBackend {
             int pickAmount = 0;
             for (Card c : free) {
                 for (SpellAbility ma : sources.get(c)) {
-                    int amount = ma.getManaPart() != null && ma.getManaPart().canProduce("C", ma) ? Math.max(1, ma.amountOfManaGenerated(false)) : 0;
+                    int amount = ma.getManaPart() != null && canMake(ma, "C") ? Math.max(1, ma.amountOfManaGenerated(false)) : 0;
                     if (amount > pickAmount) { pick = c; pickMa = ma; pickAmount = amount; }
                 }
             }
@@ -3093,7 +3098,7 @@ public final class ForgeBackend implements GameBackend {
 
     /** Can the source make this color (W U B R G C) with its own ability or through a bonus trigger? */
     private static boolean canMake(SpellAbility ma, Player me, String code) {
-        if (ma.getManaPart() != null && ma.getManaPart().canProduce(code, ma)) return true;
+        if (ma.getManaPart() != null && canMake(ma, code)) return true;
         for (String unit : bonusMana(ma, me)) if (unit.contains(code)) return true;
         return false;
     }
@@ -3101,7 +3106,7 @@ public final class ForgeBackend implements GameBackend {
     /** The codes (W U B R G C) the ability itself can make. */
     private static String ownCodes(SpellAbility ma) {
         StringBuilder b = new StringBuilder();
-        for (String code : new String[] {"W", "U", "B", "R", "G", "C"}) if (ma.getManaPart().canProduce(code, ma)) b.append(code);
+        for (String code : new String[] {"W", "U", "B", "R", "G", "C"}) if (canMake(ma, code)) b.append(code);
         return b.toString();
     }
 
@@ -3153,7 +3158,7 @@ public final class ForgeBackend implements GameBackend {
                 boolean allowed = ma.getManaPart() == null || ma.getManaPart().meetsManaRestrictions(sa);
                 if (!allowed || !ma.canPlay() || !producesMana(ma) || (ma.getPayCosts() != null && ma.getPayCosts().getTotalMana().getCMC() > 0)) continue;
                 StringBuilder own = new StringBuilder();
-                for (String code : new String[] {"W", "U", "B", "R", "G", "C"}) if (ma.getManaPart().canProduce(code, ma)) own.append(code);
+                for (String code : new String[] {"W", "U", "B", "R", "G", "C"}) if (canMake(ma, code)) own.append(code);
                 List<String> units = new ArrayList<>();
                 for (int k = Math.max(1, ma.amountOfManaGenerated(false)); k > 0; k--) units.add(own.toString());
                 List<String> bonus = bonusMana(ma, me);
@@ -3202,9 +3207,26 @@ public final class ForgeBackend implements GameBackend {
     }
 
     /** Whether a mana ability would add any mana now (Command Tower without a commander adds none). */
+    /**
+     * Can this mana ability make the mana type? Forge's AbilityManaPart.canProduce reads the printed "Produced" list, which a
+     * reflected ability (Reflecting Pool, Exotic Orchard, Fellwar Stone) does not have: it makes what the lands in play could.
+     */
+    private static boolean canMake(SpellAbility ma, String code) {
+        forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
+        if (mp == null) return false;
+        if (ma.getApi() == forge.game.ability.ApiType.ManaReflected) {
+            for (String c : forge.game.card.CardUtil.getReflectableManaColors(ma)) {
+                String t = c.length() == 1 ? c.toUpperCase() : "colorless".equalsIgnoreCase(c) ? "C" : forge.card.MagicColor.toShortString(c);
+                if (t.equals(code)) return true;
+            }
+            return false;
+        }
+        return mp.canProduce(code, ma);
+    }
+
     private static boolean producesMana(SpellAbility ma) {
         if (ma.getManaPart() == null) return true;
-        for (String code : new String[] {"W", "U", "B", "R", "G", "C"}) if (ma.getManaPart().canProduce(code, ma)) return true;
+        for (String code : new String[] {"W", "U", "B", "R", "G", "C"}) if (canMake(ma, code)) return true;
         return false;
     }
 
@@ -3212,7 +3234,7 @@ public final class ForgeBackend implements GameBackend {
     private static int colorCount(List<SpellAbility> mas) {
         int n = 0;
         for (String code : COLOR_CODES) {
-            for (SpellAbility ma : mas) if (ma.getManaPart().canProduce(code, ma)) { n++; break; }
+            for (SpellAbility ma : mas) if (canMake(ma, code)) { n++; break; }
         }
         return n;
     }
@@ -3364,7 +3386,7 @@ public final class ForgeBackend implements GameBackend {
         forge.game.spellability.AbilityManaPart mp = ma.getManaPart();
         if (mp == null) return;
         List<Integer> colors = new ArrayList<>();
-        for (int i = 0; i < MANA_CODES.length; i++) if (mp.canProduce(MANA_CODES[i], ma)) colors.add(i);
+        for (int i = 0; i < MANA_CODES.length; i++) if (canMake(ma, MANA_CODES[i])) colors.add(i);
         if (colors.size() < 2) return;
         int idx = 0;
         for (int i : colors) {
@@ -3383,7 +3405,7 @@ public final class ForgeBackend implements GameBackend {
         if (a.getManaPaymentOptionsCount() != 1 || a.getManaPaymentOptions(0).getManaCount() == 0) return;
         com.wizards.mtga.gre.ManaColor chosen = a.getManaPaymentOptions(0).getMana(0).getColor();
         for (int i = 0; i < MANA_COLORS.length; i++) {
-            if (MANA_COLORS[i] == chosen && mp.canProduce(MANA_CODES[i], ma)) {
+            if (MANA_COLORS[i] == chosen && canMake(ma, MANA_CODES[i])) {
                 mp.setExpressChoice(MANA_CODES[i]);
                 System.out.println("[mtga] mana color chosen: " + MANA_CODES[i] + " from " + ma.getHostCard());
             }
@@ -3634,7 +3656,7 @@ public final class ForgeBackend implements GameBackend {
                 ma.getManaPart().clearExpressChoice();
                 if (color == null) {      // a dual the solution uses for generic mana: any color it makes (no color question)
                     List<String> makes = new ArrayList<>();
-                    for (String code : MANA_CODES) if (ma.getManaPart().canProduce(code, ma)) makes.add(code);
+                    for (String code : MANA_CODES) if (canMake(ma, code)) makes.add(code);
                     if (makes.size() > 1) color = makes.get(0);
                 }
                 if (color != null) ma.getManaPart().setExpressChoice(color);

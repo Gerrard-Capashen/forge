@@ -149,6 +149,10 @@ public final class SelfPlay {
                 System.out.println("  sami rig: Wurmcoil Engine was never offered (WRONG)");
                 failed++;
             }
+            if ("reflect".equals(System.getProperty("mtga.rig")) && !fc.reflectOffered) {
+                System.out.println("  reflect rig: Reflecting Pool was never offered as a mana tap (WRONG)");
+                failed++;
+            }
             if ("reduce".equals(System.getProperty("mtga.rig")) && !fc.reduceChecked) {
                 System.out.println("  reduce rig: Hill Giant was never offered (WRONG)");
                 failed++;
@@ -706,7 +710,7 @@ public final class SelfPlay {
             return b.toString();
         }
 
-        boolean reduceChecked, samiOffered, roomBothOffered, roomUnlockOffered, costChoiceAsked, offspringAsked;
+        boolean reflectOffered, reduceChecked, samiOffered, roomBothOffered, roomUnlockOffered, costChoiceAsked, offspringAsked;
         boolean sprawlColorLinked, stationAsked, stationCounters, distributionAsked;
         int massMoves, maxMillAnimated;
 
@@ -847,7 +851,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"reduce".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"reduce".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig")) && !"reflect".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -874,6 +878,14 @@ public final class SelfPlay {
                             System.out.println("[selfplay] sami rig: Wurmcoil Engine offered, shown cost " + pips + " " + a.getManaCostList().toString().replaceAll("\s+", " "));
                             if (pips != 3) problem("sami rig: Wurmcoil Engine shown at " + pips + " mana, expected 3");
                             samiOffered = true;
+                        }
+                    }
+                    if ("reflect".equals(System.getProperty("mtga.rig")) && !reflectOffered) {      // rig reflect: Reflecting Pool must be offered as a manual mana tap
+                        for (Action a : acts) {
+                            if (a.getActionType() == ActionType.ActionType_Activate_Mana && String.valueOf(debugName(a.getInstanceId())).contains("Reflecting Pool")) {
+                                System.out.println("[selfplay] reflect rig: Reflecting Pool offered, " + a.getManaPaymentOptionsCount() + " color options");
+                                reflectOffered = true;
+                            }
                         }
                     }
                     if ("reduce".equals(System.getProperty("mtga.rig"))) {      // rig reduce: Hill Giant {3}{R} costs {2}{R} with Goblin Anarchomancer: shown as 3 mana, auto-tapped with 3 lands (not 4)
