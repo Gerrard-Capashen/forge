@@ -236,6 +236,13 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("divide".equals(rig)) {      // test rig: damage / counters divided as you choose (Fury, Pyrokinesis, The Earth Crystal) vs a passive opponent
+            green.clear();
+            green.put("Forest", 20);
+            green.put("Mountain", 20);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("gollum".equals(rig)) {      // test rig: Gollum, Riddle Master (choose odd or even as it enters) vs a passive opponent
             green.clear();
             green.put("Swamp", 40);

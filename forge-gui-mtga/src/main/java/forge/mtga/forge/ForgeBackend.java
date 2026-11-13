@@ -17,6 +17,7 @@ import forge.ai.LobbyPlayerAi;
 import forge.ai.PlayerControllerAi;
 import forge.game.Game;
 import forge.game.GameEntity;
+import forge.game.GameObject;
 import forge.card.CardStateName;
 import forge.game.card.Card;
 import forge.game.card.CardCollection;
@@ -180,7 +181,7 @@ public final class ForgeBackend implements GameBackend {
                  ClientMessageType_DeclareBlockersResp, ClientMessageType_SubmitBlockersReq,
                  ClientMessageType_SelectTargetsResp, ClientMessageType_SubmitTargetsReq, ClientMessageType_CancelActionReq,
                  ClientMessageType_GroupResp, ClientMessageType_SelectNResp, ClientMessageType_OptionalActionResp, ClientMessageType_SelectReplacementResp,
-                 ClientMessageType_NumericInputResp, ClientMessageType_OrderResp, ClientMessageType_CastingTimeOptionsResp,
+                 ClientMessageType_NumericInputResp, ClientMessageType_DistributionResp, ClientMessageType_OrderResp, ClientMessageType_CastingTimeOptionsResp,
                  ClientMessageType_EffectCostResp, ClientMessageType_EnterSideboardingReq, ClientMessageType_SubmitDeckResp,
                  ClientMessageType_ChooseStartingPlayerResp, ClientMessageType_PerformAutoTapActionsResp,
                  ClientMessageType_UndoReq -> inbox.add(msg);
@@ -1036,6 +1037,13 @@ public final class ForgeBackend implements GameBackend {
         if ("sprawl".equals(rig)) {      // 3 Forests in play; Utopia Sprawl (choose a color), Wild Growth, Lightning Bolt ({R}) and Hill Giant ({3}{R}) in hand: the Auras' extra mana must count for what is castable and auto-tapped
             for (int i = 0; i < 3; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);
             for (String name : List.of("Utopia Sprawl", "Wild Growth", "Lightning Bolt", "Hill Giant")) rigAdd(p, name, ZoneType.Hand, 0);
+            return;
+        }
+        if ("divide".equals(rig)) {      // 6 Mountains + 6 Forests, The Earth Crystal and Grizzly Bears x2 in play; Fury (hard cast {3}{R}{R} or evoke), Pyrokinesis in hand; the AI has Grizzly Bears, Hill Giant, Craw Wurm and Mortician Beetle: the damage / counters must be divided (one target takes all, several ask the distribution spinners)
+            for (int i = 0; i < 6; i++) { rigAdd(p, "Mountain", ZoneType.Battlefield, 0); rigAdd(p, "Forest", ZoneType.Battlefield, 0); }
+            for (String name : List.of("The Earth Crystal", "Grizzly Bears", "Grizzly Bears")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Fury", "Pyrokinesis")) rigAdd(p, name, ZoneType.Hand, 0);
+            for (String name : List.of("Grizzly Bears", "Hill Giant", "Craw Wurm", "Mortician Beetle")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
             return;
         }
         if ("gollum".equals(rig)) {      // Swamp x3 in play, Gollum, Riddle Master in hand: casting it must ask odd or even (client parity buttons)
@@ -2296,7 +2304,7 @@ public final class ForgeBackend implements GameBackend {
                 if (e instanceof GameEntity ge) sa.getTargets().add(ge);
                 else if (e instanceof SpellAbility tsa) sa.getTargets().add(tsa);
             }
-            return true;
+            return askDistribution(sa);
         }
         System.out.println("[mtga] asking targets for " + sa + " among " + byId.keySet() + " min=" + min + " max=" + max);
         int abilityGrp = sa.isSpell() ? 0 : abilities.abilityId(sa.getRootAbility(), grp(host));
@@ -2325,6 +2333,54 @@ public final class ForgeBackend implements GameBackend {
             else if (e instanceof SpellAbility tsa) sa.getTargets().add(tsa);
         }
         session.sendGre(req(GREMessageType.GREMessageType_SubmitTargetsResp));
+        return askDistribution(sa);
+    }
+
+    /**
+     * "Divided as you choose" (Fury, Pyrokinesis, The Earth Crystal): once the targets are picked the amount must be split among
+     * them, or the effect finds no share for a target and the game thread dies. A single target takes it all, as many targets as
+     * the amount gets one each; otherwise the client's distribution spinners ask. False if the player cancelled.
+     */
+    private boolean askDistribution(SpellAbility sa) {
+        if (!sa.isDividedAsYouChoose() || !sa.usesTargeting()) return true;
+        List<GameObject> targets = new ArrayList<>();
+        for (GameEntity e : sa.getTargets().getTargetEntities()) targets.add(e);
+        if (targets.isEmpty()) return true;
+        Integer fixed = sa.getDividedValue();
+        int total = fixed != null ? fixed : forge.game.ability.AbilityUtils.calculateAmount(sa.getHostCard(), sa.getParam("DividedAsYouChoose"), sa);
+        Map<GameObject, Integer> shares = new LinkedHashMap<>();
+        if (targets.size() == 1) {
+            shares.put(targets.get(0), total);
+        } else if (targets.size() >= total) {
+            int left = total;
+            for (GameObject t : targets) shares.put(t, left-- > 0 ? 1 : 0);
+        } else {
+            Map<Integer, GameObject> byId = new LinkedHashMap<>();
+            for (GameObject t : targets) byId.put(t instanceof Player p ? StateSync.seat(p, human) : iid((Card) t), t);
+            Card host = sa.getHostCard();
+            GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_DistributionReq);
+            req.getPromptBuilder().setPromptId(PROMPT_FORGE_TEXT).addParameters(textParam("Text", "Divide " + total + " among the targets"));
+            req.getDistributionReqBuilder().setMinAmount(total).setMaxAmount(total).setMinPerTarget(1).setSourceId(iid(promptCard(host)))
+                    .addAllTargetIds(byId.keySet()).addAllValidSelectedTargetIds(byId.keySet());
+            System.out.println("[mtga] asking distribution of " + total + " among " + byId.keySet() + " for " + sa);
+            sendRequest(req);
+            ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_DistributionResp, ClientMessageType.ClientMessageType_CancelActionReq));
+            System.out.println("[mtga] client distribution " + r.toString().replace("\n", " "));
+            if (r.getType() != ClientMessageType.ClientMessageType_DistributionResp) return false;
+            int sum = 0;
+            for (com.wizards.mtga.gre.Distribution d : r.getDistributionResp().getDistributionsList()) {
+                GameObject t = byId.get(d.getInstanceId());
+                if (t == null) continue;
+                shares.merge(t, d.getAmount(), Integer::sum);
+                sum += d.getAmount();
+            }
+            if (sum != total) {      // the client enforces the sum, so this is a malformed answer: split evenly rather than hang
+                shares.clear();
+                int each = total / targets.size(), extra = total % targets.size(), i = 0;
+                for (GameObject t : targets) shares.put(t, each + (i++ < extra ? 1 : 0));
+            }
+        }
+        for (GameObject t : targets) sa.addDividedAllocation(t, shares.getOrDefault(t, 0));
         return true;
     }
 

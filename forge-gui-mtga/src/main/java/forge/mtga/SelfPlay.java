@@ -174,6 +174,9 @@ public final class SelfPlay {
                 System.out.println("  station rig: creature to tap asked " + fc.stationAsked + ", charge counters shown " + fc.stationCounters + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            if ("divide".equals(System.getProperty("mtga.rig"))) {      // the game must survive divided damage / counters (a missing allocation used to kill the game thread)
+                System.out.println("  divide rig: distribution asked " + fc.distributionAsked + ", game finished " + done + (fc.distributionAsked ? "" : "  (not asked this seed: Fury / Pyrokinesis were never cast, try seed 2)"));
+            }
             if ("room".equals(System.getProperty("mtga.rig"))) {      // both halves offered, and the other door offered for unlocking after the right half was cast
                 boolean ok = fc.roomBothOffered && fc.roomUnlockOffered;
                 System.out.println("  room rig: both halves offered " + fc.roomBothOffered + ", unlock offered " + fc.roomUnlockOffered + (ok ? "" : "  (WRONG)"));
@@ -700,7 +703,7 @@ public final class SelfPlay {
         }
 
         boolean samiOffered, roomBothOffered, roomUnlockOffered, costChoiceAsked, offspringAsked;
-        boolean sprawlColorLinked, stationAsked, stationCounters;
+        boolean sprawlColorLinked, stationAsked, stationCounters, distributionAsked;
         int massMoves, maxMillAnimated;
 
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
@@ -752,6 +755,12 @@ public final class SelfPlay {
                 for (String n : List.of("Traumatize", "Doomsday")) {
                     for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
                 }
+            }
+            if ("divide".equals(System.getProperty("mtga.rig"))) {      // rig divide: Pyrokinesis and Fury, then Earth Crystal's counters (targets are picked at random, so the distribution may be skipped for a single target)
+                for (String n : List.of("Pyrokinesis", "Fury")) {
+                    for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
+                }
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Activate && String.valueOf(debugName(a.getInstanceId())).startsWith("The Earth")) return a;
             }
             long want = Long.getLong("selfplay.prefer", 0);
             if (want == 0) return null;
@@ -924,7 +933,8 @@ public final class SelfPlay {
                     if (picked != ts.getSelectedTargets()) problem("SelectTargetsReq selectedTargets != Unselect targets");
                     List<Target> open = new ArrayList<>();
                     for (Target t : ts.getTargetsList()) if (t.getLegalAction() == SelectAction.SelectAction_Select) open.add(t);
-                    if (picked >= Math.max(1, ts.getMinTargets()) || open.isEmpty()) {
+                    int wantPicked = "divide".equals(System.getProperty("mtga.rig")) ? Math.min(3, ts.getMaxTargets()) : Math.max(1, ts.getMinTargets());      // rig divide: three targets for Fury / Pyrokinesis, so the damage has to be divided
+                    if (picked >= wantPicked || open.isEmpty()) {
                         reply(msg(ClientMessageType.ClientMessageType_SubmitTargetsReq));
                         break;
                     }
@@ -1084,6 +1094,20 @@ public final class SelfPlay {
                     NumericInputReq ni = g.getNumericInputReq();
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_NumericInputResp);
                     r.getNumericInputRespBuilder().setNumericInputValue(ni.getMinValue() + rnd.nextInt((int) (ni.getMaxValue() - ni.getMinValue()) + 1));
+                    reply(r);
+                }
+                case GREMessageType_DistributionReq -> {
+                    // divided as you choose (rig divide): split the amount like the client's spinners (each target at least minPerTarget, sum within min..max)
+                    requests++;
+                    distributionAsked = true;
+                    com.wizards.mtga.gre.DistributionReq dr = g.getDistributionReq();
+                    int n = dr.getTargetIdsCount();
+                    if (n < 2 || dr.getMinAmount() < n * dr.getMinPerTarget()) problem("distribution request that needs no distributing");
+                    int[] share = new int[n];
+                    java.util.Arrays.fill(share, (int) dr.getMinPerTarget());
+                    for (int left = (int) dr.getMaxAmount() - n * (int) dr.getMinPerTarget(); left > 0; left--) share[rnd.nextInt(n)]++;
+                    ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_DistributionResp);
+                    for (int i = 0; i < n; i++) r.getDistributionRespBuilder().addDistributions(com.wizards.mtga.gre.Distribution.newBuilder().setInstanceId(dr.getTargetIds(i)).setAmount(share[i]));
                     reply(r);
                 }
                 case GREMessageType_OrderReq -> {
