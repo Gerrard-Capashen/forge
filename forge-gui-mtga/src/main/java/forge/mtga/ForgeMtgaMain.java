@@ -263,6 +263,14 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("emrakul".equals(rig)) {      // test rig: Emrakul, the Promised End (control the opponent's next turn) and Kozilek's Command (X before paying); the opponent has creatures and spells to play
+            green.clear();
+            green.put("Wastes", 40);
+            red.clear();
+            red.put("Mountain", 20);
+            red.put("Hill Giant", 10);
+            red.put("Lightning Bolt", 10);
+        }
         if ("gollum".equals(rig)) {      // test rig: Gollum, Riddle Master (choose odd or even as it enters) vs a passive opponent
             green.clear();
             green.put("Swamp", 40);

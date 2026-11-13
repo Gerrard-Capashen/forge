@@ -485,7 +485,8 @@ public final class StateSync {
             PlayerInfo.Builder pi = PlayerInfo.newBuilder()
                     .setLifeTotal(p.getLife()).setStartingLifeTotal(p.getStartingLife()).setSystemSeatNumber(seat)
                     .setStatus(p.hasLost() ? PlayerStatus.PlayerStatus_PendingLoss : PlayerStatus.PlayerStatus_InGame)
-                    .setMaxHandSize(Math.max(0, p.getMaxHandSize())).setTeamId(seat).setControllerSeatId(seat)
+                    .setMaxHandSize(Math.max(0, p.getMaxHandSize())).setTeamId(seat)
+                    .setControllerSeatId(p.isControlled() ? seatOf(p.getControllingPlayer()) : seat)      // Emrakul: the client shows the controlled player's hand to its controller
                     .setControllerType(ControllerType.ControllerType_Player)
                     .setMulliganCount(mulligans[seat])
                     .setTurnNumber(p.getTurn());
@@ -784,7 +785,9 @@ public final class StateSync {
     private void addZone(Snapshot s, ZoneType t, int seat, Iterable<Card> cards) {
         int zid = zoneId(t, seat);
         ZoneInfo.Builder z = zoneHeader(t, seat, zid);
-        boolean hidden = (t == ZoneType.Library) || (t == ZoneType.Hand && seat != HUMAN_SEAT);
+        boolean controlled = t == ZoneType.Hand && seat != HUMAN_SEAT && ai.isControlled() && ai.getControllingPlayer() == human;      // this seat plays the opponent's turn: its hand is open to us
+        if (controlled) z.addViewers(HUMAN_SEAT);
+        boolean hidden = (t == ZoneType.Library) || (t == ZoneType.Hand && seat != HUMAN_SEAT && !controlled);
         for (Card c : cards) {
             if (c.isImmutable() && !(c.isEmblem() && grpIdOf(c) != 0)) continue;       // Forge effect cards have no client representation; emblems do (built from the card that made them)
             if ((c.getType().isScheme() || c.getType().isVanguard()) && grpIdOf(c) == 0) continue;       // a scheme / avatar the client has no row for (card DB built before Archenemy / Momir)
@@ -985,8 +988,10 @@ public final class StateSync {
         // a library top card that stays revealed is Public: the client's library holder keeps only Public cards face-up (Private ones flicker)
         boolean priv = t == ZoneType.Hand || (t == ZoneType.Library && !keptRevealed(c));
         o.setVisibility(priv ? Visibility.Visibility_Private : Visibility.Visibility_Public);
-        if (t == ZoneType.Hand) o.addViewers(owner);
-        else if (t == ZoneType.Library) o.addViewers(HUMAN_SEAT);
+        if (t == ZoneType.Hand) {
+            o.addViewers(owner);
+            if (owner != HUMAN_SEAT && ai.isControlled() && ai.getControllingPlayer() == human) o.addViewers(HUMAN_SEAT);
+        } else if (t == ZoneType.Library) o.addViewers(HUMAN_SEAT);
         if (!scheme) for (forge.card.CardType.CoreType ct : c.getType().getCoreTypes()) {
             CardType m = enumOrNull(CardType.class, "CardType_" + ct.name());
             if (m != null) o.addCardTypes(m);

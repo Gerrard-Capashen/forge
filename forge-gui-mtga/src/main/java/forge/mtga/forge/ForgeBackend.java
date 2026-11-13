@@ -1075,6 +1075,16 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Grizzly Bears", "Hill Giant", "Craw Wurm", "Mortician Beetle")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
             return;
         }
+        if ("emrakul".equals(rig)) {      // 13 Wastes + Eldrazi Temple in play, Emrakul, the Promised End and Kozilek's Command in hand: cast Emrakul targeting the opponent and play its next turn yourself; Kozilek's Command must ask X before any mana is tapped
+            for (int i = 0; i < 13; i++) rigAdd(p, "Wastes", ZoneType.Battlefield, 0);
+            rigAdd(p, "Eldrazi Temple", ZoneType.Battlefield, 0);
+            for (String name : List.of("Emrakul, the Promised End", "Kozilek's Command")) rigAdd(p, name, ZoneType.Hand, 0);
+            // the controlled player's whole kit: every color of land, a creature with a tap ability, and spells of each kind (targeted, X, modal, instant, sorcery, land drop)
+            for (String land : List.of("Mountain", "Island", "Swamp", "Forest", "Plains")) for (int i = 0; i < 2; i++) rigAdd(opponent, land, ZoneType.Battlefield, 0);
+            for (String name : List.of("Prodigal Sorcerer", "Grizzly Bears")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Hill Giant", "Lightning Bolt", "Fireball", "Counterspell", "Divination", "Giant Growth", "Serra Angel", "Mountain")) rigAdd(opponent, name, ZoneType.Hand, 0);
+            return;
+        }
         if ("gollum".equals(rig)) {      // Swamp x3 in play, Gollum, Riddle Master in hand: casting it must ask odd or even (client parity buttons)
             for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
             rigAdd(p, "Gollum, Riddle Master", ZoneType.Hand, 0);
@@ -2060,11 +2070,16 @@ public final class ForgeBackend implements GameBackend {
         // unforced: when the human just auto-passes, a priority-only change is not sent (it made every step blink
         // twice on the client's phase ladder); a prompt below sends the full decision-time diff with the request
         sendDiff(true, false);
-        if (!full && settings.autoPassTurn()) return null;
-        if (!full && settings.autoPassUnlessOpponentAction() && !respond) return null;
-        if (!full && respond && settings.autoResolveStack()) return null;
-        if (!full && !transientStop && (playable.isEmpty() || !(stop || respond))) return null;
-        if (offered.isEmpty() && !full && !transientStop) return null;      // nothing to do but pass: do not bother the client
+        if (me != human) {
+            // this client is playing the other player's turn (Emrakul): stop in its main phases and to respond, skip the rest
+            if (offered.isEmpty() || !(phase.isMain() || respond)) return null;
+        } else {
+            if (!full && settings.autoPassTurn()) return null;
+            if (!full && settings.autoPassUnlessOpponentAction() && !respond) return null;
+            if (!full && respond && settings.autoResolveStack()) return null;
+            if (!full && !transientStop && (playable.isEmpty() || !(stop || respond))) return null;
+            if (offered.isEmpty() && !full && !transientStop) return null;      // nothing to do but pass: do not bother the client
+        }
         for (Card c : me.getCardsIn(ZoneType.Battlefield)) {      // tap for mana by hand (floating mana)
             for (SpellAbility ma : c.getManaAbilities()) {
                 ma.setActivatingPlayer(me);
@@ -2089,7 +2104,7 @@ public final class ForgeBackend implements GameBackend {
         ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_PerformActionResp, ClientMessageType.ClientMessageType_ConcedeReq,
                 ClientMessageType.ClientMessageType_UndoReq));
         if (r.getType() == ClientMessageType.ClientMessageType_ConcedeReq) {
-            me.concede();
+            human.concede();
             return null;
         }
         if (r.getType() == ClientMessageType.ClientMessageType_UndoReq) {
@@ -3452,6 +3467,15 @@ public final class ForgeBackend implements GameBackend {
             p.setFirstController(new MtgaController(g, p, this));
             return p;
         }
+
+        /**
+         * Emrakul, the Promised End (and any "control target player's next turn"): the client of the controlling seat plays the
+         * other player's turn. Forge's default hands the slave to the AI, which is why the turn was simply skipped for the human.
+         */
+        @Override
+        public forge.game.player.PlayerController createMindSlaveController(Player master, Player slave) {
+            return new MtgaController(slave.getGame(), slave, this);
+        }
     }
 
     /**
@@ -3595,7 +3619,7 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public forge.game.cost.CostDecisionMakerBase getCostDecisionMaker(Player p, SpellAbility ability, boolean effect, String prompt) {
-            return live() && p == human ? new MtgaCostDecision(p, ability, effect) : super.getCostDecisionMaker(p, ability, effect, prompt);
+            return live() && p == player ? new MtgaCostDecision(p, ability, effect) : super.getCostDecisionMaker(p, ability, effect, prompt);
         }
 
         @Override
@@ -3742,20 +3766,26 @@ public final class ForgeBackend implements GameBackend {
                     pendingTapColors = null;
                 }
             }
-            // tap what the client previewed (MTGA pays with the shown solution); the mana floats and Forge's payment uses it first
             List<SpellAbility> taps = pendingTaps;
             Map<SpellAbility, String> tapColors = pendingTapColors == null ? Map.of() : pendingTapColors;
             pendingTaps = null;
             pendingTapColors = null;
-            if (taps != null && !settings.manualMana()) {
-                for (SpellAbility ma : taps) tapPreviewSource(ma, tapColors.get(ma));
-            }
             if (sa.isSpell() && live()) {
                 List<forge.game.spellability.OptionalCostValue> opts = forge.game.GameActionUtil.getOptionalCostValues(sa);
                 if (!opts.isEmpty()) {
                     List<forge.game.spellability.OptionalCostValue> chosen = askOptionalCosts(sa, opts);
                     if (!chosen.isEmpty()) sa = forge.game.GameActionUtil.addOptionalCosts(sa, chosen);
                 }
+            }
+            // X comes before any mana is spent (Kozilek's Command asked for it after the {C}{C} was already tapped);
+            // the limit is what the sources can still pay, so it must be worked out before the preview taps
+            if (sa.isSpell() && live() && sa.costHasManaX() && sa.getXManaCostPaid() == null) {
+                int max = Math.max(0, forge.ai.ComputerUtilMana.determineLeftoverMana(sa, player, false));
+                sa.setXManaCostPaid(askNumber(sa.getHostCard(), 0, max));
+            }
+            // tap what the client previewed (MTGA pays with the shown solution); the mana floats and Forge's payment uses it first
+            if (taps != null && !settings.manualMana()) {
+                for (SpellAbility ma : taps) tapPreviewSource(ma, tapColors.get(ma));
             }
             Card castHost = sa.getHostCard();
             ZoneType castFrom = sa.isSpell() && castHost.getZone() != null ? castHost.getZone().getZoneType() : null;
