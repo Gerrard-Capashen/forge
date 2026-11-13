@@ -1034,6 +1034,11 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Searing Spear", "Impulse")) rigAdd(p, name, ZoneType.Hand, 0);
             return;
         }
+        if ("topreveal".equals(rig)) {      // Oracle of Mul Daya + 4 Forests in play, Lantern of Insight ({3}: both players play with their top card revealed) in hand: the top card of a library must show face-up while an effect lets us look at it
+            for (String name : List.of("Oracle of Mul Daya", "Forest", "Forest", "Forest", "Forest")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            rigAdd(p, "Lantern of Insight", ZoneType.Hand, 0);
+            return;
+        }
         if ("reflect".equals(rig)) {      // Reflecting Pool, Island, Plains and Mountain in play; Lightning Bolt, Wrath of God and Counterspell in hand: the Pool is a mana ability that makes what the other lands could, so it must be offered for a manual tap and pay for spells
             for (String name : List.of("Reflecting Pool", "Island", "Plains", "Mountain")) rigAdd(p, name, ZoneType.Battlefield, 0);
             for (String name : List.of("Lightning Bolt", "Wrath of God", "Counterspell")) rigAdd(p, name, ZoneType.Hand, 0);

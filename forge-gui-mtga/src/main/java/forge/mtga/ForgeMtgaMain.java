@@ -230,6 +230,14 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("topreveal".equals(rig)) {      // test rig: top-of-library reveal effects; mixed libraries so the top cards are recognizable
+            green.clear();
+            green.put("Forest", 20);
+            green.put("Grizzly Bears", 20);
+            red.clear();
+            red.put("Mountain", 20);
+            red.put("Hill Giant", 20);
+        }
         if ("reflect".equals(rig)) {      // test rig: Reflecting Pool must be tappable by hand vs a passive opponent
             green.clear();
             green.put("Forest", 40);

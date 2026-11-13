@@ -635,9 +635,24 @@ public final class StateSync {
 
     /** A revealed card on top of a library keeps showing its face to this client. */
     private boolean keptRevealed(Card c) {
-        if (!knownCards.contains(c.getId()) || !c.isInZone(ZoneType.Library)) return false;
+        if (!c.isInZone(ZoneType.Library)) return false;
         CardCollectionView lib = c.getOwner().getCardsIn(ZoneType.Library);
-        return !lib.isEmpty() && lib.get(0).getId() == c.getId();
+        if (lib.isEmpty() || lib.get(0).getId() != c.getId()) return false;
+        // permanently revealed by an effect (Oracle of Mul Daya, Lantern of Insight: MayLookAt): shown while it is on top
+        if (knownCards.contains(c.getId())) return true;
+        // Forge removes and re-applies static effects while it recomputes them, so a snapshot taken in between sees no permission for a moment
+        // (the card flickered hidden/shown with every diff): once seen, the card stays shown while a permanent with such a static is in play
+        if (c.mayPlayerLook(human)) { lookedTop.add(c.getId()); return true; }
+        return lookedTop.contains(c.getId()) && hasMayLookSource();
+    }
+
+    private final Set<Integer> lookedTop = new HashSet<>();      // library top cards the human was allowed to look at
+
+    private boolean hasMayLookSource() {
+        for (Card bf : game.getCardsIn(ZoneType.Battlefield)) {
+            for (forge.game.staticability.StaticAbility st : bf.getStaticAbilities()) if (st.hasParam("MayLookAt")) return true;
+        }
+        return false;
     }
 
     /** Reveals these cards (hand, library...) to this client with Arena's non-blocking mechanism; {@code revealer}: the player who reveals them. */
@@ -967,7 +982,8 @@ public final class StateSync {
                 }
             }
         }
-        boolean priv = t == ZoneType.Hand || t == ZoneType.Library;
+        // a library top card that stays revealed is Public: the client's library holder keeps only Public cards face-up (Private ones flicker)
+        boolean priv = t == ZoneType.Hand || (t == ZoneType.Library && !keptRevealed(c));
         o.setVisibility(priv ? Visibility.Visibility_Private : Visibility.Visibility_Public);
         if (t == ZoneType.Hand) o.addViewers(owner);
         else if (t == ZoneType.Library) o.addViewers(HUMAN_SEAT);
