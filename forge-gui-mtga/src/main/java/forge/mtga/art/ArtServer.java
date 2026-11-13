@@ -83,6 +83,10 @@ public final class ArtServer {
             } else if (pc != null) {
                 try {
                     file = fetcher.artCrop(pc, ref != null && ref.back()).get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    if (file != null && ref != null && pc.getRules().getSplitType() == forge.card.CardSplitType.Split && !wide(file)) {
+                        File better = wideSplitArt(pc);
+                        if (better != null) file = better;
+                    }
                 } catch (Exception e) {
                     System.err.println("[art] " + id + " (" + pc + "): " + e);
                 }
@@ -102,6 +106,33 @@ public final class ArtServer {
         } catch (Exception e) {
             System.err.println("[art] request failed: " + e);
         }
+    }
+
+    /** A split card's art crop shows both arts side by side (about 2.9:1, 860x301 on Scryfall). */
+    private static boolean wide(File file) {
+        try {
+            java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(file);
+            return img != null && img.getWidth() >= 2f * img.getHeight();
+        } catch (java.io.IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Some printings (promos such as PRM 48586 of Breaking // Entering) have a broken art crop on Scryfall: one rotated slice of the
+     * card scan, rules text included. The first other printing of the card with a proper two-art crop, else null.
+     */
+    private File wideSplitArt(PaperCard bad) {
+        for (PaperCard other : StaticData.instance().getCommonCards().getAllCards(bad.getName())) {
+            if (other.getEdition().equals(bad.getEdition()) && other.getCollectorNumber().equals(bad.getCollectorNumber())) continue;
+            try {
+                File f = fetcher.artCrop(other, false).get(WAIT_SECONDS, TimeUnit.SECONDS);
+                if (f != null && f.isFile() && wide(f)) return f;
+            } catch (Exception e) {
+                System.err.println("[art] " + other + ": " + e);
+            }
+        }
+        return null;
     }
 
     /** One side of a split card's art crop (Scryfall puts both arts side by side in one image), as JPEG. */

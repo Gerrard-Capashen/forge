@@ -320,7 +320,9 @@ public final class CardDbBuilder {
                 try (ResultSet rs = st.executeQuery("select LocId, Loc from Localizations_enUS where Formatted = 1 order by LocId")) {
                     while (rs.next()) if (rs.getString(2) != null) locByText.putIfAbsent(rs.getString(2), rs.getInt(1));
                 }
-                try (ResultSet rs = st.executeQuery("select a.Id, a.TextId, l.Loc from Abilities a join Localizations_enUS l on l.LocId = a.TextId and l.Formatted = 1 order by a.Id")) {
+                try (ResultSet rs = st.executeQuery("select a.Id, a.TextId, l.Loc from Abilities a join Localizations_enUS l on l.LocId = a.TextId and l.Formatted = 1 "
+                        // a planeswalker ability ("+1: Draw a card.") must not be reused for a plain line: the card would show its loyalty badge
+                        + "where a.LoyaltyCost is null or a.LoyaltyCost = '' order by a.Id")) {
                     while (rs.next()) {
                         abilityByText.putIfAbsent(rs.getString(3), rs.getInt(1));
                         abilityText.put(rs.getInt(1), rs.getInt(2));
@@ -519,6 +521,11 @@ public final class CardDbBuilder {
                 p.put("Colors", colors(r.getColor()));
                 p.put("FrameColors", colors(r.getColor()));
                 p.put("AbilityIds", join((String) l.get("AbilityIds"), (String) rt.get("AbilityIds")));
+                // Fuse (ability 103) belongs to the card itself: the client draws it as a bar under both halves and, for a card with it,
+                // shows nothing but that ability in the text box (FormatFuseAbilities), so a half carrying it would lose its own rules text
+                for (Map<String, Object> half : List.of(l, rt)) half.put("AbilityIds", withoutFuse((String) half.get("AbilityIds")));
+                // every Aftermath card of the client (ability 159) has the "aftermath" frame detail on the card and both halves: it picks the rotated half frame
+                if (("," + p.get("AbilityIds")).contains(",159:")) for (Map<String, Object> row : List.of(p, l, rt)) row.put("AdditionalFrameDetails", "aftermath");
                 p.put("Order_CMCWithXLast", main.getManaCost().getCMC() + other.getManaCost().getCMC());
                 insert(p);
                 insert(l);
@@ -542,6 +549,10 @@ public final class CardDbBuilder {
             }
             insert(f);
             insert(b);
+        }
+
+        private static String withoutFuse(String refs) {
+            return Arrays.stream(refs.split(",")).filter(s -> !s.isEmpty() && !s.startsWith("103:")).collect(java.util.stream.Collectors.joining(","));
         }
 
         /** Both halves' ability refs, each once (fuse etc. sit on both halves). */
