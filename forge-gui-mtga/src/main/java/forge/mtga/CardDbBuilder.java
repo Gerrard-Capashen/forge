@@ -147,6 +147,7 @@ public final class CardDbBuilder {
             b.nonPrimaryOnly = true;
             for (PaperCard pc : b.candidates(all, 0, List.of())) if (have.add(pc.getName())) cards.add(pc);
             System.out.println("[carddb] cards the client has only as non-primary rows: " + (cards.size() - before) + " more cards");
+            b.flavor = FlavorText.load(dataDir, cards);
             for (PaperCard pc : cards) b.add(pc);
             int pieces = b.addGamePieces();
             System.out.println("[carddb] command zone pieces: " + pieces);
@@ -286,6 +287,8 @@ public final class CardDbBuilder {
         final Set<String> primaryNames = new HashSet<>();
         /** Candidates are the cards that exist only as non-primary rows (instead of the cards the client lacks). */
         boolean nonPrimaryOnly;
+        /** Flavor text of cards without rules text (the client shows it in the empty text box); null = none. */
+        FlavorText flavor;
         final Map<String, Integer> cardTypes = new HashMap<>(), superTypes = new HashMap<>(), subTypes = new HashMap<>();
         final Map<String, Integer> locByText = new HashMap<>();
         final Map<String, Integer> abilityByText = new HashMap<>();
@@ -589,7 +592,8 @@ public final class CardDbBuilder {
             v.put("TitleId", newLoc(title));
             v.put("AltTitleId", 0);
             v.put("InterchangeableTitleId", 0);
-            v.put("FlavorTextId", 0);
+            String flavorText = flavor == null || !oracle.isBlank() ? null : flavor.get(face.getName());
+            v.put("FlavorTextId", flavorText == null ? 0 : loc(flavorText));
             v.put("ReminderTextId", 0);
             v.put("TypeTextId", loc(typeLine[0]));
             v.put("SubtypeTextId", typeLine.length > 1 ? loc(typeLine[1]) : 0);
