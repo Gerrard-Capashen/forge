@@ -149,6 +149,10 @@ public final class SelfPlay {
                 System.out.println("  sami rig: Wurmcoil Engine was never offered (WRONG)");
                 failed++;
             }
+            if ("reduce".equals(System.getProperty("mtga.rig")) && !fc.reduceChecked) {
+                System.out.println("  reduce rig: Hill Giant was never offered (WRONG)");
+                failed++;
+            }
             if ("phasing".equals(System.getProperty("mtga.rig"))) {      // Kaito phases out (same object -> PhasedOut zone) and back in
                 int out = fc.annCounts.getOrDefault("PhasedOut", 0), in = fc.annCounts.getOrDefault("PhasedIn", 0);
                 boolean ok = out >= 1 && in >= 1;
@@ -702,7 +706,7 @@ public final class SelfPlay {
             return b.toString();
         }
 
-        boolean samiOffered, roomBothOffered, roomUnlockOffered, costChoiceAsked, offspringAsked;
+        boolean reduceChecked, samiOffered, roomBothOffered, roomUnlockOffered, costChoiceAsked, offspringAsked;
         boolean sprawlColorLinked, stationAsked, stationCounters, distributionAsked;
         int massMoves, maxMillAnimated;
 
@@ -843,7 +847,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"reduce".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -870,6 +874,18 @@ public final class SelfPlay {
                             System.out.println("[selfplay] sami rig: Wurmcoil Engine offered, shown cost " + pips + " " + a.getManaCostList().toString().replaceAll("\s+", " "));
                             if (pips != 3) problem("sami rig: Wurmcoil Engine shown at " + pips + " mana, expected 3");
                             samiOffered = true;
+                        }
+                    }
+                    if ("reduce".equals(System.getProperty("mtga.rig"))) {      // rig reduce: Hill Giant {3}{R} costs {2}{R} with Goblin Anarchomancer: shown as 3 mana, auto-tapped with 3 lands (not 4)
+                        for (Action a : acts) {
+                            if (reduceChecked || a.getActionType() != ActionType.ActionType_Cast || !String.valueOf(debugName(a.getInstanceId())).contains("Hill Giant")) continue;
+                            int pips = 0;
+                            for (com.wizards.mtga.gre.ManaRequirement mr : a.getManaCostList()) pips += mr.getCount();
+                            int taps = a.getAutoTapSolution().getAutoTapActionsCount();
+                            System.out.println("[selfplay] reduce rig: Hill Giant shown cost " + pips + ", auto-tap " + taps + " lands");
+                            if (pips != 3) problem("reduce rig: Hill Giant shown at " + pips + " mana, expected 3");
+                            if (taps != 3) problem("reduce rig: Hill Giant auto-taps " + taps + " lands, expected 3");
+                            reduceChecked = true;
                         }
                     }
                     if ("station".equals(System.getProperty("mtga.rig"))) {      // rig station: always activate the Spacecraft

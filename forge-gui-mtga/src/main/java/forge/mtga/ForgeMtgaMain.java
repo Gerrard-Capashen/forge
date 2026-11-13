@@ -230,6 +230,12 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("reduce".equals(rig)) {      // test rig: static cost reduction (Goblin Anarchomancer) must shrink the auto-tapped lands, vs a passive opponent
+            green.clear();
+            green.put("Forest", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("sprawl".equals(rig)) {      // test rig: mana-enhancing Auras (Utopia Sprawl, Wild Growth) vs a passive opponent
             green.clear();
             green.put("Forest", 40);

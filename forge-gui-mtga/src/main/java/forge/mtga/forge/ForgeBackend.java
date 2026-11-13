@@ -1034,6 +1034,13 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Searing Spear", "Impulse")) rigAdd(p, name, ZoneType.Hand, 0);
             return;
         }
+        if ("reduce".equals(rig)) {      // Goblin Anarchomancer, 3 Mountains and an Island in play; Hill Giant ({3}{R}, red: costs {2}{R}) and Lightning Bolt in hand: the reduced cost must be shown and auto-tapped, leaving the spare land untapped
+            for (int i = 0; i < 3; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            rigAdd(p, "Island", ZoneType.Battlefield, 0);
+            rigAdd(p, "Goblin Anarchomancer", ZoneType.Battlefield, 0);
+            for (String name : List.of("Hill Giant", "Lightning Bolt")) rigAdd(p, name, ZoneType.Hand, 0);
+            return;
+        }
         if ("sprawl".equals(rig)) {      // 3 Forests in play; Utopia Sprawl (choose a color), Wild Growth, Lightning Bolt ({R}) and Hill Giant ({3}{R}) in hand: the Auras' extra mana must count for what is castable and auto-tapped
             for (int i = 0; i < 3; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);
             for (String name : List.of("Utopia Sprawl", "Wild Growth", "Lightning Bolt", "Hill Giant")) rigAdd(p, name, ZoneType.Hand, 0);
@@ -1991,7 +1998,7 @@ public final class ForgeBackend implements GameBackend {
             Action.Builder ab = Action.newBuilder().setActionType(at).setGrpId(grp(host)).setInstanceId(iid);
             if (abilityGrp != 0) ab.setAbilityGrpId(abilityGrp);
             if (at != ActionType.ActionType_Play) {
-                SpellAbility costSa = withGrantedAffinity(sa, me);
+                SpellAbility costSa = withReducedCost(sa, me);
                 addManaCost(ab, costSa, iid);
                 // without an auto-tap solution the client treats a costed action as unaffordable: no playable highlight
                 List<SpellAbility> taps = new ArrayList<>();
@@ -2608,7 +2615,8 @@ public final class ForgeBackend implements GameBackend {
 
             GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_PayCostsReq);
             int host = iid(sa.getHostCard());
-            req.getPayCostsReqBuilder().addAllManaCost(manaRequirements(toPay.toManaCost(), host));
+            forge.card.mana.ManaCost unpaid = costOf(toPay);
+            req.getPayCostsReqBuilder().addAllManaCost(manaRequirements(unpaid, host));
             for (SpellAbility ma : sources.values()) {
                 Card src = ma.getHostCard();
                 int srcIid = iid(src);
@@ -2622,7 +2630,9 @@ public final class ForgeBackend implements GameBackend {
             // prompt or button, and the game looks frozen until a land is clicked
             List<SpellAbility> autoTaps = new ArrayList<>();
             Map<SpellAbility, String> autoColors = new java.util.IdentityHashMap<>();
-            com.wizards.mtga.gre.AutoTapSolution sol = ctl instanceof MtgaController ? autoTap(sa, me, autoTaps, autoColors) : null;
+            // the solution must cover what is still unpaid (cost already reduced / part paid), not the printed cost
+            com.wizards.mtga.gre.AutoTapSolution sol = ctl instanceof MtgaController && sa.getPayCosts() != null && sa.getPayCosts().hasManaCost()
+                    ? autoTap(withManaCost(sa, unpaid, me), me, autoTaps, autoColors) : null;
             boolean autoPay = sol != null && !autoTaps.isEmpty() && lastAutoTapComplete && !lastAutoTapDevotion;
             if (autoPay) req.getPayCostsReqBuilder().getAutoTapActionsReqBuilder().addAutoTapSolutions(sol);
             System.out.println("[mtga] manual payment for " + sa.getHostCard() + ": unpaid " + toPay + " sources " + sources.keySet() + (autoPay ? " (auto-pay offered)" : ""));
@@ -3264,6 +3274,50 @@ public final class ForgeBackend implements GameBackend {
             copy.setActivatingPlayer(me);
             return copy;
         } catch (RuntimeException e) {
+            return sa;
+        }
+    }
+
+    /** A mana cost kept as is, generic part included (ManaCostBeingPaid.toManaCost() is not trusted with it). */
+    private static forge.card.mana.ManaCost costOf(forge.game.mana.ManaCostBeingPaid p) {
+        StringBuilder b = new StringBuilder().append(p.getUnpaidShards(forge.card.mana.ManaCostShard.GENERIC));
+        for (forge.card.mana.ManaCostShard s : p.getUnpaidShards()) if (s != forge.card.mana.ManaCostShard.GENERIC) b.append((char) 6).append(s.name());      // ManaCost.serialize's delimiter
+        return forge.card.mana.ManaCost.deserialize(b.toString());
+    }
+
+    /** sa with its mana cost replaced (tap and other cost parts kept). */
+    private static SpellAbility withManaCost(SpellAbility sa, forge.card.mana.ManaCost mc, Player me) {
+        SpellAbility copy = sa.copy();
+        copy.setPayCosts(sa.getPayCosts().copyWithDefinedMana(mc));
+        copy.setActivatingPlayer(me);
+        return copy;
+    }
+
+    /**
+     * The spell as it will really be paid: printed cost with granted affinity and Forge's static cost reductions (Goblin
+     * Anarchomancer, Thronscape Familiar, Ruby Medallion...) applied. The auto-tap preview and the "Pay" button used the printed
+     * cost, so they tapped lands for mana the reduced cost never asked for, and the extra mana floated.
+     */
+    private static SpellAbility withReducedCost(SpellAbility sa, Player me) {
+        sa = withGrantedAffinity(sa, me);
+        try {
+            Card host = sa.getHostCard();
+            if (host == null || sa.isTrigger() || sa.getPayCosts() == null || !sa.getPayCosts().hasManaCost()) return sa;
+            // these adjustments ask the player (delve / convoke / improvise choices): not for a mere preview
+            if (host.hasKeyword(forge.game.keyword.Keyword.DELVE) || host.hasKeyword(forge.game.keyword.Keyword.CONVOKE)
+                    || host.hasKeyword(forge.game.keyword.Keyword.IMPROVISE) || host.hasKeyword(forge.game.keyword.Keyword.ASSIST)
+                    || sa.isOffering() || sa.isEmerge()) return sa;
+            forge.card.mana.ManaCost orig = sa.getPayCosts().getTotalMana();
+            if (orig == null || orig.isNoCost()) return sa;
+            sa.setActivatingPlayer(me);
+            forge.game.mana.ManaCostBeingPaid p = new forge.game.mana.ManaCostBeingPaid(orig);
+            forge.game.cost.CostAdjustment.adjust(p, sa, me, new forge.game.card.CardCollection(), true, false);
+            forge.card.mana.ManaCost reduced = costOf(p);
+            if (reduced.getCMC() == orig.getCMC()) return sa;      // unchanged (the shard order of a rebuilt cost may differ)
+            System.out.println("[mtga] cost reduction for " + host + ": " + orig + " to " + reduced);
+            return withManaCost(sa, reduced, me);
+        } catch (RuntimeException e) {
+            System.out.println("[mtga] cost reduction preview failed for " + sa + ": " + e);
             return sa;
         }
     }
