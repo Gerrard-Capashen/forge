@@ -842,7 +842,7 @@ public class ComputerUtilMana {
                 }
             } else {
                 final CostPayment pay = new CostPayment(saPayment.getPayCosts(), saPayment);
-                if (!pay.payComputerCosts(new AiCostDecision(ai, saPayment, effect, true))) {
+                if (!pay.payComputerCosts(manaCostDecision(ai, saPayment, effect))) {
                     // saList can be a reordered copy, so exclude through the list that is applied on every pass
                     saExcludeList.add(saPayment);
                     continue;
@@ -1093,7 +1093,7 @@ public class ComputerUtilMana {
                 AiCardMemory.rememberCard(ai, chosen.getHostCard(), MemorySet.PAYS_TAP_COST);
             }
             if (!new CostPayment(chosen.getPayCosts(), chosen).
-                    payComputerCosts(new AiCostDecision(ai, chosen, effect, true))) {
+                    payComputerCosts(manaCostDecision(ai, chosen, effect))) {
                 if (chosen.getPayCosts().hasTapCost()) {
                     AiCardMemory.forgetCard(ai, chosen.getHostCard(), MemorySet.PAYS_TAP_COST);
                 }
@@ -2217,5 +2217,16 @@ public class ComputerUtilMana {
             convoke.put(list.get(i), ManaCostShard.GENERIC);
         }
         return convoke;
+    }
+
+    /**
+     * Cost decisions for a mana ability being paid automatically. A real AI decides itself; a player whose controller is not an AI
+     * (the MTGA seat) gets to choose what the cost taps or sacrifices (Relic of Legends: "tap an untapped legendary creature").
+     */
+    private static CostDecisionMakerBase manaCostDecision(final Player ai, final SpellAbility sa, final boolean effect) {
+        if (ai.getController().isAI()) {
+            return new AiCostDecision(ai, sa, effect, true);
+        }
+        return ai.getController().getCostDecisionMaker(ai, sa, effect, null);
     }
 }

@@ -1028,6 +1028,11 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Pinnacle Kill-Ship", "Grizzly Bears", "Hill Giant", "Craw Wurm")) rigAdd(p, name, ZoneType.Battlefield, 0);
             return;
         }
+        if ("relic".equals(rig)) {      // Relic of Legends in play with Isamaru, Akroma, Angel of Fury, Grizzly Bears and Hill Giant; Searing Spear ({1}{R}) and Impulse ({1}{U}, an instant) in hand: the player must pick which legendary creature to tap for mana
+            for (String name : List.of("Relic of Legends", "Isamaru, Hound of Konda", "Akroma, Angel of Fury", "Grizzly Bears", "Hill Giant")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Searing Spear", "Impulse")) rigAdd(p, name, ZoneType.Hand, 0);
+            return;
+        }
         if ("sprawl".equals(rig)) {      // 3 Forests in play; Utopia Sprawl (choose a color), Wild Growth, Lightning Bolt ({R}) and Hill Giant ({3}{R}) in hand: the Auras' extra mana must count for what is castable and auto-tapped
             for (int i = 0; i < 3; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);
             for (String name : List.of("Utopia Sprawl", "Wild Growth", "Lightning Bolt", "Hill Giant")) rigAdd(p, name, ZoneType.Hand, 0);
