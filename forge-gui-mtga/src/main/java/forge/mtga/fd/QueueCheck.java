@@ -38,21 +38,22 @@ public final class QueueCheck {
         PlayQueues q = new PlayQueues();
 
         JsonArray cfg = q.queueConfig(), events = q.eventInfos();
-        int queues = 0, bo3s = PlayQueues.FORMATS.size();       // Bot Play offers a best-of-three event for every format but Brawl
+        int queues = 0, bo3s = PlayQueues.FORMATS.size() * 2;       // Bot Play and Ranked offer a best-of-three event for every format but Brawl
         for (PlayQueues.Mode m : PlayQueues.Mode.values()) queues += PlayQueues.formats(m).size();
-        // Bot Play also has a best-of-three event per format
+        // Bot Play and Ranked also have a best-of-three event per format
         check(cfg.size() == queues && events.size() == queues + bo3s, queues + " queues and " + (queues + bo3s) + " events");
         java.util.Map<String, JsonObject> byName = new java.util.HashMap<>();
         for (int i = 0; i < events.size(); i++) byName.put(events.get(i).getAsJsonObject().get("InternalEventName").getAsString(), events.get(i).getAsJsonObject());
         for (int i = 0; i < cfg.size(); i++) {
             JsonObject c = cfg.get(i).getAsJsonObject(), e = byName.get(cfg.get(i).getAsJsonObject().get("EventNameBO1").getAsString());
             String name = e.get("InternalEventName").getAsString();
-            boolean bot = PlayQueues.modeOf(name) == PlayQueues.Mode.BOT && !PlayQueues.BRAWL.equals(PlayQueues.formatOf(name));
+            PlayQueues.Mode mode = PlayQueues.modeOf(name);
+            boolean bot = (mode == PlayQueues.Mode.BOT || mode == PlayQueues.Mode.RANKED) && !PlayQueues.BRAWL.equals(PlayQueues.formatOf(name));
             String bo3 = c.get("EventNameBO3").isJsonNull() ? null : c.get("EventNameBO3").getAsString();
             check(bot ? (name + PlayQueues.BO3).equals(bo3) : bo3 == null, name + (bot ? " offers a best-of-three event" : " is best-of-one only"));
             if (bot) {
                 JsonObject e3 = byName.get(bo3);
-                check(e3 != null && PlayQueues.isQueueEvent(bo3) && PlayQueues.modeOf(bo3) == PlayQueues.Mode.BOT && PlayQueues.formatOf(bo3).equals(PlayQueues.formatOf(name))
+                check(e3 != null && PlayQueues.isQueueEvent(bo3) && PlayQueues.modeOf(bo3) == mode && PlayQueues.isRanked(bo3) == PlayQueues.isRanked(name) && PlayQueues.formatOf(bo3).equals(PlayQueues.formatOf(name))
                         && "BestOf3".equals(e3.get("WinCondition").getAsString()) && PlayQueues.gamesToWin(bo3) == 2 && PlayQueues.gamesToWin(name) == 1,
                         bo3 + " is a best-of-three queue event of the same format");
             }
@@ -65,7 +66,9 @@ public final class QueueCheck {
         }
         check(PlayQueues.modeOf("BotPlay_Modern") == PlayQueues.Mode.BOT && PlayQueues.modeOf("CasualPlay_Pioneer") == PlayQueues.Mode.CASUAL
                 && PlayQueues.modeOf("BotPlay_Pauper") == PlayQueues.Mode.BOT && PlayQueues.modeOf("RankedPlay_Vintage") == PlayQueues.Mode.RANKED && PlayQueues.modeOf("BotPlay_Brawl") == PlayQueues.Mode.BOT && PlayQueues.modeOf("CasualPlay_Brawl") == PlayQueues.Mode.CASUAL
-                && PlayQueues.modeOf("RankedPlay_Brawl") == null && PlayQueues.modeOf("BotPlay_Brawl_BO3") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
+                && PlayQueues.modeOf("RankedPlay_Brawl") == null && PlayQueues.modeOf("BotPlay_Brawl_BO3") == null
+                && PlayQueues.modeOf("RankedPlay_Modern_BO3") == PlayQueues.Mode.RANKED && PlayQueues.isRanked("RankedPlay_Modern_BO3") && PlayQueues.gamesToWin("RankedPlay_Modern_BO3") == 2
+                && PlayQueues.modeOf("CasualPlay_Modern_BO3") == null && PlayQueues.modeOf("QuickDraft_MID") == null && PlayQueues.modeOf("AIBotMatch") == null,
                 "event names parse");
 
         // Archenemy: Sparky is an event page, not a queue: three stages, each with a complete deck and schemes that exist in Forge and on the client

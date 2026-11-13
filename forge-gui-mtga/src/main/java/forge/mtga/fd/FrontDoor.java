@@ -729,7 +729,7 @@ public final class FrontDoor {
                     System.out.println("[mtga] FD premier: cannot sign in, the match will not count for rank (" + e.getMessage() + ")");
                 }
             }
-            return startOnlineMatch(s, str(course.getAsJsonObject("CourseDeckSummary"), "Name"), cards.human(), cards.printing(),
+            return startOnlineMatch(s, str(course.getAsJsonObject("CourseDeckSummary"), "Name"), cards.human(), cards.printing(), Map.of(),
                     profile.forDeck(course.getAsJsonObject("CourseDeckSummary")), eventName, p, session, cards.companion(), cards.commanders());
         }
         Map<String, Integer> bot = events.botDeck(eventName);
@@ -831,7 +831,7 @@ public final class FrontDoor {
                 System.out.println("[mtga] FD ranked: cannot sign in (" + e.getMessage() + ")");
                 return new Err(7000, "Can't sign in to the matchmaking server, so Ranked is not available right now. Check your internet connection and try again.");
             }
-            return startOnlineMatch(s, deckName, human, printing, me, eventId, p, session, companion, java.util.List.of());
+            return startOnlineMatch(s, deckName, human, printing, PlayQueues.gamesToWin(eventId) > 1 ? sideboard : Map.of(), me, eventId, p, session, companion, java.util.List.of());
         }
         if (ArchenemyEvent.is(eventId)) {
             String problem = deckProblem(ForgeFormats.BRAWL, deck);      // the server's own check, as for a queue
@@ -899,7 +899,7 @@ public final class FrontDoor {
                     System.out.println("[mtga] FD casual: cannot sign in, the opponent will see this name as unverified (" + e.getMessage() + ")");
                 }
             }
-            return startOnlineMatch(s, deckName, human, printing, me, eventId, p, session, companion, commanders);
+            return startOnlineMatch(s, deckName, human, printing, Map.of(), me, eventId, p, session, companion, commanders);
         }
         if (p.host() != null) {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
@@ -932,8 +932,8 @@ public final class FrontDoor {
      * queue (event) and card database. The one who waited longest hosts: its engine runs the game and the other server joins
      * through the coordinator's relay room instead of a TCP connection; from there it is the same as a P2P match.
      */
-    private Object startOnlineMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, PublicProfile me, String eventId, Peer p, String session, String companion,
-                                    java.util.List<String> commanders) {
+    private Object startOnlineMatch(FdSession s, String deckName, Map<String, Integer> human, Map<String, Integer> printing, Map<String, Integer> sideboard, PublicProfile me, String eventId, Peer p,
+                                    String session, String companion, java.util.List<String> commanders) {
         leaveOnlineQueue();
         forge.mtga.peer.Coordinator.Ticket ticket = forge.mtga.peer.Coordinator.queue(p.coordinator(), eventId, p.fingerprint(),
                 forge.mtga.peer.PeerGuest.VERSION, me.playerId(), me.name(), p.friendCode(), session);
@@ -947,13 +947,13 @@ public final class FrontDoor {
             return new Err(7000, "Can't reach the matchmaking server. Check your internet connection and try again.");
         }
         System.out.println("[mtga] FD online: '" + deckName + "' queues in " + eventId + (p.friendCode().isBlank() ? "" : " with friend code " + p.friendCode()));
-        scheduleRankedBot(s, ticket, deckName, human, printing, companion, me, eventId);
+        scheduleRankedBot(s, ticket, deckName, human, printing, sideboard, companion, me, eventId);
         ticket.result().whenComplete((paired, err) -> {
             if (err != null) {
                 if (!ticket.result().isCancelled()) System.out.println("[mtga] FD online: no match (" + err.getMessage() + ")");
                 return;
             }
-            Thread t = new Thread(() -> playOnline(s, paired, human, printing, Map.of(), 1, -1, me, eventId, p, companion, commanders), "online-match");
+            Thread t = new Thread(() -> playOnline(s, paired, human, printing, sideboard, PlayQueues.gamesToWin(eventId), -1, me, eventId, p, companion, commanders), "online-match");
             t.setDaemon(true);
             t.start();
         });
@@ -974,7 +974,7 @@ public final class FrontDoor {
     static Map<String, Integer> momirAiDeck() { return ForgeFormats.momirDeck(); }
 
     private void scheduleRankedBot(FdSession s, forge.mtga.peer.Coordinator.Ticket ticket, String deckName, Map<String, Integer> human, Map<String, Integer> printing,
-                                   String companion, PublicProfile me, String eventId) {
+                                   Map<String, Integer> sideboard, String companion, PublicProfile me, String eventId) {
         boolean momir = PlayQueues.isMomir(eventId);
         if (!momir && (!PlayQueues.isRanked(eventId) || !rankedBotClass(me.rankClass())) || Boolean.getBoolean("mtga.ranked.nobots")) return;
         int secs = momir ? MOMIR_BOT_MIN_SECS + java.util.concurrent.ThreadLocalRandom.current().nextInt(MOMIR_BOT_MAX_SECS - MOMIR_BOT_MIN_SECS + 1)
@@ -986,7 +986,7 @@ public final class FrontDoor {
             try {
                 forge.mtga.AiDecks.Choice ai = momir ? new forge.mtga.AiDecks.Choice("Momir Basic", momirAiDeck()) : aiDeck(PlayQueues.formatOf(eventId));
                 System.out.println("[mtga] FD ranked: nobody in " + eventId + " after " + secs + " s, bot of rank " + me.rankClass() + " " + me.rankTier());
-                launchBotMatch(s, deckName, human, printing, Map.of(), companion, java.util.List.of(), ai, profile.forAi(me.rankClass(), me.rankTier()), me, eventId);
+                launchBotMatch(s, deckName, human, printing, sideboard, companion, java.util.List.of(), ai, profile.forAi(me.rankClass(), me.rankTier()), me, eventId);
             } catch (RuntimeException e) {
                 System.out.println("[mtga] FD ranked: bot fallback failed: " + e);
             }

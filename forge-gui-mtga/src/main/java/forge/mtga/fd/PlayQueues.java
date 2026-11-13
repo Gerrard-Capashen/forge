@@ -56,7 +56,8 @@ final class PlayQueues {
 
     private static String queueType(Mode m, String format) { return BRAWL.equals(format) ? "Brawl" : m.queueType; }
 
-    private static boolean hasBo3(Mode m, String format) { return m == Mode.BOT && !BRAWL.equals(format); }
+    /** Bot Play and Ranked offer a best-of-three event next to the best-of-one one (not Brawl, not Casual Play or Momir yet). */
+    private static boolean hasBo3(Mode m, String format) { return (m == Mode.BOT || m == Mode.RANKED) && !BRAWL.equals(format); }
 
     /** Play-blade queue id of a mode and format, e.g. "bot-standard". */
     static String queueId(Mode mode, String format) { return mode.idPrefix + format.toLowerCase(); }
@@ -66,7 +67,7 @@ final class PlayQueues {
 
     static String eventName(Mode mode, String format) { return mode.prefix + "_" + format; }
 
-    /** The best-of-three variant of a queue event ends with this ("BotPlay_Standard_BO3"); only Bot Play offers one so far. */
+    /** The best-of-three variant of a queue event ends with this ("BotPlay_Standard_BO3", "RankedPlay_Standard_BO3"); see {@link #hasBo3}. */
     static final String BO3 = "_BO3";
 
     static boolean isBo3(String eventName) { return eventName != null && eventName.endsWith(BO3); }
@@ -75,7 +76,7 @@ final class PlayQueues {
     private static String baseName(String eventName) { return isBo3(eventName) ? eventName.substring(0, eventName.length() - BO3.length()) : eventName; }
 
     /** Games to win in a queue event's match: 2 in a best-of-three, else 1. */
-    static int gamesToWin(String eventName) { return isBo3(eventName) && modeOf(eventName) == Mode.BOT ? 2 : 1; }
+    static int gamesToWin(String eventName) { return isBo3(eventName) && modeOf(eventName) != null ? 2 : 1; }
 
     /** The mode of a queue event name, null if it is not one of ours. */
     static Mode modeOf(String eventName) {
