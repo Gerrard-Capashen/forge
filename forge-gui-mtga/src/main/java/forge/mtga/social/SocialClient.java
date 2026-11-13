@@ -54,6 +54,8 @@ public final class SocialClient {
     private final List<Consumer<JsonObject>> challengeListeners = new CopyOnWriteArrayList<>();
     private final ArrayDeque<JsonObject> messages = new ArrayDeque<>();      // friend messages for the client, newest last: {seq, from, payload, at}
     private long messageSeq;
+    private final ArrayDeque<JsonObject> notices = new ArrayDeque<>();       // messages this server wants the client to show in a popup: {seq, title, text, at}
+    private long noticeSeq;
 
     public SocialClient(Accounts accounts, FileProfileStore profiles) {
         this.accounts = accounts;
@@ -99,6 +101,10 @@ public final class SocialClient {
             messages.removeIf(m -> now - m.get("at").getAsLong() > 120_000);
             for (JsonObject m : messages) msgs.add(m);
             o.add("messages", msgs);
+            JsonArray ns = new JsonArray();
+            notices.removeIf(m -> now - m.get("at").getAsLong() > 120_000);
+            for (JsonObject m : notices) ns.add(m);
+            o.add("notices", ns);
         }
         Profile p = profiles.load();
         JsonObject self = new JsonObject();
@@ -106,6 +112,25 @@ public final class SocialClient {
         self.addProperty("fullName", p.clientName());
         o.add("self", self);
         return o;
+    }
+
+    /**
+     * A message for the player: the bridge shows each notice once as the client's own popup (it reads them from {@link #snapshot()}).
+     * For what would otherwise only reach the server log, such as a challenge that can't start because the two players run different versions.
+     */
+    public void notice(String title, String text) {
+        JsonObject n = new JsonObject();
+        n.addProperty("title", title);
+        n.addProperty("text", text);
+        n.addProperty("at", System.currentTimeMillis());
+        synchronized (lock) {
+            n.addProperty("seq", ++noticeSeq);
+            notices.addLast(n);
+            while (notices.size() > 10) notices.removeFirst();
+            version++;
+            lock.notifyAll();
+        }
+        System.out.println("[mtga] social: notice for the client: " + title);
     }
 
     /** Waits until the version is above {@code since} (or the time is up) and answers the snapshot (long poll). */

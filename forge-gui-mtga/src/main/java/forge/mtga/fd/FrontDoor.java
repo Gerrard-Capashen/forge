@@ -1035,6 +1035,14 @@ public final class FrontDoor {
             forge.mtga.peer.PeerGuest.Joined j = forge.mtga.peer.PeerGuest.joinOnline(link, p.fingerprint(), eventId, me, human, printing, sideboard, companion, commanders);
             if (j.error() != null) {
                 System.out.println("[mtga] FD online: join failed: " + j.error());
+                // the client would only wait: say why in a popup (a version mismatch gets the instructions to update both sides)
+                forge.mtga.social.SocialClient sc = social;
+                if (sc != null) {
+                    boolean versions = j.error().contains("card database") || j.error().contains("protocol");
+                    sc.notice(versions ? ChallengeService.VERSIONS_TITLE : "The match could not start",
+                            "The match with " + paired.opponent() + " could not start: " + j.error() + "."
+                                    + (versions ? "\n\n" + ChallengeService.VERSIONS_HELP : ""));
+                }
                 return;
             }
             j.backend().setOutcomeListener(outcomeReport(paired, eventId));

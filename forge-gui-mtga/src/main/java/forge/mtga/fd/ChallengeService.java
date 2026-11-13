@@ -151,6 +151,12 @@ final class ChallengeService {
         b.addProperty("artId", intOf(summary, "DeckArtId"));
         b.addProperty("tileId", intOf(summary, "DeckTileId"));
         b.add("cosmetics", cosmetics(fd.profile().forDeck(summary)));
+        // the coordinator compares these between the players and says so ("versions") instead of letting the match fail at the handshake
+        FrontDoor.Peer peer = fd.peer();
+        if (peer != null) {
+            b.addProperty("fp", peer.fingerprint());
+            b.addProperty("v", String.valueOf(forge.mtga.peer.PeerGuest.VERSION));
+        }
         return post(req.getChallengeId(), "ready", b);
     }
 
@@ -200,8 +206,35 @@ final class ChallengeService {
                 notify(s, "ChallengeClose", m.get("id").getAsString(), null, 0);
             }
             case "match" -> startMatch(s, m);
+            case "versions" -> social.notice(VERSIONS_TITLE, versionsText(m.getAsJsonArray("players")));
             default -> { }
         }
+    }
+
+    static final String VERSIONS_TITLE = "Different versions";
+
+    /** What to do when the players' servers run different card databases or peer protocols: the same MTGA build and MTGA Forge release on both PCs. */
+    static String versionsText(JsonArray players) {
+        StringBuilder t = new StringBuilder("This match can't start: you and your friend are not on the same version of MTG Arena and MTGA Forge.\n\n");
+        if (players != null) {
+            for (JsonElement e : players) {
+                JsonObject p = e.getAsJsonObject();
+                t.append(s(p, "fullName")).append(": ").append(versionCode(s(p, "fp"), s(p, "v"))).append('\n');
+            }
+            t.append('\n');
+        }
+        return t.append(VERSIONS_HELP).toString();
+    }
+
+    static final String VERSIONS_HELP = "On both PCs: close the game, open the MTGA Forge launcher (it updates itself to the newest release), "
+            + "start MTG Arena once from Steam or its own launcher so it installs any update, then press Check again in the MTGA Forge launcher "
+            + "and Prepare my game if it asks. The version codes of both players must match.";
+
+    /** "1a2b3c4d / 2": the start of the card database's hash and the peer protocol, for players to compare. */
+    static String versionCode(String fp, String v) {
+        if (fp == null || fp.isEmpty()) return "an older MTGA Forge release";
+        String h = fp.replaceFirst("^Raw_CardDatabase_", "").replaceFirst("\\.mtga$", "");
+        return (h.length() > 8 ? h.substring(0, 8) : h) + " / " + (v == null || v.isEmpty() ? "?" : v);
     }
 
     private void notify(FdSession s, String type, String id, JsonObject challenge, int countdown) {
