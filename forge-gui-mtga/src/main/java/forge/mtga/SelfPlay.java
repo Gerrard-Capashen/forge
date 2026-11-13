@@ -169,6 +169,11 @@ public final class SelfPlay {
                 System.out.println("  sprawl rig: chosen color linked on Utopia Sprawl " + fc.sprawlColorLinked + (fc.sprawlColorLinked ? "" : "  (WRONG)"));
                 if (!fc.sprawlColorLinked) failed++;
             }
+            if ("station".equals(System.getProperty("mtga.rig"))) {      // the player picks the creature to tap, and the charge counters are shown on the Spacecraft
+                boolean ok = fc.stationAsked && fc.stationCounters;
+                System.out.println("  station rig: creature to tap asked " + fc.stationAsked + ", charge counters shown " + fc.stationCounters + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if ("room".equals(System.getProperty("mtga.rig"))) {      // both halves offered, and the other door offered for unlocking after the right half was cast
                 boolean ok = fc.roomBothOffered && fc.roomUnlockOffered;
                 System.out.println("  room rig: both halves offered " + fc.roomBothOffered + ", unlock offered " + fc.roomUnlockOffered + (ok ? "" : "  (WRONG)"));
@@ -695,7 +700,7 @@ public final class SelfPlay {
         }
 
         boolean samiOffered, roomBothOffered, roomUnlockOffered, costChoiceAsked, offspringAsked;
-        boolean sprawlColorLinked;
+        boolean sprawlColorLinked, stationAsked, stationCounters;
         int massMoves, maxMillAnimated;
 
         private String debugName(int id) { return backend instanceof ForgeBackend fb ? fb.debugName(id) : "?" + id; }
@@ -829,7 +834,7 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -856,6 +861,15 @@ public final class SelfPlay {
                             System.out.println("[selfplay] sami rig: Wurmcoil Engine offered, shown cost " + pips + " " + a.getManaCostList().toString().replaceAll("\s+", " "));
                             if (pips != 3) problem("sami rig: Wurmcoil Engine shown at " + pips + " mana, expected 3");
                             samiOffered = true;
+                        }
+                    }
+                    if ("station".equals(System.getProperty("mtga.rig"))) {      // rig station: always activate the Spacecraft
+                        for (Action a : acts) {
+                            if (a.getActionType() != ActionType.ActionType_Activate || !String.valueOf(debugName(a.getInstanceId())).contains("Kill-Ship")) continue;
+                            ClientToGREMessage.Builder rr = msg(ClientMessageType.ClientMessageType_PerformActionResp);
+                            rr.getPerformActionRespBuilder().addActions(a);
+                            reply(rr);
+                            return;
                         }
                     }
                     if ("room".equals(System.getProperty("mtga.rig"))) {      // rig room: both halves of the Room in hand are offered; once cast, the other door can be unlocked
@@ -1085,6 +1099,9 @@ public final class SelfPlay {
                     if (g.getPayCostsReq().hasEffectCostReq()) {      // non-mana cost choice (ninjutsu return, sacrifice...)
                         SelectNReq sel = g.getPayCostsReq().getEffectCostReq().getCostSelection();
                         if (sel.getIdsCount() < sel.getMinSel()) problem("cost selection with fewer options than required");
+                        if (String.valueOf(debugName(sel.getSourceId())).contains("Kill-Ship")) {      // rig station: the three creatures are offered, not one picked for the player
+                            if (sel.getIdsCount() == 3 && sel.getMinSel() == 1 && sel.getMaxSel() == 1) stationAsked = true;
+                        }
                         for (int id : sel.getIdsList()) {
                             GameObjectInfo o = objs.get(id);
                             if (o == null || o.getVisibility() == Visibility.Visibility_Hidden) problem("cost selection option not visible");
@@ -1331,6 +1348,7 @@ public final class SelfPlay {
                         && p.getDetailsList().stream().anyMatch(d -> d.getKey().equals("ChooseLinkType") && d.getValueStringCount() > 0 && "Color".equals(d.getValueString(0)))) {
                     sprawlColorLinked = true;      // rig sprawl: the chosen color is shown on the Aura
                 }
+                if (p.getType(0) == AnnotationType.AnnotationType_Counter && p.getAffectedIdsList().stream().anyMatch(id -> String.valueOf(debugName(id)).contains("Kill-Ship"))) stationCounters = true;      // rig station
                 if (p.getType(0) == AnnotationType.AnnotationType_Attachment) {      // equipment / aura -> the permanent it is attached to, both on the battlefield
                     ATTACH_SEEN.incrementAndGet();
                     for (int id : List.of(p.getAffectorId(), p.getAffectedIds(0))) {

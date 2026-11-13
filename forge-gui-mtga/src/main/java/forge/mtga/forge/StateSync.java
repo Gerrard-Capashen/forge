@@ -1035,6 +1035,21 @@ public final class StateSync {
             }
             AnnotationInfo.Builder dev = devotionWord(c, iid);
             if (dev != null) s.persistent.put("devotion:" + iid, dev);
+            if (c.hasKeyword(forge.game.keyword.Keyword.STATION)) {      // Spacecraft: Arena hides the charge counter icon on Station cards and shows the charge as a badge, one threshold per level
+                java.util.TreeSet<Integer> levels = new java.util.TreeSet<>();
+                java.util.regex.Pattern lv = java.util.regex.Pattern.compile("counters_GE(\\d+)_CHARGE");
+                for (forge.game.staticability.StaticAbility st : c.getStaticAbilities()) {
+                    java.util.regex.Matcher m = lv.matcher(st.getParamOrDefault("Affected", ""));
+                    if (m.find()) levels.add(Integer.parseInt(m.group(1)));
+                }
+                int charge = c.getCounters(forge.game.card.CounterEnumType.CHARGE);
+                for (int level : levels) {
+                    s.persistent.put("station:" + iid + ":" + level, AnnotationInfo.newBuilder().setAffectorId(iid).addAffectedIds(iid)
+                            .addType(AnnotationType.AnnotationType_AbilityWordActive)
+                            .addDetails(KeyValuePairInfo.newBuilder().setKey("AbilityWordName").setType(KeyValuePairValueType.KeyValuePairValueType_string).addValueString("StationLevelThreshold"))
+                            .addDetails(intDetail("value", charge)).addDetails(intDetail("threshold", level)));
+                }
+            }
             if (c.hasChosenEvenOdd()) {      // "choose odd or even" (Gollum, Riddle Master): the client prints the choice in blue in the text box
                 s.persistent.put("link-parity:" + iid, linkChoose(iid, "Parity", c.getChosenEvenOdd() == forge.game.EvenOdd.Odd ? 1 : 0));
             }

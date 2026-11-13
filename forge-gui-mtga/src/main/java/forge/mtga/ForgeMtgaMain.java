@@ -218,6 +218,12 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("station".equals(rig)) {      // test rig: a Spacecraft (Station) with creatures to tap vs a passive opponent
+            green.clear();
+            green.put("Forest", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("sprawl".equals(rig)) {      // test rig: mana-enhancing Auras (Utopia Sprawl, Wild Growth) vs a passive opponent
             green.clear();
             green.put("Forest", 40);

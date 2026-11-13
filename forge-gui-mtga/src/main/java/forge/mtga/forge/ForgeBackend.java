@@ -1024,6 +1024,10 @@ public final class ForgeBackend implements GameBackend {
             rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
             return;
         }
+        if ("station".equals(rig)) {      // Pinnacle Kill-Ship (Station 7) in play with Grizzly Bears (2), Hill Giant (3) and Craw Wurm (6) to tap for it: the player must pick the creature and the charge counters must show
+            for (String name : List.of("Pinnacle Kill-Ship", "Grizzly Bears", "Hill Giant", "Craw Wurm")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            return;
+        }
         if ("sprawl".equals(rig)) {      // 3 Forests in play; Utopia Sprawl (choose a color), Wild Growth, Lightning Bolt ({R}) and Hill Giant ({3}{R}) in hand: the Auras' extra mana must count for what is castable and auto-tapped
             for (int i = 0; i < 3; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);
             for (String name : List.of("Utopia Sprawl", "Wild Growth", "Lightning Bolt", "Hill Giant")) rigAdd(p, name, ZoneType.Hand, 0);
@@ -3356,6 +3360,43 @@ public final class ForgeBackend implements GameBackend {
                 }
             }
             return super.visit(cost);
+        }
+
+        /**
+         * "Tap an untapped creature you control" (Station) and "tap any number of creatures with total power N" (Crew, Saddle):
+         * the player picks which. The AI path would choose the weakest creature itself, which also hid the counters Station adds.
+         */
+        @Override
+        public forge.game.cost.PaymentDecision visit(forge.game.cost.CostTapType cost) {
+            String type = cost.getType();
+            if (type.contains("sharesCreatureTypeWith")) return super.visit(cost);
+            int power = -1;
+            if (type.contains("+withTotalPowerGE")) {
+                String[] split = type.split("\\+withTotalPowerGE");
+                if (!split[1].matches("\\d+")) return super.visit(cost);
+                power = Integer.parseInt(split[1]);
+                type = split[0];
+            }
+            List<Card> v = new ArrayList<>(forge.game.card.CardLists.getValidCards(new CardCollection(player.getCardsIn(ZoneType.Battlefield)), type.split(";"), player, source, ability));
+            java.util.function.Predicate<Card> canPay = power >= 0 && ability.isCrew() ? forge.game.card.CardPredicates.CAN_CREW : forge.game.card.CardPredicates.CAN_TAP;
+            v.removeIf(c -> !canPay.test(c));
+            if (!cost.canTapSource) v.remove(source);
+            if (power >= 0) {
+                v.removeIf(c -> c.getNetPower() <= 0);
+                List<Integer> weights = new ArrayList<>();
+                int total = 0;
+                for (Card c : v) { weights.add(c.getNetPower()); total += c.getNetPower(); }
+                if (total < power) return super.visit(cost);
+                CardCollection chosen = askCostSelection(v, 1, v.size(), PROMPT_CHOOSE_CARD, source, weights, power);
+                if (chosen.isEmpty()) return null;      // cancelled
+                int sum = 0;
+                for (Card c : chosen) sum += c.getNetPower();
+                return sum >= power ? forge.game.cost.PaymentDecision.card(chosen) : null;
+            }
+            int n = cost.getAbilityAmount(ability);
+            if (n <= 0 || v.size() < n) return super.visit(cost);      // always ask, even for the last creature: a silent tap is how Station took the only untapped attacker
+            CardCollection chosen = askCostSelection(v, n, PROMPT_CHOOSE_CARD, source);
+            return chosen.size() == n ? forge.game.cost.PaymentDecision.card(chosen) : null;
         }
 
         @Override
