@@ -892,6 +892,10 @@ public final class ForgeBackend implements GameBackend {
         if (zone == ZoneType.Battlefield) {
             game.getAction().moveTo(zone, c, null, forge.game.ability.AbilityKey.newMap());
             if (loyalty > 0) c.setCounters(forge.game.card.CounterEnumType.LOYALTY, loyalty);
+            if (c.isBattle()) {      // a hand-placed battle skips its ETB replacements: no defense counters (it would die at once) and no protector
+                c.setCounters(forge.game.card.CounterEnumType.DEFENSE, Integer.parseInt(c.getCurrentState().getBaseDefense()));
+                c.setProtectingPlayer(p == opponent ? human : opponent);
+            }
             c.setSickness(false);
         } else {
             p.getZone(zone).add(c);
@@ -1037,6 +1041,14 @@ public final class ForgeBackend implements GameBackend {
         if ("topreveal".equals(rig)) {      // Oracle of Mul Daya + 4 Forests in play, Lantern of Insight ({3}: both players play with their top card revealed) in hand: the top card of a library must show face-up while an effect lets us look at it
             for (String name : List.of("Oracle of Mul Daya", "Forest", "Forest", "Forest", "Forest")) rigAdd(p, name, ZoneType.Battlefield, 0);
             rigAdd(p, "Lantern of Insight", ZoneType.Hand, 0);
+            return;
+        }
+        if ("battle".equals(rig)) {      // battles as attack targets: you hold Invasion of Zendikar (the AI protects it) and two Grizzly Bears that can attack it; the AI holds Invasion of Ikoria (you protect it) and a Hill Giant that may attack it
+            for (int i = 0; i < 3; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 2; i++) rigAdd(p, "Grizzly Bears", ZoneType.Battlefield, 0);
+            rigAdd(p, "Invasion of Zendikar", ZoneType.Battlefield, 0);
+            rigAdd(opponent, "Invasion of Ikoria", ZoneType.Battlefield, 0);
+            rigAdd(opponent, "Hill Giant", ZoneType.Battlefield, 0);
             return;
         }
         if ("reflect".equals(rig)) {      // Reflecting Pool, Island, Plains and Mountain in play; Lightning Bolt, Wrath of God and Counterspell in hand: the Pool is a mana ability that makes what the other lands could, so it must be offered for a manual tap and pay for spells
@@ -2118,9 +2130,10 @@ public final class ForgeBackend implements GameBackend {
     // ---- combat ------------------------------------------------------------------------------------------------
 
     void askAttackers(Player me, forge.game.combat.Combat combat) {
-        // every defender the client can name: the opposing player and their planeswalkers (battles have no recipient type)
+        // every defender the client can name: the opposing player, planeswalkers and battles (a battle goes out as a PlanesWalker
+        // recipient: the client only matches the recipient's entity id, never the card type)
         List<GameEntity> defenders = new ArrayList<>();
-        for (GameEntity e : combat.getDefenders()) if (e instanceof Player || (e instanceof Card && ((Card) e).isPlaneswalker())) defenders.add(e);
+        for (GameEntity e : combat.getDefenders()) if (e instanceof Player || (e instanceof Card && (((Card) e).isPlaneswalker() || ((Card) e).isBattle()))) defenders.add(e);
         if (defenders.isEmpty()) return;
         Map<Card, List<GameEntity>> legal = new java.util.LinkedHashMap<>();
         for (Card c : me.getCreaturesInPlay()) {
@@ -2160,7 +2173,7 @@ public final class ForgeBackend implements GameBackend {
         session.sendGre(req(GREMessageType.GREMessageType_SubmitAttackersResp));
     }
 
-    /** The default target of a mass or auto attack: the player when legal, else the first planeswalker. */
+    /** The default target of a mass or auto attack: the player when legal, else the first planeswalker or battle. */
     private static GameEntity preferredDefender(List<GameEntity> options) {
         for (GameEntity d : options) if (d instanceof Player) return d;
         return options.get(0);
