@@ -1090,6 +1090,19 @@ public final class ForgeBackend implements GameBackend {
             rigAdd(p, "Gollum, Riddle Master", ZoneType.Hand, 0);
             return;
         }
+        if ("cam".equals(rig)) {      // Sewer-veillance Cam + 4 Islands in hand/play, my tapped Grizzly Bears and an untapped Hill Giant; the AI has an untapped Craw Wurm and a tapped Grizzly Bears:
+                                      // the enters trigger must ask tap or untap for any of them (it only ever tapped the opponent's / untapped mine), and so must the sacrifice-free leave trigger
+            for (int i = 0; i < 5; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
+            rigAdd(p, "Sewer-veillance Cam", ZoneType.Hand, 0);
+            rigAdd(p, "Sewer-veillance Cam", ZoneType.Hand, 0);
+            rigAdd(p, "Grizzly Bears", ZoneType.Battlefield, 0);
+            for (Card c : p.getCardsIn(ZoneType.Battlefield)) if (c.getName().equals("Grizzly Bears")) c.setTapped(true);
+            rigAdd(p, "Hill Giant", ZoneType.Battlefield, 0);
+            rigAdd(opponent, "Craw Wurm", ZoneType.Battlefield, 0);
+            rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
+            for (Card c : opponent.getCardsIn(ZoneType.Battlefield)) if (c.getName().equals("Grizzly Bears")) c.setTapped(true);
+            return;
+        }
         if ("ghast".equals(rig)) {      // 2 Shambling Ghast (dies: choose one, -1/-1 on an opponent's creature or a Treasure) + Carrion Feeder and Bloodthrone Vampire
                                         // (sacrifice a creature, free / {B}) in play; the AI has two Grizzly Bears, a Hill Giant and a Mortician Beetle to target
             for (int i = 0; i < 4; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
@@ -1757,6 +1770,26 @@ public final class ForgeBackend implements GameBackend {
         if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp || r.getSelectNResp().getIdsCount() == 0) return null;
         System.out.println("[mtga] client chose parity " + r.getSelectNResp().getIdsList());
         return r.getSelectNResp().getIds(0) == 1;
+    }
+
+    // client prompt ids "Tap or untap target creature?" / "... artifact or creature?" / "... nonland permanent?" / "... permanent?"
+    private static final int PROMPT_TAP_UNTAP_CREATURE = 1349, PROMPT_TAP_UNTAP_ARTIFACT_CREATURE = 1503,
+            PROMPT_TAP_UNTAP_NONLAND = 5384, PROMPT_TAP_UNTAP_PERMANENT = 2621;
+
+    /**
+     * "Tap or untap target creature" (Sewer-veillance Cam, Aphetto Alchemist, Cryptic Coat...). Forge's default answer taps the
+     * opponent's permanents and untaps your own, so the player never got to choose. The client's yes/no question
+     * (OptionalActionMessage, prompt "Tap or untap target ...?") answers true = tap, false = untap. The question is only asked when
+     * there is a target; without one it taps.
+     */
+    boolean askTapOrUntap(SpellAbility sa) {
+        Card target = null;
+        if (sa.usesTargeting()) for (Card c : sa.getTargets().getTargetCards()) { target = c; break; }
+        if (target == null) return true;
+        boolean creature = target.isCreature(), artifact = target.isArtifact(), land = target.isLand();
+        int prompt = creature && !artifact ? PROMPT_TAP_UNTAP_CREATURE : creature ? PROMPT_TAP_UNTAP_ARTIFACT_CREATURE
+                : !land ? PROMPT_TAP_UNTAP_NONLAND : PROMPT_TAP_UNTAP_PERMANENT;
+        return askOptional(sa.getHostCard(), prompt, List.of(), "tap or untap " + target);
     }
 
     /** GRE CardColor value of a Forge color mask (Colorless 0, White 1, Blue 2, Black 3, Red 4, Green 5). */
@@ -3992,6 +4025,9 @@ public final class ForgeBackend implements GameBackend {
             if (live() && kindOfChoice == forge.game.player.PlayerController.BinaryChoiceType.OddsOrEvens) {
                 Boolean odd = askParity(sa == null ? null : sa.getHostCard());
                 if (odd != null) return odd;
+            }
+            if (live() && kindOfChoice == forge.game.player.PlayerController.BinaryChoiceType.TapOrUntap && sa != null) {
+                return askTapOrUntap(sa);
             }
             return super.chooseBinary(sa, question, kindOfChoice, defaultChoice);
         }
