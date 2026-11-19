@@ -190,6 +190,20 @@ public final class SelfPlay {
                 System.out.println("  room rig: both halves offered " + fc.roomBothOffered + ", unlock offered " + fc.roomUnlockOffered + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            String rig = String.valueOf(System.getProperty("mtga.rig"));
+            if (rig.equals("flail") || rig.equals("butcher")) {      // the cost / keyword choice reached the client as choice buttons
+                System.out.println("  " + rig + " rig: text choices asked " + TEXT_CHOICES.get() + (TEXT_CHOICES.get() > 0 ? "" : "  (WRONG)"));
+                if (TEXT_CHOICES.get() == 0) failed++;
+            }
+            if (rig.equals("gemstone")) {      // on the draw, Gemstone Caverns is offered from the opening hand with a readable question
+                System.out.println("  gemstone rig: opening-hand question " + GEMSTONE_ASKED.get() + (GEMSTONE_ASKED.get() > 0 ? "" : "  (WRONG)"));
+                if (GEMSTONE_ASKED.get() == 0) failed++;
+            }
+            if (rig.equals("wish")) {      // Wish offers a sideboard card to play; Burning Wish / learn show sideboard cards in the browser
+                boolean ok = WISH_PLAYED.get() > 0 && SIDEBOARD_SELECTS.get() > 0;
+                System.out.println("  wish rig: sideboard card played " + WISH_PLAYED.get() + ", sideboard cards in a selection " + SIDEBOARD_SELECTS.get() + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if (!done || !fc.problems.isEmpty()) failed++;
             backend.onDisconnect(fc);
         }
@@ -651,6 +665,9 @@ public final class SelfPlay {
     static final java.util.concurrent.atomic.AtomicInteger ATTACH_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static CardDb TITLE_DB;
     static final java.util.concurrent.atomic.AtomicInteger CARD_NAMES = new java.util.concurrent.atomic.AtomicInteger();
+    /** Rigs flail / butcher / gemstone / wish: text choices answered, Gemstone Caverns' opening-hand question, sideboard cards offered / played. */
+    static final java.util.concurrent.atomic.AtomicInteger TEXT_CHOICES = new java.util.concurrent.atomic.AtomicInteger(), GEMSTONE_ASKED = new java.util.concurrent.atomic.AtomicInteger(),
+            SIDEBOARD_SELECTS = new java.util.concurrent.atomic.AtomicInteger(), WISH_PLAYED = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger CARD_CHOICES = new java.util.concurrent.atomic.AtomicInteger();
     /** Undo presses by request type (-Dselfplay.undo) and payment prompts that offered the auto-pay button. */
     static final Map<String, Integer> UNDOS = new java.util.concurrent.ConcurrentHashMap<>();
@@ -756,6 +773,24 @@ public final class SelfPlay {
                     for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
                 }
             }
+            if ("flail".equals(System.getProperty("mtga.rig"))) {      // rig flail: equip Bloodthorn Flail (which cost: asked)
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Activate && String.valueOf(debugName(a.getInstanceId())).startsWith("Bloodthorn")) return a;
+            }
+            if ("butcher".equals(System.getProperty("mtga.rig"))) {      // rig butcher: sacrifice a creature to Butcher of the Horde (which keyword: asked)
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Activate && String.valueOf(debugName(a.getInstanceId())).startsWith("Butcher")) return a;
+            }
+            if ("wish".equals(System.getProperty("mtga.rig"))) {      // rig wish: Wish, then a card from the sideboard, then Burning Wish and Igneous Inspiration (learn)
+                for (Action a : acts) {
+                    String n = String.valueOf(debugName(a.getInstanceId()));
+                    if ((a.getActionType() == ActionType.ActionType_Cast || a.getActionType() == ActionType.ActionType_Play) && (n.startsWith("Lava Spike") || n.startsWith("Fireball"))) {
+                        if (n.endsWith("Sideboard")) WISH_PLAYED.incrementAndGet();      // played from outside the game (not fetched to hand by Burning Wish)
+                        return a;
+                    }
+                }
+                for (String n : List.of("Wish", "Burning Wish", "Igneous")) {
+                    for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
+                }
+            }
             if ("phasing".equals(System.getProperty("mtga.rig"))) {      // rig phasing: cast Kaito Shizuki
                 for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith("Kaito")) return a;
             }
@@ -851,7 +886,8 @@ public final class SelfPlay {
                 }
                 case GREMessageType_MulliganReq -> {
                     requests++;
-                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"reduce".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig")) && !"reflect".equals(System.getProperty("mtga.rig"));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                    boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"reduce".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig")) && !"reflect".equals(System.getProperty("mtga.rig"))
+                            && !java.util.Set.of("flail", "butcher", "gemstone", "wish").contains(String.valueOf(System.getProperty("mtga.rig")));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -1050,8 +1086,13 @@ public final class SelfPlay {
                             if (o == null || o.getVisibility() == Visibility.Visibility_Hidden) problem("Explore card not visible to the client");
                         }
                     }
+                    boolean newRig = java.util.Set.of("flail", "butcher", "gemstone", "wish").contains(String.valueOf(System.getProperty("mtga.rig")));
+                    if (newRig && (!oam.hasPrompt() || oam.getPrompt().getPromptId() == 0)) problem("optional question without a prompt (the client shows it blank)");
+                    boolean gemstone = "gemstone".equals(System.getProperty("mtga.rig")) && oam.getSourceId() != 0
+                            && objs.get(oam.getSourceId()) != null && objs.get(oam.getSourceId()).getGrpId() == TITLE_DB.grpId("Gemstone Caverns");
+                    if (gemstone) GEMSTONE_ASKED.incrementAndGet();
                     ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_OptionalActionResp);
-                    r.getOptionalRespBuilder().setResponse(rnd.nextBoolean() ? OptionResponse.OptionResponse_Allow_Yes : OptionResponse.OptionResponse_Cancel_No);
+                    r.getOptionalRespBuilder().setResponse(gemstone || rnd.nextBoolean() ? OptionResponse.OptionResponse_Allow_Yes : OptionResponse.OptionResponse_Cancel_No);
                     reply(r);
                 }
                 case GREMessageType_SelectNReq -> {
@@ -1079,6 +1120,13 @@ public final class SelfPlay {
                         break;
                     }
                     if (sn.getIdType() == IdType.IdType_InstanceId) offered.addAll(sn.getIdsList());
+                    if (sn.getIdType() == IdType.IdType_PromptParameterIndex) {      // a choice among Forge's words (Butcher's keyword, Bloodthorn Flail's cost)
+                        TEXT_CHOICES.incrementAndGet();
+                        if (sn.getPrompt().getParametersCount() < sn.getIdsCount()) problem("text choice with fewer option parameters than ids");
+                    }
+                    if (sn.getIdType() == IdType.IdType_InstanceId) {
+                        for (int id : sn.getIdsList()) if (objs.get(id) != null && objs.get(id).getZoneId() == 34) { SIDEBOARD_SELECTS.incrementAndGet(); break; }
+                    }
                     if (!g.hasPrompt()) problem("SelectNReq without prompt (the client NREs in SelectNWorkflowTranslation)");
                     List<Integer> ids = new ArrayList<>(sn.getIdsList());
                     if (sn.getIdType() == IdType.IdType_InstanceId) {
@@ -1557,7 +1605,8 @@ public final class SelfPlay {
                 }
                 if (old == null && !transferred.contains(o.getInstanceId()) && !created.contains(o.getInstanceId())
                         && !inAnyZone(oldZones, o.getInstanceId()) && o.getType() != GameObjectType.GameObjectType_RevealedCard
-                        && o.getType() != GameObjectType.GameObjectType_RoomLeft && o.getType() != GameObjectType.GameObjectType_RoomRight) {      // a Room's halves are children of the card, not moved objects
+                        && o.getType() != GameObjectType.GameObjectType_RoomLeft && o.getType() != GameObjectType.GameObjectType_RoomRight      // a Room's halves are children of the card, not moved objects
+                        && !String.valueOf(debugName(o.getInstanceId())).endsWith("Sideboard")) {      // a card from outside the game shown for Wish / Burning Wish / Learn (no move, like a companion)
                     problem("new object without ZoneTransfer/TokenCreated/AbilityInstanceCreated (zone " + o.getZoneId() + " " + debugName(o.getInstanceId()) + ")");
                 }
             }

@@ -224,6 +224,13 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("flail".equals(rig) || "butcher".equals(rig) || "gemstone".equals(rig) || "wish".equals(rig)) {      // test rigs: Bloodthorn Flail's equip costs, Butcher of the Horde's
+                                                                                                             // keyword choice, Gemstone Caverns on the draw, Wish / Burning Wish / Learn from the sideboard; a passive opponent
+            green.clear();
+            green.put("flail".equals(rig) ? "Swamp" : "butcher".equals(rig) ? "Plains" : "Mountain", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("relic".equals(rig)) {      // test rig: Relic of Legends (tap a legendary creature for mana) vs a passive opponent
             green.clear();
             green.put("Forest", 40);

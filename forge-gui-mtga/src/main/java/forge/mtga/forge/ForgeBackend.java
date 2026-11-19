@@ -264,6 +264,11 @@ public final class ForgeBackend implements GameBackend {
     // ---- game thread -------------------------------------------------------------------------------------------
 
     /** The shared game exists (game thread, before it starts): this seat plays {@code me} against {@code opp}. */
+    /** The companion the deck declared (null: none); set by ForgeMatch before each game. */
+    private volatile String declaredCompanion;
+
+    void setDeclaredCompanion(String name) { declaredCompanion = name; }
+
     void bind(Game g, Player me, Player opp, Map<String, Integer> grpByName, StateSync.GameInfoSupplier info) {
         game = g;
         human = me;
@@ -664,7 +669,37 @@ public final class ForgeBackend implements GameBackend {
     }
 
     private static PromptParameter textParam(String name, String v) {
-        return PromptParameter.newBuilder().setParameterName(name).setType(ParameterType.ParameterType_NonLocalizedString).setStringValue(v).build();
+        return PromptParameter.newBuilder().setParameterName(name).setType(ParameterType.ParameterType_NonLocalizedString).setStringValue(manaSprites(v)).build();
+    }
+
+    private static final java.util.regex.Pattern MANA_SYMBOL = java.util.regex.Pattern.compile("\\{([0-9]{1,2}|[WUBRGCXTES]|[WUBRG2]/[WUBRGCP]|[WUBRG]/[WUBRG]/P)\\}");
+    private static final java.util.Set<String> MANA_PAIRS = java.util.Set.of("WU", "WB", "UB", "UR", "RG", "RW", "GU", "GW", "BG", "BR");
+
+    /**
+     * Forge's mana symbols ({3}, {W/U}, {T}) as the client's mana icons. The client shows a NonLocalizedString as it is (no mana
+     * conversion in the choice buttons or Forge-worded prompts), but the text is rich text, so the sprite tag ManaUtilities.ConvertManaSymbols
+     * would make goes in directly. Symbols the icon sheet lacks stay as text.
+     */
+    static String manaSprites(String text) {
+        if (text == null || text.indexOf('{') < 0) return text;
+        java.util.regex.Matcher m = MANA_SYMBOL.matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String s = m.group(1), name;
+            String[] p = s.split("/");
+            if (p.length == 1) name = "S".equals(s) ? "xS" : "x" + s;
+            else if (p.length == 2 && "P".equals(p[1])) name = "2".equals(p[0]) ? null : "xP" + p[0];
+            else if ("2".equals(p[0])) name = "x2" + p[1];
+            else {
+                String pair = MANA_PAIRS.contains(p[0] + p[1]) ? p[0] + p[1] : p[1] + p[0];
+                name = MANA_PAIRS.contains(pair) ? "x" + pair + (p.length == 3 ? "P" : "") : null;
+            }
+            if (s.matches("[0-9]+") && Integer.parseInt(s) > 20) name = null;
+            m.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(name == null ? m.group()
+                    : "<sprite=\"SpriteSheet_ManaIcons\" name=\"" + name + "\" color=\"#FFFFFF\">"));
+        }
+        m.appendTail(sb);
+        return sb.toString();
     }
 
     /**
@@ -1023,6 +1058,31 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Grizzly Bears", "Grizzly Bears", "Hill Giant")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
             return;
         }
+        if ("flail".equals(rig)) {      // Bloodthorn Flail ("Equip—Pay {3} or discard a card") + Grizzly Bears + 3 Swamps in play, two Hill Giants in hand to discard:
+                                        // activating equip must ask which cost; with the Swamps tapped the discard cost alone must still be offered
+            for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
+            for (String name : List.of("Bloodthorn Flail", "Grizzly Bears")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Hill Giant", "Hill Giant")) rigAdd(p, name, ZoneType.Hand, 0);
+            return;
+        }
+        if ("butcher".equals(rig)) {      // Butcher of the Horde + 2 Grizzly Bears in play: sacrificing a Bear must ask vigilance, lifelink or haste
+            for (String name : List.of("Mountain", "Plains", "Swamp", "Butcher of the Horde", "Grizzly Bears", "Grizzly Bears")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            return;
+        }
+        if ("gemstone".equals(rig)) {      // you are on the draw (chooseStartingPlayer) with Gemstone Caverns in the opening hand: you must be asked to start
+                                           // with it on the battlefield (luck counter), then pick a card to exile from your hand
+            for (String name : List.of("Gemstone Caverns", "Lightning Bolt", "Grizzly Bears")) rigAdd(p, name, ZoneType.Hand, 0);
+            return;
+        }
+        if ("wish".equals(rig)) {      // 7 Mountains in play; Wish, Burning Wish and Igneous Inspiration (learn) in hand; sideboard: Lightning Bolt, Fireball, Lava Spike,
+                                       // a Mountain, Environmental Sciences and Introduction to Annihilation (Lessons). Wish must let you play one of them this turn,
+                                       // Burning Wish fetch a sorcery, learn a Lesson (or discard and draw)
+            for (int i = 0; i < 7; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            for (String name : List.of("Wish", "Burning Wish", "Igneous Inspiration")) rigAdd(p, name, ZoneType.Hand, 0);
+            for (String name : List.of("Lightning Bolt", "Fireball", "Lava Spike", "Mountain", "Environmental Sciences", "Introduction to Annihilation")) rigAdd(p, name, ZoneType.Sideboard, 0);
+            rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
+            return;
+        }
         if ("addcost".equals(rig)) {      // 3 Swamps in play; Bitter Triumph (discard a card or pay 3 life) and Iridescent Vinelasher (offspring {2}) in hand with two Grizzly Bears to discard; the AI has a Grizzly Bears
             for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
             for (String name : List.of("Bitter Triumph", "Iridescent Vinelasher", "Grizzly Bears", "Grizzly Bears")) rigAdd(p, name, ZoneType.Hand, 0);
@@ -1341,8 +1401,9 @@ public final class ForgeBackend implements GameBackend {
                                   int promptId, String promptParam, Card source) {
         Map<Integer, Card> byId = new HashMap<>();
         List<Card> hidden = new ArrayList<>();
-        for (Card c : options) if (c.isInZone(ZoneType.Library) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
-        for (Card c : shownOnly) if (c.isInZone(ZoneType.Library) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
+        // a library search, a look at the opponent's hand, or a card from outside the game (Burning Wish, Learn: the Sideboard zone)
+        for (Card c : options) if (c.isInZone(ZoneType.Library) || c.isInZone(ZoneType.Sideboard) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
+        for (Card c : shownOnly) if (c.isInZone(ZoneType.Library) || c.isInZone(ZoneType.Sideboard) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
         sync.reveal(hidden);
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
         com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(min).setMaxSel(max).setContext(context)
@@ -1373,6 +1434,11 @@ public final class ForgeBackend implements GameBackend {
             if (c != null && !chosen.contains(c)) chosen.add(c);
         }
         sync.clearRevealed();
+        // a card chosen from outside the game stays shown until the effect moves it (Burning Wish, Learn: into the hand), so the
+        // client sees it go there instead of a new card appearing in the hand
+        List<Card> fromSideboard = new ArrayList<>();
+        for (Card c : chosen) if (c.isInZone(ZoneType.Sideboard)) fromSideboard.add(c);
+        sync.reveal(fromSideboard);
         return chosen;
     }
 
@@ -1750,6 +1816,35 @@ public final class ForgeBackend implements GameBackend {
     }
 
     /**
+     * A choice among a few words Forge names itself (Butcher of the Horde's "vigilance, lifelink, or haste"): a SelectNReq over a Dynamic
+     * list of prompt-parameter indexes, each option a NonLocalizedString parameter. The client turns it into its choice buttons
+     * (ChoiceButtonsWorkflow, up to six options; a list browser beyond that). Option N is Parameters[N - 1], so the heading text goes last.
+     * Returns the chosen index, or -1 if cancelled.
+     */
+    int askTextChoice(Card source, List<String> options, String heading) {
+        if (options.isEmpty()) return -1;
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(1).setMaxSel(1)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Dynamic)
+                .setIdType(com.wizards.mtga.gre.IdType.IdType_PromptParameterIndex);
+        if (source != null) sn.setSourceId(iid(source));
+        for (com.wizards.mtga.gre.Prompt.Builder pb : List.of(sn.getPromptBuilder(), req.getPromptBuilder())) {
+            pb.setPromptId(PROMPT_FORGE_TEXT);
+            for (int i = 0; i < options.size(); i++) pb.addParameters(textParam("Option" + (i + 1), options.get(i)));
+            pb.addParameters(textParam("Text", heading));
+        }
+        for (int i = 0; i < options.size(); i++) sn.addIds(i + 1);
+        System.out.println("[mtga] asking a choice among " + options + " for " + source);
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        System.out.println("[mtga] client choice reply " + r.toString().replace("\n", " "));
+        if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp || r.getSelectNResp().getIdsCount() == 0) return -1;
+        int pick = (int) r.getSelectNResp().getIds(0) - 1;
+        return pick >= 0 && pick < options.size() ? pick : -1;
+    }
+
+    /**
      * "Choose odd or even" (Gollum, Riddle Master; Dwarven Hammer-style parity cards): the client's parity workflow, a SelectNReq over the
      * static Parities list with NonRepeatable validation, answered with the Parity value (Even 0, Odd 1). Returns true for odd; null if cancelled.
      */
@@ -2020,6 +2115,7 @@ public final class ForgeBackend implements GameBackend {
         if (settings.transientSpent()) sendSettings();
         List<SpellAbility> playable = new ArrayList<>();
         List<Card> candidates = new ArrayList<>(me.getCardsIn(List.of(ZoneType.Hand, ZoneType.Battlefield, ZoneType.Graveyard, ZoneType.Exile, ZoneType.Command)));
+        for (Card c : me.getCardsIn(ZoneType.Sideboard)) if (!c.mayPlay(me).isEmpty()) candidates.add(c);      // Wish: a card from outside the game
         for (Player other : game.getPlayers()) {      // Ragavan / Gonti: the card is in the opponent's exile but we may cast it
             if (other != me) candidates.addAll(other.getCardsIn(ZoneType.Exile));
         }
@@ -2036,6 +2132,12 @@ public final class ForgeBackend implements GameBackend {
         for (SpellAbility sa : playable) {
             Card host = sa.getHostCard();
             boolean canAfford = sa.isLandAbility() || affordable(sa, me);
+            // "Equip—Pay {3} or discard a card" (AlternateCost$): offered when either cost can be paid; without the mana, the action
+            // shows the other cost (the client treats a costed action with no auto-tap solution as unaffordable)
+            SpellAbility shownCost = sa;
+            if (!canAfford && sa.isActivatedAbility() && sa.hasParam("AlternateCost")) {
+                for (SpellAbility v : alternateCostVariants(sa, me)) { canAfford = true; shownCost = v; break; }
+            }
             if (!canAfford && sa.getPayCosts() != null && sa.getPayCosts().hasManaCost() && hasDevotionSource(me)) {
                 autoTap(sa, me, new ArrayList<>(), new java.util.IdentityHashMap<>());      // Forge's payer does not know Nykthos' devotion mana
                 canAfford = lastAutoTapDevotion;
@@ -2063,7 +2165,7 @@ public final class ForgeBackend implements GameBackend {
             Action.Builder ab = Action.newBuilder().setActionType(at).setGrpId(grp(host)).setInstanceId(iid);
             if (abilityGrp != 0) ab.setAbilityGrpId(abilityGrp);
             if (at != ActionType.ActionType_Play) {
-                SpellAbility costSa = withReducedCost(sa, me);
+                SpellAbility costSa = withReducedCost(shownCost, me);
                 addManaCost(ab, costSa, iid);
                 // without an auto-tap solution the client treats a costed action as unaffordable: no playable highlight
                 List<SpellAbility> taps = new ArrayList<>();
@@ -2086,6 +2188,7 @@ public final class ForgeBackend implements GameBackend {
             Card c = sync.card(k);
             if (c == null || iid(c) != k || c.isInZone(ZoneType.Hand) || c.isInZone(ZoneType.Battlefield) || c.isInZone(ZoneType.Stack)) return true;
             // a temporary permission (Ragavan: until end of turn) is gone with its effect; adventure / foretold cards stay castable
+            if (c.isInZone(ZoneType.Sideboard)) return c.getMayPlay().isEmpty();      // Wish's permission ended (or was used)
             return c.isInZone(ZoneType.Exile) && !c.isOnAdventure() && !c.isForetold() && c.getMayPlay().isEmpty();
         });
         for (Action a : fromOtherZones) otherZoneActions.putIfAbsent(a.getInstanceId(), new ArrayList<>());
@@ -2550,6 +2653,43 @@ public final class ForgeBackend implements GameBackend {
      * player pick one of the spell's variants before anything else; here the client's ChooseOrCost question does. Returns the variant
      * to cast, or null if none can be paid or the player cancelled.
      */
+    /**
+     * An activated ability with two costs to choose from ("Equip—Pay {3} or discard a card": AlternateCost$): Forge splits it into one
+     * ability per cost (GameActionUtil.getAdditionalCostSpell, the printed cost first). The ones this player can pay right now.
+     */
+    private static List<SpellAbility> alternateCostVariants(SpellAbility sa, Player me) {
+        List<SpellAbility> out = new ArrayList<>();
+        sa.setActivatingPlayer(me);
+        for (SpellAbility v : forge.game.GameActionUtil.getAdditionalCostSpell(sa)) {
+            if (v == sa) continue;
+            v.setActivatingPlayer(me);
+            if (affordable(v, me) && forge.game.cost.CostPayment.canPayAdditionalCosts(v.getPayCosts(), v, false)) out.add(v);
+        }
+        return out;
+    }
+
+    /**
+     * Which cost pays an AlternateCost$ ability (Bloodthorn Flail's equip): a choice button per payable cost, none when only one is.
+     * Paying the cost without mana drops the auto-tap plan of the action. Null if cancelled.
+     */
+    SpellAbility askAlternateActivationCost(SpellAbility sa, Player me) {
+        List<SpellAbility> variants = alternateCostVariants(sa, me);
+        if (variants.isEmpty()) return sa;
+        SpellAbility pick = variants.get(0);
+        if (variants.size() > 1) {
+            List<String> labels = new ArrayList<>();
+            for (SpellAbility v : variants) {
+                forge.game.cost.Cost c = v.getPayCosts();
+                labels.add(c.isOnlyManaCost() ? "Pay " + c.getTotalMana().getSimpleString() : c.toSimpleString());
+            }
+            int i = askTextChoice(sa.getHostCard(), labels, "Choose how to pay for " + sa.getHostCard().getName());
+            if (i < 0) return null;
+            pick = variants.get(i);
+        }
+        System.out.println("[mtga] alternate activation cost " + pick.getPayCosts().toSimpleString() + " for " + sa.getHostCard());
+        return pick;
+    }
+
     SpellAbility askAlternativeAdditionalCost(SpellAbility sa) {
         Card host = sa.getHostCard();
         List<SpellAbility> alts = forge.game.GameActionUtil.getAdditionalCostSpell(sa);
@@ -3676,7 +3816,8 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public Player chooseStartingPlayer(boolean isFirstGame) {
-            if ("block".equals(System.getProperty("mtga.rig")) || "menace".equals(System.getProperty("mtga.rig"))) return opponent;      // test rig: let the AI attack first
+            if ("block".equals(System.getProperty("mtga.rig")) || "menace".equals(System.getProperty("mtga.rig"))
+                    || "gemstone".equals(System.getProperty("mtga.rig"))) return opponent;      // test rigs: let the AI attack first / you are on the draw
             if (isFirstGame && room.forcedStarter() != null) return room.forcedStarter();      // a challenge's "play first" setting
             if (!isFirstGame && room.gamesToWin() > 1) return askStartingPlayer();      // best of three: the loser chooses
             if ("playtest".equals(System.getProperty("mtga.deck")) || "fc".equals(System.getProperty("mtga.rig"))) return player;      // solo sandbox / fc rig: you start
@@ -3788,6 +3929,14 @@ public final class ForgeBackend implements GameBackend {
             if (sa.isSpell() && live()) {
                 sa = askAlternativeAdditionalCost(sa);      // "discard a card or pay 3 life": the player picks first
                 if (sa == null) return false;
+            }
+            if (live() && sa.isActivatedAbility() && sa.hasParam("AlternateCost")) {
+                sa = askAlternateActivationCost(sa, player);      // "Equip—Pay {3} or discard a card"
+                if (sa == null) return false;
+                if (!sa.getPayCosts().hasManaCost()) {
+                    pendingTaps = null;      // the action's auto-tap plan was for the mana cost
+                    pendingTapColors = null;
+                }
             }
             int phyrexianLife = 0;
             if (live() && sa.getPayCosts() != null && sa.getPayCosts().hasManaCost()) {
@@ -3955,7 +4104,11 @@ public final class ForgeBackend implements GameBackend {
             for (SpellAbility sa : usable) {
                 String q = sa.getDescription();
                 if (q == null || q.isEmpty()) q = sa.getHostCard().getName() + ": use from your opening hand?";
-                if (askOptional(sa.getHostCard(), promptFor(q), List.of(), "opening hand " + sa.getHostCard())) chosen.add(sa);
+                q = q.replace("CARDNAME", sa.getHostCard().getName());
+                int prompt = promptFor(q);
+                // no client prompt for the card's wording (Gemstone Caverns): a question with prompt 0 shows up blank, so show Forge's text
+                List<PromptParameter> params = prompt != 0 ? List.of() : List.of(textParam("Text", q));
+                if (askOptional(sa.getHostCard(), prompt != 0 ? prompt : PROMPT_FORGE_TEXT, params, "opening hand " + sa.getHostCard())) chosen.add(sa);
             }
             return chosen;
         }
@@ -3976,7 +4129,9 @@ public final class ForgeBackend implements GameBackend {
                 return askDredge(src, dredgeAbility);
             }
             int reAbility = 0;
-            return askOptional(src, promptFor(question), List.of(), question, reAbility);
+            int prompt = promptFor(question);
+            if (prompt == 0 && question != null && !question.isBlank()) return askOptional(src, PROMPT_FORGE_TEXT, List.of(textParam("Text", question)), question, reAbility);
+            return askOptional(src, prompt, List.of(), question, reAbility);
         }
 
         @Override
@@ -3984,7 +4139,10 @@ public final class ForgeBackend implements GameBackend {
             if (!live() || wrapper.isMandatory()) return super.confirmTrigger(wrapper);
             SpellAbility sa = wrapper.getWrappedAbility();
             String q = sa.getStackDescription();
-            return askOptional(sa.getHostCard(), promptFor(q), List.of(), "trigger " + q);
+            int prompt = promptFor(q);
+            // no client prompt for the trigger's wording: a question with prompt 0 shows up blank, so show Forge's text
+            if (prompt == 0 && q != null && !q.isBlank()) return askOptional(sa.getHostCard(), PROMPT_FORGE_TEXT, List.of(textParam("Text", q.trim())), "trigger " + q);
+            return askOptional(sa.getHostCard(), prompt, List.of(), "trigger " + q);
         }
 
         @Override
@@ -4018,6 +4176,21 @@ public final class ForgeBackend implements GameBackend {
             if (!live() || !(basic || "Creature".equalsIgnoreCase(kindOfType)) || validTypes.size() < 2) return super.chooseSomeType(kindOfType, sa, validTypes, isOptional);
             String type = askSubType(sa == null ? null : sa.getHostCard(), validTypes, isOptional, basic ? "basic land" : "creature");
             return type == null ? super.chooseSomeType(kindOfType, sa, validTypes, isOptional) : type;
+        }
+
+        /** The server sideboards between games itself (the client's sideboarding screen, ForgeMatch): Forge's AI plan must not touch this deck. */
+        @Override
+        public List<forge.item.PaperCard> sideboard(forge.deck.Deck deck, forge.game.GameType gameType, String message) {
+            return null;
+        }
+
+        /** "Gains your choice of vigilance, lifelink, or haste" (Butcher of the Horde, KWChoice): the player picks, not the AI. */
+        @Override
+        public String chooseKeywordForPump(List<String> options, SpellAbility sa, String prompt, Card tgtCard) {
+            if (!live() || options.size() < 2) return super.chooseKeywordForPump(options, sa, prompt, tgtCard);
+            Card src = sa == null ? tgtCard : sa.getHostCard();
+            int pick = askTextChoice(src, options, "Choose a keyword for " + (tgtCard == null ? "the creature" : tgtCard.getName()));
+            return pick < 0 ? super.chooseKeywordForPump(options, sa, prompt, tgtCard) : options.get(pick);
         }
 
         @Override
@@ -4177,9 +4350,13 @@ public final class ForgeBackend implements GameBackend {
         @Override
         public <T extends GameEntity> T chooseSingleEntityForEffect(forge.util.collect.FCollectionView<T> optionList, forge.game.player.DelayedReveal delayedReveal,
                                                                     SpellAbility sa, String title, boolean isOptional, Player relatedPlayer, Map<String, Object> params) {
+            // the companion was named when the deck was built: nothing to ask at the start of the game. The whole sideboard is in the
+            // game (Wish, Learn), so only the declared card may become the companion, never another companion-eligible sideboard card
+            if (sa != null && sa.getApi() == forge.game.ability.ApiType.CompanionChoose) {
+                for (T t : optionList) if (t instanceof Card c && c.getName().equals(declaredCompanion)) return t;
+                return null;
+            }
             if (!live() || optionList.isEmpty()) return super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);
-            // the companion was named when the deck was built: nothing to ask at the start of the game
-            if (sa != null && sa.getApi() == forge.game.ability.ApiType.CompanionChoose) return optionList.get(0);
             // a forced choice of one (Equip resolving onto its only target) is not a question on Arena
             if (!isOptional && delayedReveal == null && optionList.size() == 1) return optionList.get(0);
             List<Card> cards = new ArrayList<>();

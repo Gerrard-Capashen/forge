@@ -243,7 +243,12 @@ public final class StateSync {
     /** The Forge card behind an instance id (current or older id of the same card), or null. */
     public Card card(int iid) {
         Integer f = forgeByIid.get(iid);
-        return f == null ? null : game.findById(f);
+        if (f == null) return null;
+        Card c = game.findById(f);
+        if (c != null) return c;
+        // Game.findById skips the sideboard: a card from outside the game the client was shown (Wish, Burning Wish, Learn)
+        for (Player p : game.getPlayers()) for (Card s : p.getCardsIn(ZoneType.Sideboard)) if (s.getId() == f) return s;
+        return null;
     }
 
     /** The stack item behind an ability instance id, or null. */
@@ -470,6 +475,15 @@ public final class StateSync {
         if (!s.stackKept) iidByKey.keySet().removeIf(k -> k.startsWith("s") && !s.liveStack.contains(k));
         sentTokens.clear();
         sentTokens.addAll(s.tokens);
+        // a card from outside the game that is no longer shown (Wish's permission ended, the Burning Wish browser closed): the client
+        // dropped the object, so the next time it is shown it is a new one (no ObjectIdChanged from an id the client no longer has)
+        for (Player p : game.getPlayers()) {
+            for (Card c : p.getCardsIn(ZoneType.Sideboard)) {
+                if (s.forgeIds.contains(c.getId())) continue;
+                iidByKey.remove("c" + c.getId());
+                zoneByKey.remove("c" + c.getId());
+            }
+        }
     }
 
     private final Set<Integer> sentTokens = new HashSet<>();
@@ -521,7 +535,11 @@ public final class StateSync {
         addZone(s, ZoneType.Battlefield, 0, game.getCardsIn(ZoneType.Battlefield));
         if (!hideStack) addStack(s);
         else keepSentStack(s);
-        addZone(s, ZoneType.Exile, 0, game.getCardsIn(ZoneType.Exile));
+        List<Card> exile = new ArrayList<>(game.getCardsIn(ZoneType.Exile));
+        // Wish ("you may play a card you own from outside the game this turn"): the client draws no sideboard card except a companion,
+        // so the cards the player may play from there are shown as exiled ones, which it keeps next to the hand while they have an action
+        for (Card c : human.getCardsIn(ZoneType.Sideboard)) if (!c.mayPlay(human).isEmpty() && !revealed.contains(c.getId())) exile.add(c);
+        addZone(s, ZoneType.Exile, 0, exile);
         findCompanions();
         List<Card> command = new ArrayList<>();
         for (Card c : game.getCardsIn(ZoneType.Command)) if (!isCompanionCard(c)) command.add(c);
@@ -590,6 +608,16 @@ public final class StateSync {
             int zid = seatOf(p) == HUMAN_SEAT ? Z_SIDEBOARD : Z_SIDEBOARD_OPP;
             ZoneInfo.Builder sideboard = ZoneInfo.newBuilder().setZoneId(zid).setType(com.wizards.mtga.gre.ZoneType.ZoneType_Sideboard)
                     .setVisibility(Visibility.Visibility_Public).setOwnerSeatId(seatOf(p));
+            // a card from outside the game being chosen (Burning Wish, Learn): the owner sees it in the selection browser
+            if (p == human) {
+                for (Card c : p.getCardsIn(ZoneType.Sideboard)) {
+                    if (!revealed.contains(c.getId()) || isCompanionCard(c)) continue;
+                    int iid = track(s, c, zid);
+                    sideboard.addObjectInstanceIds(iid);
+                    s.objs.put(iid, objectInfo(s, c, iid, zid, ZoneType.Sideboard, false).toBuilder()
+                            .setVisibility(Visibility.Visibility_Private).clearViewers().addViewers(HUMAN_SEAT).build());
+                }
+            }
             Card c = companionOf.get(p);
             if (isCompanionCard(c)) {
                 int iid = track(s, c, zid);
@@ -1476,7 +1504,10 @@ public final class StateSync {
         for (GameObjectInfo o : sentObjs.values()) {
             if (o.getType() == GameObjectType.GameObjectType_Ability || s.objs.containsKey(o.getInstanceId())) continue;
             Integer f = forgeByIid.get(o.getInstanceId());
-            if (f != null && !s.forgeIds.contains(f) && !sentTokens.contains(f)) return true;
+            if (f == null || s.forgeIds.contains(f) || sentTokens.contains(f)) continue;
+            Card c = card(o.getInstanceId());
+            if (c != null && c.isInZone(ZoneType.Sideboard)) continue;      // a card from outside the game no longer shown: not a move in progress
+            return true;
         }
         return false;
     }

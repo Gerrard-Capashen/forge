@@ -236,6 +236,8 @@ public final class ForgeMatch {
         for (int i = 0; i < 2; i++) {
             main[i] = new LinkedHashMap<>(seats[i].deck());
             forge.deck.Deck deck = ForgeSmoke.deck(i == 0 ? "You" : "Opponent", seats[i].deck());
+            // the sideboard is Forge's Sideboard zone in the game: Wish / Burning Wish / Learn reach "outside the game" there
+            addSideboard(deck, seats[i].sideboard(), seats[i].companion());
             // a companion waits in the sideboard; Forge's Match moves it to the command zone before the first game (Player.assignCompanion)
             String companion = seats[i].companion();
             if (companion != null && !companion.isBlank()) {
@@ -286,6 +288,7 @@ public final class ForgeMatch {
                 if (seats[1 - i].overrides() != null) view.putAll(seats[1 - i].overrides());
                 if (seats[i].overrides() != null) view.putAll(seats[i].overrides());
                 Player me = game.getPlayers().get(i);
+                humans[i].setDeclaredCompanion(seats[i].companion());
                 humans[i].bind(game, me, game.getPlayers().get(1 - i), view, StateSync.matchInfo(gameNo, gamesToWin, minDeck(seats[i].deck()), brawl));
             }
             game.setNoGUIUser();
@@ -339,7 +342,35 @@ public final class ForgeMatch {
                 CardPool pool = players.get(i).getDeck().getMain();
                 pool.clear();
                 pool.addAll(ForgeSmoke.deck("deck", chosen[i]).getMain());
+                // what the main deck no longer plays is now outside the game (the companion stays there too)
+                Map<String, Integer> out = new LinkedHashMap<>(seats[i].deck());
+                seats[i].sideboard().forEach((n, c) -> out.merge(n, c, Integer::sum));
+                chosen[i].forEach((n, c) -> out.merge(n, -c, Integer::sum));
+                out.values().removeIf(n -> n <= 0);
+                forge.deck.Deck d = players.get(i).getDeck();
+                if (d.has(forge.deck.DeckSection.Sideboard)) d.get(forge.deck.DeckSection.Sideboard).clear();
+                String companion = seats[i].companion();
+                addSideboard(d, out, companion);
+                if (companion != null && !companion.isBlank()) {
+                    forge.item.PaperCard pc = forge.StaticData.instance().getCommonCards().getUniqueByName(companion);
+                    if (pc != null) d.getOrCreate(forge.deck.DeckSection.Sideboard).add(pc, 1);
+                }
             }
+        }
+    }
+
+    /**
+     * The seat's sideboard into the Forge deck (Forge puts it in the Sideboard zone, where Wish, Burning Wish and Learn look). One copy of
+     * the companion is left out: it is added on its own (Forge moves it to the command zone).
+     */
+    private static void addSideboard(forge.deck.Deck deck, Map<String, Integer> sideboard, String companion) {
+        if (sideboard == null) return;
+        for (Map.Entry<String, Integer> e : sideboard.entrySet()) {
+            int n = e.getValue() - (e.getKey().equals(companion) ? 1 : 0);
+            if (n <= 0) continue;
+            forge.item.PaperCard pc = forge.StaticData.instance().getCommonCards().getUniqueByName(e.getKey());
+            if (pc == null) { System.out.println("[mtga] sideboard: Forge has no card " + e.getKey()); continue; }
+            deck.getOrCreate(forge.deck.DeckSection.Sideboard).add(pc, n);
         }
     }
 }
