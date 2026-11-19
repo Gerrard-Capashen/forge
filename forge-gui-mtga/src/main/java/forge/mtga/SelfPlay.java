@@ -204,6 +204,14 @@ public final class SelfPlay {
                 System.out.println("  wish rig: sideboard card played " + WISH_PLAYED.get() + ", sideboard cards in a selection " + SIDEBOARD_SELECTS.get() + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            if (rig.equals("xanathar")) {      // the opponent's top card is offered and cast with mana of any color
+                int bears = 0;
+                for (forge.game.card.Card c : backend.humanBattlefieldForTest()) if (c.getName().equals("Grizzly Bears")) bears++;
+                int casts = LIBRARY_PLAYED.getAndSet(0);
+                boolean ok = casts > 0;
+                System.out.println("  xanathar rig: casts from the opponent's library " + casts + ", their Grizzly Bears on your battlefield " + bears + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if (!done || !fc.problems.isEmpty()) failed++;
             backend.onDisconnect(fc);
         }
@@ -667,7 +675,7 @@ public final class SelfPlay {
     static final java.util.concurrent.atomic.AtomicInteger CARD_NAMES = new java.util.concurrent.atomic.AtomicInteger();
     /** Rigs flail / butcher / gemstone / wish: text choices answered, Gemstone Caverns' opening-hand question, sideboard cards offered / played. */
     static final java.util.concurrent.atomic.AtomicInteger TEXT_CHOICES = new java.util.concurrent.atomic.AtomicInteger(), GEMSTONE_ASKED = new java.util.concurrent.atomic.AtomicInteger(),
-            SIDEBOARD_SELECTS = new java.util.concurrent.atomic.AtomicInteger(), WISH_PLAYED = new java.util.concurrent.atomic.AtomicInteger();
+            SIDEBOARD_SELECTS = new java.util.concurrent.atomic.AtomicInteger(), WISH_PLAYED = new java.util.concurrent.atomic.AtomicInteger(), LIBRARY_PLAYED = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger CARD_CHOICES = new java.util.concurrent.atomic.AtomicInteger();
     /** Undo presses by request type (-Dselfplay.undo) and payment prompts that offered the auto-pay button. */
     static final Map<String, Integer> UNDOS = new java.util.concurrent.ConcurrentHashMap<>();
@@ -791,6 +799,12 @@ public final class SelfPlay {
                     for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
                 }
             }
+            if ("xanathar".equals(System.getProperty("mtga.rig"))) {      // rig xanathar: cast the opponent's top card (Grizzly Bears) from their library
+                for (Action a : acts) {
+                    String n = String.valueOf(debugName(a.getInstanceId()));
+                    if (a.getActionType() == ActionType.ActionType_Cast && n.startsWith("Grizzly Bears") && n.contains("Library")) { LIBRARY_PLAYED.incrementAndGet(); return a; }
+                }
+            }
             if ("phasing".equals(System.getProperty("mtga.rig"))) {      // rig phasing: cast Kaito Shizuki
                 for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith("Kaito")) return a;
             }
@@ -887,7 +901,7 @@ public final class SelfPlay {
                 case GREMessageType_MulliganReq -> {
                     requests++;
                     boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"reduce".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig")) && !"reflect".equals(System.getProperty("mtga.rig"))
-                            && !java.util.Set.of("flail", "butcher", "gemstone", "wish").contains(String.valueOf(System.getProperty("mtga.rig")));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                            && !java.util.Set.of("flail", "butcher", "gemstone", "wish", "xanathar").contains(String.valueOf(System.getProperty("mtga.rig")));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -1086,7 +1100,7 @@ public final class SelfPlay {
                             if (o == null || o.getVisibility() == Visibility.Visibility_Hidden) problem("Explore card not visible to the client");
                         }
                     }
-                    boolean newRig = java.util.Set.of("flail", "butcher", "gemstone", "wish").contains(String.valueOf(System.getProperty("mtga.rig")));
+                    boolean newRig = java.util.Set.of("flail", "butcher", "gemstone", "wish", "xanathar").contains(String.valueOf(System.getProperty("mtga.rig")));
                     if (newRig && (!oam.hasPrompt() || oam.getPrompt().getPromptId() == 0)) problem("optional question without a prompt (the client shows it blank)");
                     boolean gemstone = "gemstone".equals(System.getProperty("mtga.rig")) && oam.getSourceId() != 0
                             && objs.get(oam.getSourceId()) != null && objs.get(oam.getSourceId()).getGrpId() == TITLE_DB.grpId("Gemstone Caverns");
@@ -1417,7 +1431,10 @@ public final class SelfPlay {
                     if (o != null && o.getZoneId() != z.getZoneId() && o.getType() != GameObjectType.GameObjectType_RevealedCard) problem("object zoneId differs from listing zone");
                     // player vs player: what the opponent holds must not reach this client (a revealed hand card is allowed, counted)
                     if (o != null && z.getOwnerSeatId() == 2 && o.getGrpId() != 0) {
-                        if (z.getType() == ZoneType.ZoneType_Library) { libSeen.add(id); libSeenGrp.put(id, o.getGrpId()); }     // judged by checkLibReveals (a look-at browser may show it)
+                        if (z.getType() == ZoneType.ZoneType_Library) {
+                            if (backend instanceof ForgeBackend fb && fb.humanMayLookForTest(id)) OPP_LIBRARY_SHOWN.incrementAndGet();      // the rules let us look at it (Xanathar's top card)
+                            else { libSeen.add(id); libSeenGrp.put(id, o.getGrpId()); }     // judged by checkLibReveals (a look-at browser may show it)
+                        }
                         else if (z.getType() == ZoneType.ZoneType_Hand) OPP_HAND_VISIBLE.incrementAndGet();
                     }
                 }

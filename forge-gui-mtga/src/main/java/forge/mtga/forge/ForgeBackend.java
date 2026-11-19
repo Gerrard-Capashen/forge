@@ -306,6 +306,15 @@ public final class ForgeBackend implements GameBackend {
     private int grp(Card c) { return sync != null ? sync.grpIdOf(c) : db.grpId(c.getName()); }
 
     /** Test/debug aid: Forge card name behind an instance id. */
+    /** SelfPlay: may the human look at this library card (Xanathar's top card)? */
+    public boolean humanMayLookForTest(int iid) {
+        Card c = sync == null ? null : sync.card(iid);
+        return c != null && c.isInZone(ZoneType.Library) && c.mayPlayerLook(human);
+    }
+
+    /** SelfPlay rigs: what the human controls now. */
+    public List<Card> humanBattlefieldForTest() { return human == null ? List.of() : new ArrayList<>(human.getCardsIn(ZoneType.Battlefield)); }
+
     public String debugName(int iid) {
         Card c = sync == null ? null : sync.card(iid);
         forge.game.spellability.SpellAbilityStackInstance si = c == null && sync != null ? sync.stackItem(iid) : null;
@@ -1081,6 +1090,14 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Wish", "Burning Wish", "Igneous Inspiration")) rigAdd(p, name, ZoneType.Hand, 0);
             for (String name : List.of("Lightning Bolt", "Fireball", "Lava Spike", "Mountain", "Environmental Sciences", "Introduction to Annihilation")) rigAdd(p, name, ZoneType.Sideboard, 0);
             rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
+            return;
+        }
+        if ("xanathar".equals(rig)) {      // Xanathar, Guild Kingpin + 6 Swamps in play; 12 Grizzly Bears on top of the opponent's library: from your next upkeep you must be
+                                           // able to cast the top card of their library with your Swamps (mana of any color)
+            for (int i = 0; i < 6; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
+            rigAdd(p, "Xanathar, Guild Kingpin", ZoneType.Battlefield, 0);
+            forge.item.PaperCard bears = forge.StaticData.instance().getCommonCards().getUniqueByName("Grizzly Bears");
+            for (int i = 0; i < 12; i++) opponent.getZone(ZoneType.Library).add(Card.fromPaperCard(bears, opponent), 0, null);      // on top: green spells to pay with black mana
             return;
         }
         if ("addcost".equals(rig)) {      // 3 Swamps in play; Bitter Triumph (discard a card or pay 3 life) and Iridescent Vinelasher (offspring {2}) in hand with two Grizzly Bears to discard; the AI has a Grizzly Bears
@@ -2100,6 +2117,11 @@ public final class ForgeBackend implements GameBackend {
 
     // ---- priority ----------------------------------------------------------------------------------------------
 
+    private static Card topOfLibrary(Player p) {
+        CardCollectionView lib = p.getCardsIn(ZoneType.Library);
+        return lib.isEmpty() ? null : lib.get(0);
+    }
+
     /** Priority for the human: returns the chosen ability, or null to pass. */
     List<SpellAbility> askPriority(Player me) {
         batching = false;
@@ -2118,6 +2140,10 @@ public final class ForgeBackend implements GameBackend {
         for (Card c : me.getCardsIn(ZoneType.Sideboard)) if (!c.mayPlay(me).isEmpty()) candidates.add(c);      // Wish: a card from outside the game
         for (Player other : game.getPlayers()) {      // Ragavan / Gonti: the card is in the opponent's exile but we may cast it
             if (other != me) candidates.addAll(other.getCardsIn(ZoneType.Exile));
+        }
+        for (Player p : game.getPlayers()) {      // the top card of a library we may play (Xanathar: the opponent's; Future Sight, Courser of Kruphix: our own)
+            Card top = topOfLibrary(p);
+            if (top != null && !top.mayPlay(me).isEmpty()) candidates.add(top);
         }
         for (Card c : candidates) {
             for (SpellAbility sa : c.getAllPossibleAbilities(me, true)) {
@@ -2189,6 +2215,7 @@ public final class ForgeBackend implements GameBackend {
             if (c == null || iid(c) != k || c.isInZone(ZoneType.Hand) || c.isInZone(ZoneType.Battlefield) || c.isInZone(ZoneType.Stack)) return true;
             // a temporary permission (Ragavan: until end of turn) is gone with its effect; adventure / foretold cards stay castable
             if (c.isInZone(ZoneType.Sideboard)) return c.getMayPlay().isEmpty();      // Wish's permission ended (or was used)
+            if (c.isInZone(ZoneType.Library)) return topOfLibrary(c.getOwner()) != c || c.mayPlay(me).isEmpty();      // no longer on top, or the effect ended
             return c.isInZone(ZoneType.Exile) && !c.isOnAdventure() && !c.isForetold() && c.getMayPlay().isEmpty();
         });
         for (Action a : fromOtherZones) otherZoneActions.putIfAbsent(a.getInstanceId(), new ArrayList<>());
@@ -3121,6 +3148,13 @@ public final class ForgeBackend implements GameBackend {
         lastAutoTapComplete = false;
         forge.card.mana.ManaCost cost = sa.getPayCosts() == null ? null : sa.getPayCosts().getTotalMana();
         if (cost == null || cost.isNoCost() || cost.getCMC() == 0) return null;
+        // "you may spend mana as though it were mana of any type/color to cast it" (Xanathar, Gonti, Hostage Taker): every pip is generic
+        forge.game.staticability.StaticAbility mayPlay = sa.getMayPlay();
+        if (mayPlay != null && (mayPlay.hasParam("MayPlayIgnoreType") || mayPlay.hasParam("MayPlayIgnoreColor")) && cost.getGenericCost() < cost.getCMC()) {
+            StringBuilder anyType = new StringBuilder(String.valueOf(cost.getCMC()));
+            for (int i = 0; i < cost.countX(); i++) anyType.append(" X");
+            cost = new forge.card.mana.ManaCost(new forge.card.mana.ManaCostParser(anyType.toString()));
+        }
         boolean tapsHost = sa.getPayCosts().hasTapCost();
         Map<Card, List<SpellAbility>> sources = new LinkedHashMap<>();      // untapped source -> its free mana abilities
         for (Card c : me.getCardsIn(ZoneType.Battlefield)) {

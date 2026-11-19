@@ -231,6 +231,12 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("xanathar".equals(rig)) {      // test rig: Xanathar, Guild Kingpin (play the top card of the opponent's library); the opponent has no lands, so it stays passive
+            green.clear();
+            green.put("Swamp", 40);
+            red.clear();
+            red.put("Grizzly Bears", 40);
+        }
         if ("relic".equals(rig)) {      // test rig: Relic of Legends (tap a legendary creature for mana) vs a passive opponent
             green.clear();
             green.put("Forest", 40);
