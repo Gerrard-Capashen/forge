@@ -970,6 +970,12 @@ public final class StateSync {
         int grp = grpIdOf(c);
         o.setGrpId(grp).setOverlayGrpId(grp);
         if (c.isFaceDown()) o.setIsFacedown(true);
+        // the client treats a two-faced object without othersideGrpId as "not double-faced": its transform hanger then reads "Can't Transform"
+        // (Search for Azcanta, Delver), and it skips the other face's abilities. The other side of a transform / modal / flip card is its linked face.
+        else if (c.isTransformable() || c.isModal() || c.isFlipCard()) {
+            int other = db.linkedFace(grp);
+            if (other != 0) o.setOthersideGrpId(other);
+        }
         // a scheme (Archenemy) in the command zone is drawn as an emblem of its own card row: an ongoing scheme stays, any other is gone once it resolves
         boolean scheme = c.getType().isScheme() || c.getType().isVanguard();      // Momir Basic's avatar the same
         if (c.isEmblem() || scheme) o.setType(GameObjectType.GameObjectType_Emblem).setObjectSourceGrpId(grp);

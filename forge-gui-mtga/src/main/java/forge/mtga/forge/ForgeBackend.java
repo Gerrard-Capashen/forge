@@ -1162,6 +1162,14 @@ public final class ForgeBackend implements GameBackend {
             for (String name : List.of("Hill Giant", "Lightning Bolt", "Fireball", "Counterspell", "Divination", "Giant Growth", "Serra Angel", "Mountain")) rigAdd(opponent, name, ZoneType.Hand, 0);
             return;
         }
+        if ("azcanta".equals(rig)) {      // Search for Azcanta + 3 Islands in play, 6 cards in the graveyard: the first upkeep's surveil can put a 7th there and transform it;
+                                          // a second Azcanta in hand to cast. The client must show it as double-faced (othersideGrpId), not "Can't Transform"
+            for (int i = 0; i < 3; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
+            rigAdd(p, "Search for Azcanta", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 6; i++) rigAdd(p, "Grizzly Bears", ZoneType.Graveyard, 0);
+            rigAdd(p, "Search for Azcanta", ZoneType.Hand, 0);
+            return;
+        }
         if ("gollum".equals(rig)) {      // Swamp x3 in play, Gollum, Riddle Master in hand: casting it must ask odd or even (client parity buttons)
             for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
             rigAdd(p, "Gollum, Riddle Master", ZoneType.Hand, 0);
@@ -1538,6 +1546,11 @@ public final class ForgeBackend implements GameBackend {
         com.wizards.mtga.gre.OptionalActionMessage.Builder oa = req.getOptionalActionMessageBuilder();
         if (source != null) {
             oa.setSourceId(iid(source)).addHighlightIds(iid(source)).setHighlight(com.wizards.mtga.gre.HighlightType.HighlightType_Hot);
+        }
+        // "you may transform X": without the Transform mechanic the client picks a browser by the source's abilities and opens a surveil
+        // screen for Search for Azcanta (no actions, Done answers "no"); with it, it uses the plain yes/no prompt
+        if (source != null && source.isTransformable() && what != null && what.toLowerCase().startsWith("transform")) {
+            oa.addOptionalActionTypes(com.wizards.mtga.gre.CardMechanicType.CardMechanicType_Transform);
         }
         if (promptId != 0) {
             oa.getPromptBuilder().setPromptId(promptId).addAllParameters(params);

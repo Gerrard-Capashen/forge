@@ -284,6 +284,12 @@ public final class ForgeMtgaMain {
             red.put("Hill Giant", 10);
             red.put("Lightning Bolt", 10);
         }
+        if ("azcanta".equals(rig)) {      // test rig: Search for Azcanta (transforms at upkeep with 7+ cards in the graveyard) vs a passive opponent
+            green.clear();
+            green.put("Island", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("gollum".equals(rig)) {      // test rig: Gollum, Riddle Master (choose odd or even as it enters) vs a passive opponent
             green.clear();
             green.put("Swamp", 40);

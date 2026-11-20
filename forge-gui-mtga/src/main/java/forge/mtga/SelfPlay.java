@@ -204,6 +204,11 @@ public final class SelfPlay {
                 System.out.println("  wish rig: sideboard card played " + WISH_PLAYED.get() + ", sideboard cards in a selection " + SIDEBOARD_SELECTS.get() + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            if (rig.equals("azcanta")) {      // Search for Azcanta (and its back, once flipped) carried othersideGrpId in the states
+                boolean ok = AZCANTA_OTHERSIDE.get() > 0;
+                System.out.println("  azcanta rig: states with an Azcanta object carrying othersideGrpId " + AZCANTA_OTHERSIDE.get() + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if (rig.equals("xanathar")) {      // the opponent's top card is offered and cast with mana of any color
                 int bears = 0;
                 for (forge.game.card.Card c : backend.humanBattlefieldForTest()) if (c.getName().equals("Grizzly Bears")) bears++;
@@ -668,7 +673,8 @@ public final class SelfPlay {
     private static PublicProfile eve() { return new PublicProfile("id-eve", "Eve", "", "", "", "", null, "", 4); }
 
     static final Set<Integer> SCHEMES_SEEN = Collections.synchronizedSet(new TreeSet<>());
-    static final Set<Integer> ADDED_SEEN = Collections.synchronizedSet(new TreeSet<>());
+    static final java.util.concurrent.atomic.AtomicInteger AZCANTA_OTHERSIDE = new java.util.concurrent.atomic.AtomicInteger();
+    static final Set<Integer> ADDED_SEEN =Collections.synchronizedSet(new TreeSet<>());
     static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger ATTACH_SEEN = new java.util.concurrent.atomic.AtomicInteger();
     static CardDb TITLE_DB;
@@ -1444,6 +1450,12 @@ public final class SelfPlay {
                 else if (!seen.containsKey(o.getInstanceId())) problem("object not listed by any zone (" + o.getType() + ")");
                 if (o.getVisibility() != Visibility.Visibility_Hidden && o.getGrpId() == 0) problem("visible object without grpId: " + debugName(o.getInstanceId()));
                 if (o.getIsFacedown()) FACEDOWN_SEEN.incrementAndGet();
+                // a transforming card must carry its other face, or the client's transform hanger says "Can't Transform / not double-faced"
+                if ("azcanta".equals(System.getProperty("mtga.rig")) && o.getVisibility() != Visibility.Visibility_Hidden && o.getType() == GameObjectType.GameObjectType_Card
+                        && debugName(o.getInstanceId()).contains("Azcanta")) {
+                    if (o.getOthersideGrpId() == 0) problem("Azcanta without othersideGrpId: " + debugName(o.getInstanceId()));
+                    else AZCANTA_OTHERSIDE.incrementAndGet();
+                }
                 if (o.getType() == GameObjectType.GameObjectType_Emblem && SCHEMES_SEEN.add(o.getGrpId())) {
                     System.out.println("[selfplay] emblem " + o.getGrpId() + " " + debugName(o.getInstanceId()) + " zone " + o.getZoneId() + " abilities " + o.getUniqueAbilitiesCount());
                 }
