@@ -147,13 +147,15 @@ public final class SocialClient {
     private void run() {
         long pause = 2_000;
         while (!stopped) {
-            CompletableFuture<Void> ended = new CompletableFuture<>();
+            CompletableFuture<Integer> ended = new CompletableFuture<>();
+            int code = 0;
+            long opened = 0;
             try {
                 signIn();
                 refresh();
                 connect(ended);
-                pause = 2_000;
-                ended.get();                                              // until the socket closes
+                opened = System.currentTimeMillis();
+                code = ended.get();                                       // until the socket closes
             } catch (InterruptedException e) {
                 return;
             } catch (Exception e) {
@@ -161,7 +163,15 @@ public final class SocialClient {
             }
             synchronized (lock) { if (connected) { connected = false; version++; lock.notifyAll(); } }
             if (stopped) return;
-            try { Thread.sleep(pause); } catch (InterruptedException e) { return; }
+            // A session that lasted a while starts the pause over; one closed right away (or refused) keeps growing it, so a
+            // socket the coordinator keeps closing never turns into a sign-in loop.
+            if (opened > 0 && System.currentTimeMillis() - opened > 60_000) pause = 2_000;
+            long wait = pause;
+            if (code == SIGNED_IN_ELSEWHERE) {                            // another copy with this profile took the session: let it have it
+                System.out.println("[mtga] social: signed in elsewhere (another copy runs this profile); trying again in 10 minutes");
+                wait = ELSEWHERE_PAUSE_MS;
+            }
+            try { Thread.sleep(wait); } catch (InterruptedException e) { return; }
             pause = Math.min(pause * 2, 60_000);
         }
     }
@@ -183,7 +193,11 @@ public final class SocialClient {
         return token;
     }
 
-    private void connect(CompletableFuture<Void> ended) throws Exception {
+    /** The Hub's close code when the same player opened a newer session (src/hub.ts). */
+    private static final int SIGNED_IN_ELSEWHERE = 4000;
+    private static final long ELSEWHERE_PAUSE_MS = 10 * 60_000L;
+
+    private void connect(CompletableFuture<Integer> ended) throws Exception {
         String url = accounts.wsBase() + "/session?token=" + URLEncoder.encode(token(), StandardCharsets.UTF_8) + "&status=" + status;
         ScheduledFuture<?>[] ping = new ScheduledFuture<?>[1];
         WebSocket w = HttpClient.newHttpClient().newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10)).buildAsync(URI.create(url), new WebSocket.Listener() {
@@ -210,7 +224,7 @@ public final class SocialClient {
             @Override
             public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
                 if (ping[0] != null) ping[0].cancel(false);
-                ended.complete(null);
+                ended.complete(code);
                 return null;
             }
 
