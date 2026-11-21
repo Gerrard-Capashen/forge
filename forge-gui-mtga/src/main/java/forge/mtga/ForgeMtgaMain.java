@@ -69,6 +69,9 @@ public final class ForgeMtgaMain {
         MatchDoorServer server = new MatchDoorServer(port, () -> {
             MatchSetup setup = MatchSetup.current();
             if (setup != null && setup.seat() != null) return setup.seat();
+            if (setup == null && "bo3pips".equals(System.getProperty("mtga.rig"))) {      // a best of three straight into the duel (no sideboard)
+                return new ForgeBackend(db, new MatchSetup("bo3pips", green, red, Map.of(), "Forge AI", null, null, Map.of(), 2));
+            }
             return setup != null ? new ForgeBackend(db, setup) : new ForgeBackend(db, green, red);
         });
         server.start();
@@ -287,6 +290,12 @@ public final class ForgeMtgaMain {
         if ("azcanta".equals(rig)) {      // test rig: Search for Azcanta (transforms at upkeep with 7+ cards in the graveyard) vs a passive opponent
             green.clear();
             green.put("Island", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
+        if ("coverup".equals(rig) || "mdfc".equals(rig) || "bo3pips".equals(rig)) {      // test rigs: Deadly Cover-Up, modal double-faced cards, win pips of a best of three vs a passive opponent
+            green.clear();
+            green.put("coverup".equals(rig) ? "Swamp" : "mdfc".equals(rig) ? "Island" : "Mountain", 40);
             red.clear();
             red.put("Mountain", 40);
         }

@@ -204,6 +204,21 @@ public final class SelfPlay {
                 System.out.println("  wish rig: sideboard card played " + WISH_PLAYED.get() + ", sideboard cards in a selection " + SIDEBOARD_SELECTS.get() + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            if (rig.equals("coverup")) {      // the Sheoldred that just died is selectable (current graveyard id)
+                boolean ok = COVERUP_SHEOLDRED.get() > 0;
+                System.out.println("  coverup rig: selections offering the just-destroyed Sheoldred by its graveyard id " + COVERUP_SHEOLDRED.get() + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
+            if (rig.equals("mdfc")) {      // the back face of a modal double-faced card is its own action
+                boolean ok = MDFC_PLAY_BACK.get() > 0 && MDFC_CAST_BACK.get() > 0;
+                System.out.println("  mdfc rig: PlayMDFC offered " + MDFC_PLAY_BACK.get() + ", CastMDFC offered " + MDFC_CAST_BACK.get() + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
+            if (rig.equals("bo3pips")) {      // every GameInfo after game 1 repeats the games already won (the client counts its pips from them)
+                boolean ok = PIPS_LATER_GAME.get() > 0;
+                System.out.println("  bo3pips rig: game infos of a later game carrying earlier results " + PIPS_LATER_GAME.get() + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if (rig.equals("azcanta")) {      // Search for Azcanta (and its back, once flipped) carried othersideGrpId in the states
                 boolean ok = AZCANTA_OTHERSIDE.get() > 0;
                 System.out.println("  azcanta rig: states with an Azcanta object carrying othersideGrpId " + AZCANTA_OTHERSIDE.get() + (ok ? "" : "  (WRONG)"));
@@ -673,6 +688,8 @@ public final class SelfPlay {
     private static PublicProfile eve() { return new PublicProfile("id-eve", "Eve", "", "", "", "", null, "", 4); }
 
     static final Set<Integer> SCHEMES_SEEN = Collections.synchronizedSet(new TreeSet<>());
+    static final java.util.concurrent.atomic.AtomicInteger COVERUP_SHEOLDRED = new java.util.concurrent.atomic.AtomicInteger(), MDFC_PLAY_BACK = new java.util.concurrent.atomic.AtomicInteger(),
+            MDFC_CAST_BACK = new java.util.concurrent.atomic.AtomicInteger(), PIPS_LATER_GAME = new java.util.concurrent.atomic.AtomicInteger(), PIPS_MAX = new java.util.concurrent.atomic.AtomicInteger();
     static final java.util.concurrent.atomic.AtomicInteger AZCANTA_OTHERSIDE = new java.util.concurrent.atomic.AtomicInteger();
     static final Set<Integer> ADDED_SEEN =Collections.synchronizedSet(new TreeSet<>());
     static final java.util.concurrent.atomic.AtomicInteger UNDER_SEEN = new java.util.concurrent.atomic.AtomicInteger();
@@ -782,6 +799,19 @@ public final class SelfPlay {
         private static ClientToGREMessage.Builder msg(ClientMessageType t) { return ClientToGREMessage.newBuilder().setType(t); }
 
         private Action preferred(List<Action> acts) {
+            if ("mdfc".equals(System.getProperty("mtga.rig"))) {      // rig mdfc: the back faces are offered as PlayMDFC / CastMDFC; take one now and then
+                for (Action a : acts) {
+                    if (a.getActionType() == ActionType.ActionType_PlayMDFC) MDFC_PLAY_BACK.incrementAndGet();
+                    if (a.getActionType() == ActionType.ActionType_CastMDFC) MDFC_CAST_BACK.incrementAndGet();
+                }
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_PlayMDFC || a.getActionType() == ActionType.ActionType_CastMDFC) return a;
+            }
+            if ("coverup".equals(System.getProperty("mtga.rig"))) {
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith("Deadly")) return a;
+            }
+            if ("bo3pips".equals(System.getProperty("mtga.rig"))) {
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith("Lightning")) return a;
+            }
             if ("addcost".equals(System.getProperty("mtga.rig"))) {      // rig addcost: cast Iridescent Vinelasher first (3 mana: offspring must be asked), then Bitter Triumph
                 for (String n : List.of("Iridescent", "Bitter")) {
                     for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith(n)) return a;
@@ -907,7 +937,7 @@ public final class SelfPlay {
                 case GREMessageType_MulliganReq -> {
                     requests++;
                     boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"reduce".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig")) && !"reflect".equals(System.getProperty("mtga.rig"))
-                            && !java.util.Set.of("flail", "butcher", "gemstone", "wish", "xanathar").contains(String.valueOf(System.getProperty("mtga.rig")));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                            && !java.util.Set.of("flail", "butcher", "gemstone", "wish", "xanathar", "coverup", "mdfc", "bo3pips").contains(String.valueOf(System.getProperty("mtga.rig")));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -1149,6 +1179,12 @@ public final class SelfPlay {
                     }
                     if (!g.hasPrompt()) problem("SelectNReq without prompt (the client NREs in SelectNWorkflowTranslation)");
                     List<Integer> ids = new ArrayList<>(sn.getIdsList());
+                    if ("coverup".equals(System.getProperty("mtga.rig")) && sn.getIdType() == IdType.IdType_InstanceId) {
+                        for (int id : ids) {
+                            GameObjectInfo o = objs.get(id);
+                            if (o != null && String.valueOf(debugName(id)).startsWith("Sheoldred") && (o.getZoneId() == 33 || o.getZoneId() == 43)) COVERUP_SHEOLDRED.incrementAndGet();
+                        }
+                    }
                     if (sn.getIdType() == IdType.IdType_InstanceId) {
                         for (int id : ids) {
                             GameObjectInfo o = objs.get(id);
@@ -1230,7 +1266,7 @@ public final class SelfPlay {
                         java.util.Collections.shuffle(ids, rnd);
                         ClientToGREMessage.Builder r = msg(ClientMessageType.ClientMessageType_EffectCostResp);
                         r.getEffectCostRespBuilder().setEffectCostType(EffectCostType.EffectCostType_Select)
-                                .getCostSelectionBuilder().addAllIds(ids.subList(0, Math.min(ids.size(), sel.getMinSel())));
+                                .getCostSelectionBuilder().addAllIds(ids.subList(0, sel.getWeightsCount() > 0 ? ids.size() : Math.min(ids.size(), sel.getMinSel())));      // weighted (collect evidence): everything
                         reply(r);
                         break;
                     }
@@ -1381,6 +1417,12 @@ public final class SelfPlay {
                 problem("diff prevGameStateId " + gs.getPrevGameStateId() + " != " + lastGsId);
             }
             lastGsId = gs.getGameStateId();
+            if (gs.hasGameInfo() && gs.getGameInfo().getGameNumber() > 1 && gs.getGameInfo().getStage() != GameStage.GameStage_GameOver
+                    && gs.getGameInfo().getMatchState() == com.wizards.mtga.gre.MatchState.MatchState_GameInProgress) {
+                // the client rebuilds its win pips from every GameInfo: a later game must repeat the results of the games before it
+                if (gs.getGameInfo().getResultsCount() == gs.getGameInfo().getGameNumber() - 1) PIPS_LATER_GAME.incrementAndGet();
+                else problem("game " + gs.getGameInfo().getGameNumber() + " GameInfo carries " + gs.getGameInfo().getResultsCount() + " earlier results (win pips would be lost)");
+            }
             if (gs.hasGameInfo()) {
                 info = gs.getGameInfo();
                 if (gs.getType() == GameStateType.GameStateType_Full) {
@@ -1418,7 +1460,7 @@ public final class SelfPlay {
             }
             if (gs.getType() == GameStateType.GameStateType_Full && info.getGameNumber() > 1) {
                 int total = zone(31).getObjectInstanceIdsCount() + zone(32).getObjectInstanceIdsCount();
-                if (total != expectedMainSize) problem("game " + info.getGameNumber() + " starts with " + total + " cards in hand + library, sideboarded deck has " + expectedMainSize);
+                if (total != expectedMainSize && System.getProperty("mtga.rig") == null) problem("game " + info.getGameNumber() + " starts with " + total + " cards in hand + library, sideboarded deck has " + expectedMainSize);
                 if (info.getMatchState() != com.wizards.mtga.gre.MatchState.MatchState_GameInProgress) problem("new game with match state " + info.getMatchState());
             }
 

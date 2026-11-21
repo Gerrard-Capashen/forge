@@ -156,6 +156,11 @@ public final class StateSync {
         pendingMatchState = state;
     }
 
+    /** Results of the games already played in this match; every GameInfo of the next games repeats them (the client counts the win pips from them). */
+    public void setPlayedResults(List<com.wizards.mtga.gre.ResultSpec> played) { playedResults = played; }
+
+    private List<com.wizards.mtga.gre.ResultSpec> playedResults = List.of();
+
     /** GameInfo of this game's messages (game number, win condition); the default is game 1 of a single-game match. */
     public void setInfo(GameInfoSupplier i) { info = i; }
 
@@ -1381,6 +1386,7 @@ public final class StateSync {
         GameStateMessage.Builder m = GameStateMessage.newBuilder().setType(GameStateType.GameStateType_Full)
                 .setGameStateId(++gsId);
         info.fill(m.getGameInfoBuilder(), matchId);
+        m.getGameInfoBuilder().addAllResults(playedResults);
         for (int seat : new int[] {HUMAN_SEAT, AI_SEAT}) {
             m.addTeams(TeamInfo.newBuilder().setId(seat).addPlayerIds(seat).setStatus(TeamStatus.TeamStatus_InGame));
         }
@@ -1436,7 +1442,7 @@ public final class StateSync {
             pendingResults = null;
         } else if (playStage) {
             info.fill(m.getGameInfoBuilder(), matchId);
-            m.getGameInfoBuilder().setStage(GameStage.GameStage_Play);
+            m.getGameInfoBuilder().setStage(GameStage.GameStage_Play).addAllResults(playedResults);
         }
         for (GameObjectInfo o : s.objs.values()) {
             if (gameOver) break;

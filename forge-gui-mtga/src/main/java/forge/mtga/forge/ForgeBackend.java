@@ -290,6 +290,10 @@ public final class ForgeBackend implements GameBackend {
         sync = new StateSync(game, human, opponent, db, grpByName, matchId);
         sync.setInfo(info);
         if (previous != null) sync.continueFrom(previous);
+        // games 2 and 3 start with the earlier games' results: the client rebuilds its win pips from every GameInfo it gets
+        List<com.wizards.mtga.gre.ResultSpec> played = new ArrayList<>();
+        for (int w : gameWinners) played.add(resultSpec(com.wizards.mtga.gre.MatchScope.MatchScope_Game, w));
+        sync.setPlayedResults(played);
         sync.setAbilityResolver(sa -> {
             Card host = sa == null ? null : StateSync.visibleSource(sa.getHostCard());
             return host == null ? 0 : abilities.abilityId(sa, grp(host));
@@ -1170,6 +1174,43 @@ public final class ForgeBackend implements GameBackend {
             rigAdd(p, "Search for Azcanta", ZoneType.Hand, 0);
             return;
         }
+        if ("coverup".equals(rig)) {      // Deadly Cover-Up ({3}{B}{B}) with 5 Swamps and evidence to collect (Hill Giant + Grizzly Bears in my graveyard = 6): the AI has Sheoldred,
+                                          // the Apocalypse in play, in hand and in its graveyard. After the wrath, "exile a card from an opponent's graveyard" must let me
+                                          // pick the Sheoldred that just died (it was offered under her battlefield id), then every copy goes
+            for (int i = 0; i < 5; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
+            rigAdd(p, "Deadly Cover-Up", ZoneType.Hand, 0);
+            rigAdd(p, "Hill Giant", ZoneType.Graveyard, 0);
+            rigAdd(p, "Grizzly Bears", ZoneType.Graveyard, 0);
+            rigAdd(opponent, "Sheoldred, the Apocalypse", ZoneType.Battlefield, 0);
+            rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
+            rigAdd(opponent, "Sheoldred, the Apocalypse", ZoneType.Hand, 0);
+            rigAdd(opponent, "Sheoldred, the Apocalypse", ZoneType.Graveyard, 0);
+            rigAdd(opponent, "Lightning Bolt", ZoneType.Graveyard, 0);
+            return;
+        }
+        if ("mdfc".equals(rig)) {      // modal double-faced cards in hand: Clearwater Pathway // Murkwater Pathway (land // land), Shatterskull Smashing (spell // land,
+                                       // {X}{R}{R}) and Valakut Awakening (spell // land): each must offer both faces (the client's Back Side chooser) instead of playing the front
+            for (int i = 0; i < 4; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 3; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 2; i++) rigAdd(p, "Forest", ZoneType.Battlefield, 0);      // {G}{G} for Augmenter Pugilist
+            rigAdd(p, "Grizzly Bears", ZoneType.Battlefield, 0);      // Echoing Equation ({3}{U}{U}) needs a creature of mine to target
+            rigAdd(p, "Clearwater Pathway", ZoneType.Hand, 0);
+            rigAdd(p, "Shatterskull Smashing", ZoneType.Hand, 0);
+            rigAdd(p, "Valakut Awakening", ZoneType.Hand, 0);
+            rigAdd(p, "Hydroelectric Specimen", ZoneType.Hand, 0);      // creature // land
+            rigAdd(p, "Hydroelectric Specimen", ZoneType.Hand, 0);
+            rigAdd(p, "Augmenter Pugilist", ZoneType.Hand, 0);      // creature // sorcery: the back face is a CastMDFC action
+            rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
+            return;
+        }
+        if ("bo3pips".equals(rig)) {      // best of three: 3 Mountains in play and 2 Lightning Bolts in hand, the AI at 3 life: bolt it, the game is won in one turn.
+                                          // After game 1 my win pip must be lit (also during game 2), after game 2 both
+            for (int i = 0; i < 3; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            rigAdd(p, "Lightning Bolt", ZoneType.Hand, 0);
+            rigAdd(p, "Lightning Bolt", ZoneType.Hand, 0);
+            opponent.setLife(3, null);
+            return;
+        }
         if ("gollum".equals(rig)) {      // Swamp x3 in play, Gollum, Riddle Master in hand: casting it must ask odd or even (client parity buttons)
             for (int i = 0; i < 3; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
             rigAdd(p, "Gollum, Riddle Master", ZoneType.Hand, 0);
@@ -1430,6 +1471,11 @@ public final class ForgeBackend implements GameBackend {
         for (Card c : options) if (c.isInZone(ZoneType.Library) || c.isInZone(ZoneType.Sideboard) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
         for (Card c : shownOnly) if (c.isInZone(ZoneType.Library) || c.isInZone(ZoneType.Sideboard) || (c.isInZone(ZoneType.Hand) && c.getOwner() != human)) hidden.add(c);
         sync.reveal(hidden);
+        // a card that changed zones since the last diff (the creature a Deadly Cover-Up just destroyed) only gets its new instance id when
+        // the diff is built: send it first, or the request would name the old id and the client could not select the card
+        batching = false;
+        sync.setDecisionPlayer(human);
+        sendDiff(false);
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
         com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(min).setMaxSel(max).setContext(context)
                 .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Static)
@@ -2187,7 +2233,10 @@ public final class ForgeBackend implements GameBackend {
             if (!elsewhere && !sa.isLandAbility() && !hasLegalTargets(sa)) continue;      // Dismember with no creature around
             CardStateName door = roomDoor(sa);      // a Room: the half being cast from hand, or the locked door being unlocked on the battlefield
             boolean unlockDoor = door != null && sa.isUnlock();
-            ActionType at = companion || unlockDoor ? ActionType.ActionType_Special : sa.isLandAbility() ? ActionType.ActionType_Play : sa.isAdventure() ? ActionType.ActionType_CastAdventure
+            // a modal double-faced card in hand: the back face is its own action (PlayMDFC / CastMDFC, the client shows both faces to pick from)
+            boolean mdfcBack = host.isModal() && !host.isInZone(ZoneType.Battlefield) && sa.getCardStateName() == CardStateName.Backside && (sa.isLandAbility() || sa.isSpell());
+            ActionType at = mdfcBack ? (sa.isLandAbility() ? ActionType.ActionType_PlayMDFC : ActionType.ActionType_CastMDFC)
+                    : companion || unlockDoor ? ActionType.ActionType_Special : sa.isLandAbility() ? ActionType.ActionType_Play : sa.isAdventure() ? ActionType.ActionType_CastAdventure
                     : door != null && sa.isSpell() ? (door == CardStateName.LeftSplit ? ActionType.ActionType_CastLeftRoom : ActionType.ActionType_CastRightRoom)
                     : sa.isSpell() ? ActionType.ActionType_Cast : ActionType.ActionType_Activate;
             int iid = iid(host);
@@ -2203,7 +2252,7 @@ public final class ForgeBackend implements GameBackend {
             if (offered.containsKey(key)) continue;
             Action.Builder ab = Action.newBuilder().setActionType(at).setGrpId(grp(host)).setInstanceId(iid);
             if (abilityGrp != 0) ab.setAbilityGrpId(abilityGrp);
-            if (at != ActionType.ActionType_Play) {
+            if (at != ActionType.ActionType_Play && at != ActionType.ActionType_PlayMDFC) {
                 SpellAbility costSa = withReducedCost(shownCost, me);
                 addManaCost(ab, costSa, iid);
                 // without an auto-tap solution the client treats a costed action as unaffordable: no playable highlight
@@ -2236,7 +2285,7 @@ public final class ForgeBackend implements GameBackend {
             List<Action> now = new ArrayList<>();
             for (Action a : fromOtherZones) if (a.getInstanceId() == k) now.add(a);
             if (!now.isEmpty()) otherZoneActions.put(k, now);
-            else if (otherZoneActions.get(k).stream().allMatch(a -> a.getActionType() == ActionType.ActionType_Play)) {
+            else if (otherZoneActions.get(k).stream().allMatch(a -> a.getActionType() == ActionType.ActionType_Play || a.getActionType() == ActionType.ActionType_PlayMDFC)) {
                 otherZoneActions.remove(k);      // a land is playable from there only while its permission lasts (Icetill Explorer died, land drop spent)
             }
         }
