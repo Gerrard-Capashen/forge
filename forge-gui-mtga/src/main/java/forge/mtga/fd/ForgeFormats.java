@@ -57,11 +57,26 @@ public final class ForgeFormats {
     }
 
     /**
-     * Arena's Brawl is Commander for two: a commander (legendary creature or planeswalker) and 99 other cards of its colors, singleton, no sideboard,
-     * 25 life, best of one with a free first mulligan. For now it has Commander's card pool and ban list, so a Commander deck is as good as a
-     * Brawl one in a Brawl queue (the two specs only differ in what may lead the deck).
+     * Arena's Brawl: a commander (legendary creature or planeswalker) and 99 other cards of its colors, singleton, no sideboard, 25 life,
+     * best of one with a free first mulligan. Its pool is every collectible Arena card: a printing in an Arena set (Forge's Historic and Brawl
+     * set lists, Historic's kept current) or on their Additional lists, tabletop versions only (no rebalanced "A-" cards), minus Arena's Brawl
+     * ban list (Forge's "Brawl" format). Not "every card the client has": the client also has cube-only cards (the Power Nine), which Brawl
+     * never allows; and Forge's own Brawl set list lags behind Arena's sets.
      */
     public static final String BRAWL = "Brawl";
+
+    /** Commander (EDH): Forge's Commander format (its pool and ban list), 40 life, commander damage. Shares the play blade's EDH tab with Brawl. */
+    public static final String COMMANDER = "Commander";
+
+    /**
+     * Archenemy: Sparky's deck format: a Brawl deck or a Commander deck. The client checks the event's deck against one format, so this is
+     * their union (a card legal in either; a commander either allows). Sparky's own decks are not checked (he plays the Power Nine).
+     * Not in the format groups: no deck is built "for Archenemy".
+     */
+    public static final String ARCHENEMY = "Archenemy";
+
+    /** Brawl or Commander: a deck with a command zone. */
+    public static boolean isCommanderFormat(String format) { return BRAWL.equals(format) || COMMANDER.equals(format); }
 
     /**
      * Momir Basic: 60 basic lands and nothing else (Momir Vig's avatar makes the creatures). A client format of its own so the deck picker only
@@ -87,8 +102,9 @@ public final class ForgeFormats {
             new Spec("Vintage", "Vintage", 60, 250, 15, 0, 0, false, false),
             new Spec("Pauper", "Pauper", 60, 250, 15, 0, 0, false, false),
             new Spec("Premodern", "Premodern", 60, 250, 15, 0, 0, false, false),
-            new Spec("Commander", "Commander", 99, 99, 1, 1, 2, true, false),
-            new Spec(BRAWL, "Commander", 99, 99, 1, 1, 2, true, false),
+            new Spec(COMMANDER, "Commander", 99, 99, 1, 1, 2, true, false),
+            new Spec(BRAWL, "Brawl", 99, 99, 1, 1, 2, true, false),
+            new Spec(ARCHENEMY, null, 99, 99, 1, 1, 2, true, false),
             new Spec(MOMIR, null, 60, 60, 0, 0, 0, false, false),
             new Spec("Historic", "Historic", 60, 250, 15, 0, 0, false, true),
             new Spec("Alchemy", null, 60, 250, 15, 0, 0, false, true),
@@ -150,6 +166,29 @@ public final class ForgeFormats {
             return out;
         }
         GameFormat gf = spec.forgeFormat() == null ? null : FModel.getFormats().getFormat(spec.forgeFormat());
+        if (ARCHENEMY.equals(spec.name())) {      // Brawl's cards and Commander's
+            for (Spec s : SPECS) if (BRAWL.equals(s.name()) || COMMANDER.equals(s.name())) out.addAll(legalNames(s));
+            return out;
+        }
+        if (BRAWL.equals(spec.name())) {      // every collectible Arena card, tabletop versions, minus the ban list
+            Set<String> banned = gf == null ? Set.of() : new java.util.HashSet<>(gf.getBannedCardNames());
+            // the main [cards] section of each Arena set: not [conjured] (Alchemy spellbooks hold the Power Nine) or [rebalanced]
+            Set<String> collectible = new java.util.HashSet<>();
+            for (GameFormat arena : new GameFormat[] {gf, FModel.getFormats().getFormat("Historic")}) {
+                if (arena == null) continue;
+                collectible.addAll(arena.getAdditionalCards());
+                for (String code : arena.getAllowedSetCodes()) {
+                    forge.card.CardEdition ed = StaticData.instance().getEditions().get(code);
+                    if (ed != null && ed.getCards() != null) for (forge.card.CardEdition.EditionEntry ee : ed.getCards()) collectible.add(ee.name());
+                }
+            }
+            for (Map.Entry<String, PaperCard> e : forgeCards.entrySet()) {
+                String n = e.getKey(), real = e.getValue().getRules().getName();
+                if (n.startsWith("A-") || banned.contains(n) || banned.contains(real)) continue;
+                if (collectible.contains(n) || collectible.contains(real)) out.add(n);
+            }
+            return out;
+        }
         Predicate<PaperCard> rules = gf == null ? null : gf.getFilterRules();
         for (Map.Entry<String, PaperCard> e : forgeCards.entrySet()) {
             boolean ok = rules != null ? (rules.test(e.getValue()) || anyAliasLegal(rules, e.getKey())) : spec.rebalanced() || !e.getKey().startsWith("A-");
@@ -176,10 +215,12 @@ public final class ForgeFormats {
     }
 
     /** Format of the direct challenge screen's slot name (client format names): Standard / Pioneer / Modern / Limited rules under the slot's own name. */
-    private static final Map<String, List<String>> DIRECT_SLOTS = Map.of("Standard", List.of("DirectGame"), "Pioneer", List.of("DirectGameBrawlRebalanced"),
-            "Modern", List.of("DirectGameAlchemy"), "Legacy", List.of("DirectGameLimited"), "Vintage", List.of("DirectGameVintage"),
-            "Pauper", List.of("DirectGamePauper"), "Premodern", List.of("DirectGamePremodern"), BRAWL, List.of("DirectGameBrawl"),
-            "Historic", List.of("DirectGameHistoric"), "Timeless", List.of("DirectGameTimeless"));
+    private static final Map<String, List<String>> DIRECT_SLOTS = Map.ofEntries(Map.entry("Standard", List.of("DirectGame")),
+            Map.entry("Pioneer", List.of("DirectGameBrawlRebalanced")), Map.entry("Modern", List.of("DirectGameAlchemy")),
+            Map.entry("Legacy", List.of("DirectGameLimited")), Map.entry("Vintage", List.of("DirectGameVintage")),
+            Map.entry("Pauper", List.of("DirectGamePauper")), Map.entry("Premodern", List.of("DirectGamePremodern")), Map.entry(BRAWL, List.of("DirectGameBrawl")),
+            Map.entry("Historic", List.of("DirectGameHistoric")), Map.entry("Timeless", List.of("DirectGameTimeless")),
+            Map.entry(DRAFT_DECK, List.of("DirectGameForty")));      // the 40-card slot: any 40+ cards (a constructed-type format: see DRAFT_DECK)
 
     public synchronized GetFormatsResponse response() {
         GetFormatsResponse.Builder b = GetFormatsResponse.newBuilder();
@@ -224,7 +265,7 @@ public final class ForgeFormats {
                 b.addFormats(f.clone().setName(alias));
                 legal.put(alias, allowed);
             }
-            if (!LIMITED.equals(s.name()) && !AMBIGUOUS.equals(s.name())) order.add(s.name());
+            if (!LIMITED.equals(s.name()) && !AMBIGUOUS.equals(s.name()) && !ARCHENEMY.equals(s.name())) order.add(s.name());
             System.out.println("[mtga] FD format " + s.name() + ": " + names.size() + " legal cards (" + allowed.size() + " titles), "
                     + banned + " banned, " + restricted + " restricted, " + filterSets.size() + " Arena sets");
         }
@@ -270,7 +311,7 @@ public final class ForgeFormats {
             PaperCard pc = forgeCards.get(c);
             if (!ok.contains(c)) return c + " is not legal in " + spec.name();
             if (pc == null) continue;
-            boolean can = BRAWL.equals(spec.name()) ? pc.getRules().canBeBrawlCommander() : pc.getRules().canBeCommander();
+            boolean can = COMMANDER.equals(spec.name()) ? pc.getRules().canBeCommander() : pc.getRules().canBeBrawlCommander();      // Brawl's rule is the wider one (planeswalkers)
             if (!can) return c + " can't be a " + spec.name() + " commander";
             identity |= pc.getRules().getColorIdentity().getColor();
         }
@@ -291,6 +332,15 @@ public final class ForgeFormats {
             GameFormat gf = spec.forgeFormat() == null ? null : FModel.getFormats().getFormat(spec.forgeFormat());
             return gf == null ? Set.of() : new java.util.HashSet<>(gf.getRestrictedCards());
         });
+    }
+
+    /** Is a card (Forge name) legal in a client format? For building a deck the format accepts (the AI's Brawl / Commander deck). */
+    public synchronized Predicate<String> legalIn(String format) {
+        Spec spec = null;
+        for (Spec s : SPECS) if (s.name().equalsIgnoreCase(format)) spec = s;
+        if (spec == null) return n -> false;
+        Set<String> ok = legalByFormat.computeIfAbsent(spec.name(), k -> legalNames(SPECS.stream().filter(x -> x.name().equals(k)).findFirst().get()));
+        return ok::contains;
     }
 
     /** Title ids legal in a client format (after {@link #response()}), null if unknown. */

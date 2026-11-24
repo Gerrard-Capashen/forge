@@ -602,7 +602,7 @@ public final class FrontDoor {
         String name = str(req, "EventName");
         if (ArchenemyEvent.is(name)) {
             JsonObject deck = req.has("Deck") && req.get("Deck").isJsonObject() ? req.getAsJsonObject("Deck") : null;
-            String problem = deck == null ? "no deck submitted" : deckProblem(ForgeFormats.BRAWL, deck);
+            String problem = deck == null ? "no deck submitted" : deckProblem(ForgeFormats.ARCHENEMY, deck);
             if (problem != null) System.out.println("[mtga] FD " + name + ": deck refused: " + problem);
             return archenemy.setDeck(req, problem);
         }
@@ -802,7 +802,7 @@ public final class FrontDoor {
         }
         String companion = companionOf(deck, printing);
         // only a Brawl game plays the command zone (a Commander deck keeps playing as 99 cards + the rest)
-        java.util.List<String> commanders = ArchenemyEvent.is(eventId) || ForgeFormats.BRAWL.equals(PlayQueues.isQueueEvent(eventId) ? PlayQueues.formatOf(eventId) : deckFormat(summary))
+        java.util.List<String> commanders = ArchenemyEvent.is(eventId) || ForgeFormats.isCommanderFormat(PlayQueues.isQueueEvent(eventId) ? PlayQueues.formatOf(eventId) : deckFormat(summary))
                 ? commandersOf(deck, printing) : java.util.List.of();
         if (human.isEmpty()) return new Err(7000, "deck '" + deckName + "' has no cards Forge knows");
         if (!unknown.isEmpty()) System.out.println("[mtga] FD: skipped cards Forge does not know: " + unknown);
@@ -834,7 +834,7 @@ public final class FrontDoor {
             return startOnlineMatch(s, deckName, human, printing, PlayQueues.gamesToWin(eventId) > 1 ? sideboard : Map.of(), me, eventId, p, session, companion, java.util.List.of());
         }
         if (ArchenemyEvent.is(eventId)) {
-            String problem = deckProblem(ForgeFormats.BRAWL, deck);      // the server's own check, as for a queue
+            String problem = deckProblem(ForgeFormats.ARCHENEMY, deck);      // the server's own check, as for a queue
             if (problem != null) return new Err(7000, "Archenemy: Sparky: " + problem);
             return launchBotMatch(s, deckName, human, printing, sideboard, companion, commanders, aiOverride, profile.forBoss(aiOverride.name()), me, eventId);
         }
@@ -857,7 +857,7 @@ public final class FrontDoor {
         } : event ? won -> { if (won != null) events.recordResult(eventId, won); } : ranked ? won -> botRankedWins.put(matchId, won == null ? java.util.Optional.empty() : java.util.Optional.of(won)) : null;
         forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, ai.cards(), printing, aiName, null,
                 onResult, gamesToWin > 1 ? sideboard : Map.of(), gamesToWin, companion, ai.companion(), commanders, ai.commanders(), ai.schemes(), ai.life(),
-                PlayQueues.isMomir(eventId)));
+                PlayQueues.isMomir(eventId), ForgeFormats.COMMANDER.equals(PlayQueues.formatOf(eventId))));
         if (ranked) rank.botStartAsync(matchId, eventId);
         int total = human.values().stream().mapToInt(Integer::intValue).sum();
         botMatches.put(matchId, eventId);
@@ -905,6 +905,7 @@ public final class FrontDoor {
             String matchId = "p2p-" + System.currentTimeMillis() + "-" + (++matchCounter);
             forge.mtga.forge.ForgeMatch room = new forge.mtga.forge.ForgeMatch(db, matchId);
             room.setMomir(PlayQueues.isMomir(eventId));
+            room.setCommanderGame(ForgeFormats.COMMANDER.equals(PlayQueues.formatOf(eventId)));
             forge.mtga.forge.ForgeBackend mine = new forge.mtga.forge.ForgeBackend(db, room, 0, new forge.mtga.forge.ForgeMatch.Seat(me.name(), human, printing, Map.of(), companion, commanders));
             forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
             System.out.println("[mtga] FD P2P host: '" + deckName + "' waits for a guest (match " + matchId + ")");
@@ -1024,6 +1025,7 @@ public final class FrontDoor {
                 room.setGamesToWin(gamesToWin);
                 room.setFirstSeat(firstSeat);
                 room.setMomir(PlayQueues.isMomir(eventId));
+                room.setCommanderGame(ForgeFormats.COMMANDER.equals(PlayQueues.formatOf(eventId)));
                 forge.mtga.MatchSetup.publish(new forge.mtga.MatchSetup(matchId, human, Map.of(), printing, "", mine));
                 mine.setOutcomeListener(outcomeReport(paired, eventId));
                 p.host().offer(new forge.mtga.peer.PeerHost.Offer(matchId, room, me, eventId, guest -> pushMatchCreated(s, matchId, me, profile.sanitize(vouched(guest, paired)), eventId, commanders, room.commanders(1))));
@@ -1111,12 +1113,15 @@ public final class FrontDoor {
      */
     private forge.mtga.AiDecks.Choice aiDeck(String format) {
         String spec = System.getProperty("mtga.aideck");
-        if ((spec == null || spec.isBlank()) && ForgeFormats.BRAWL.equals(format)) return forge.mtga.AiDecks.brawl(n -> db.grpId(n) != 0);
+        if ((spec == null || spec.isBlank()) && ForgeFormats.isCommanderFormat(format)) {      // a deck the format accepts: Brawl has Arena's cards only
+            java.util.function.Predicate<String> legal = forgeFormats().legalIn(format);
+            return forge.mtga.AiDecks.commander(n -> db.grpId(n) != 0 && legal.test(n), format);
+        }
         if (spec == null || spec.isBlank()) {
             forge.mtga.AiDecks.Choice builtIn = forge.mtga.AiDecks.fromDefaults(format, this::playable);
             if (builtIn != null) return builtIn;
             forge.game.GameFormat gf = ForgeFormats.forgeFormat(format);
-            if (gf != null && !"Commander".equals(gf.getName())) {
+            if (gf != null && !ForgeFormats.isCommanderFormat(format)) {
                 System.out.println("[mtga] FD: AI deck for format " + format);
                 return forge.mtga.AiDecks.forFormat(gf, n -> db.grpId(n) != 0);
             }

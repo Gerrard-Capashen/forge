@@ -38,7 +38,7 @@ public final class QueueCheck {
         PlayQueues q = new PlayQueues();
 
         JsonArray cfg = q.queueConfig(), events = q.eventInfos();
-        int queues = 0, bo3s = PlayQueues.FORMATS.size() * 2;       // Bot Play and Ranked offer a best-of-three event for every format but Brawl
+        int queues = 0, bo3s = PlayQueues.FORMATS.size() * 2;       // Bot Play and Ranked offer a best-of-three event for every format but Brawl and Commander
         for (PlayQueues.Mode m : PlayQueues.Mode.values()) queues += PlayQueues.formats(m).size();
         // Bot Play and Ranked also have a best-of-three event per format
         check(cfg.size() == queues && events.size() == queues + bo3s, queues + " queues and " + (queues + bo3s) + " events");
@@ -48,7 +48,7 @@ public final class QueueCheck {
             JsonObject c = cfg.get(i).getAsJsonObject(), e = byName.get(cfg.get(i).getAsJsonObject().get("EventNameBO1").getAsString());
             String name = e.get("InternalEventName").getAsString();
             PlayQueues.Mode mode = PlayQueues.modeOf(name);
-            boolean bot = (mode == PlayQueues.Mode.BOT || mode == PlayQueues.Mode.RANKED) && !PlayQueues.BRAWL.equals(PlayQueues.formatOf(name));
+            boolean bot = (mode == PlayQueues.Mode.BOT || mode == PlayQueues.Mode.RANKED) && !ForgeFormats.isCommanderFormat(PlayQueues.formatOf(name));
             String bo3 = c.get("EventNameBO3").isJsonNull() ? null : c.get("EventNameBO3").getAsString();
             check(bot ? (name + PlayQueues.BO3).equals(bo3) : bo3 == null, name + (bot ? " offers a best-of-three event" : " is best-of-one only"));
             if (bot) {
@@ -106,20 +106,45 @@ public final class QueueCheck {
                 && StaticData.instance().getCommonCards().getUniqueByName(forge.mtga.Archenemy.artDonor(forge.mtga.Archenemy.MOMIR_AVATAR)) != null, "the avatar's art donor is a card Forge has");
         check(forge.mtga.DefaultDecks.of("Momir").size() == 1 && formats.problem("Momir", forge.mtga.DefaultDecks.of("Momir").get(0).main(), 0) == null, "the built-in Momir Basic deck is legal");
 
-        // Brawl: its queues sit under the blade's Brawl tab (QueueType "Brawl"), best of one; a generated AI deck passes the server's own check
-        for (String id : new String[] {"bot-brawl", "casual-brawl"}) {
+        // Brawl and Commander: their queues sit under the blade's Brawl tab (QueueType "Brawl", shown as EDH), best of one; a generated AI deck passes the server's own check
+        for (String id : new String[] {"bot-brawl", "casual-brawl", "bot-commander", "casual-commander"}) {
             JsonObject b = null;
             for (int i = 0; i < cfg.size(); i++) if (id.equals(cfg.get(i).getAsJsonObject().get("Id").getAsString())) b = cfg.get(i).getAsJsonObject();
             check(b != null && "Brawl".equals(b.get("QueueType").getAsString()) && b.get("EventNameBO3").isJsonNull(), id + " is a best-of-one queue of the Brawl tab");
         }
-        forge.mtga.AiDecks.Choice brawl = forge.mtga.AiDecks.brawl(n -> db.grpId(n) != 0);
+        java.util.function.Predicate<String> brawlLegal = formats.legalIn("Brawl");
+        forge.mtga.AiDecks.Choice brawl = forge.mtga.AiDecks.commander(n -> db.grpId(n) != 0 && brawlLegal.test(n), "Brawl");
         int brawlCards = brawl.cards().values().stream().mapToInt(Integer::intValue).sum();
         System.out.println("  AI Brawl deck: " + brawl.name() + ", " + brawlCards + " cards + " + brawl.commanders());
         check(brawl.commanders().size() == 1 && brawlCards == 99, "the AI's Brawl deck is 99 cards and a commander");
-        check(formats.problem("Commander", brawl.cards(), brawl.commanders(), 0) == null, "a Brawl deck is a Commander deck too (same pool and bans)");
+        java.util.function.Predicate<String> edhLegal = formats.legalIn("Commander");
+        forge.mtga.AiDecks.Choice edh = forge.mtga.AiDecks.commander(n -> db.grpId(n) != 0 && edhLegal.test(n), "Commander");
+        check(formats.problem("Commander", edh.cards(), edh.commanders(), 0) == null, "Commander accepts the generated deck: " + formats.problem("Commander", edh.cards(), edh.commanders(), 0));
+        // Brawl is Arena's list (issue #12): Emrakul, the Aeons Torn is legal there and banned in Commander; Brawl's own bans and generated cards are out
+        check(brawlLegal.test("Emrakul, the Aeons Torn") && !edhLegal.test("Emrakul, the Aeons Torn"), "Emrakul, the Aeons Torn: legal in Brawl, banned in Commander");
+        check(!brawlLegal.test("Oko, Thief of Crowns") && !brawlLegal.test("Demonic Tutor"), "Brawl bans Oko and Demonic Tutor");
+        check(!brawlLegal.test("A-Oko, Thief of Crowns"), "Brawl has no rebalanced cards");
+        java.util.function.Predicate<String> sparkyLegal = formats.legalIn(ForgeFormats.ARCHENEMY);
+        check(formats.problem(ForgeFormats.ARCHENEMY, brawl.cards(), brawl.commanders(), 0) == null && formats.problem(ForgeFormats.ARCHENEMY, edh.cards(), edh.commanders(), 0) == null
+                && sparkyLegal.test("Emrakul, the Aeons Torn") && sparkyLegal.test("Demonic Tutor") && !sparkyLegal.test("Black Lotus"), "Archenemy: Sparky takes a Brawl deck or a Commander deck");
+        check(!brawlLegal.test("Black Lotus") && !brawlLegal.test("Mox Sapphire"), "Brawl has no cube-only cards (the client has the Power Nine for cube events)");
+        check(brawlLegal.test("Lightning Bolt"), "Brawl has Lightning Bolt (an Arena reprint)");
+        String generatedOnly = null;
+        for (String n : edhLegal.test("Pandemonium") ? java.util.List.of("Pandemonium") : java.util.List.<String>of()) if (db.grpId(n) >= forge.mtga.CardDbBuilder.GRP_BASE) generatedOnly = n;
+        check(generatedOnly == null || !brawlLegal.test(generatedOnly), "a card only we generate (not on Arena) is not Brawl-legal");
         check(formats.problem("Brawl", brawl.cards(), brawl.commanders(), 0) == null, "Brawl accepts the generated deck: " + formats.problem("Brawl", brawl.cards(), brawl.commanders(), 0));
         check(formats.problem("Brawl", brawl.cards(), java.util.List.of(), 0) != null, "Brawl refuses a deck without a commander");
         check(formats.problem("Standard", deck("Mountain", 60), brawl.commanders(), 0) != null, "Standard refuses a commander");
+
+        // the eleventh direct challenge slot ("10", issue #14): any 40+ cards, a constructed-type client format under its own alias
+        String forty = ChallengeService.FORMAT_OF.get("10");
+        check(ForgeFormats.DRAFT_DECK.equals(forty) && formats.problem(forty, deck("Lightning Bolt", 4, "Mountain", 36), 0) == null
+                && formats.problem(forty, deck("Mountain", 39), 0) != null, "the 40-card challenge slot takes any 40 cards, not 39");
+        boolean fortyFormat = false;
+        for (com.wizards.mtga.fd.FormatConfigInfo f : formats.response().getFormatsList()) {
+            if ("DirectGameForty".equals(f.getName())) fortyFormat = f.getMainDeckQuota().getMin() == 40 && f.getFormatTypeInternal() == 3;
+        }
+        check(fortyFormat, "the client gets a DirectGameForty format: 40 cards, constructed type");
 
         Map<String, Integer> bolt = deck("Lightning Bolt", 4, "Mountain", 56);
         check(formats.problem("Modern", bolt, 0) == null, "Modern accepts Bolt + Mountain");

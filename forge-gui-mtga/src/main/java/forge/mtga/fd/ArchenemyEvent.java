@@ -66,7 +66,7 @@ final class ArchenemyEvent {
                 "ByCourseObjectiveTrack", obj("ChestDescriptions", chests));
         JsonObject ux = obj("PublicEventName", NAME, "DisplayPriority", 5, "PrioritizeBannerIfPlayerHasToken", false,
                 "Parameters", obj(), "Group", "", "EventBladeBehavior", "EventPage", "DynamicFilterTagIds", new JsonArray(),
-                "DeckSelectFormat", ForgeFormats.BRAWL, "FactionSealedUXInfo", new JsonArray(), "Prizes", obj("0", "f0f0f0f0-0000-4000-8000-000000000000"),
+                "DeckSelectFormat", ForgeFormats.ARCHENEMY, "FactionSealedUXInfo", new JsonArray(), "Prizes", obj("0", "f0f0f0f0-0000-4000-8000-000000000000"),
                 "EventComponentData", data, "Joinability", "Open");
         JsonArray out = new JsonArray();
         out.add(obj("InternalEventName", NAME, "EventState", "Active", "FormatType", "Constructed",

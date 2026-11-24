@@ -53,6 +53,11 @@ public final class ForgeMatch {
     /** Momir Basic: both seats play their basic lands with Momir Vig's avatar (the {X}, discard a card: random creature token ability) in the command zone. */
     public void setMomir(boolean on) { momir = on; }
 
+    private boolean commanderGame;
+
+    /** Commander (EDH) rather than Brawl for decks with a commander: 40 life, 21 commander damage, no free mulligan. */
+    public void setCommanderGame(boolean on) { commanderGame = on; }
+
     /** The Momir Basic avatar card (a Forge variant card), null if Forge lacks it. */
     public static final String MOMIR_AVATAR = forge.mtga.Archenemy.MOMIR_AVATAR;
 
@@ -222,7 +227,7 @@ public final class ForgeMatch {
         boolean archenemy = false;
         for (Seat seat : seats) archenemy |= seat.schemes() != null && !seat.schemes().isEmpty();
         if (momir) brawl = archenemy = false;      // Momir Basic is its own game: 24 life from the avatar, no command zone cards
-        GameType type = brawl ? GameType.Brawl : GameType.Constructed;
+        GameType type = brawl ? (commanderGame && !archenemy ? GameType.Commander : GameType.Brawl) : GameType.Constructed;
         EnumSet<GameType> variants = EnumSet.of(type);
         if (archenemy) variants.add(GameType.Archenemy);
         if (momir) variants.add(GameType.MomirBasic);

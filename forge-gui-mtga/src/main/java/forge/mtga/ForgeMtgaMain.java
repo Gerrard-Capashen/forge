@@ -305,6 +305,14 @@ public final class ForgeMtgaMain {
             red.clear();
             red.put("Mountain", 40);
         }
+        if ("xantcha".equals(rig) || "chimes".equals(rig) || "exert".equals(rig) || "charm".equals(rig) || "pandemonium".equals(rig) || "minusx".equals(rig)) {      // test rigs: an any-player ability on the
+                                                                                                         // opponent's Xantcha, Victory Chimes' player choice, exert as it attacks,
+                                                                                                         // charm modes of cards the client has no modal abilities for; a passive opponent
+            green.clear();
+            green.put("exert".equals(rig) || "chimes".equals(rig) || "pandemonium".equals(rig) ? "Mountain" : "charm".equals(rig) || "minusx".equals(rig) ? "Island" : "Swamp", 40);
+            red.clear();
+            red.put("Mountain", 40);
+        }
         if ("cam".equals(rig)) {      // test rig: Sewer-veillance Cam (tap or untap target creature) vs a passive opponent
             green.clear();
             green.put("Island", 40);

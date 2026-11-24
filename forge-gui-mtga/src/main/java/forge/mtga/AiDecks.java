@@ -38,10 +38,14 @@ public final class AiDecks {
     }
 
     /**
-     * A Brawl deck for the AI (Arena's Brawl is Commander for two): Forge's Commander deck builder around a random legendary commander the
-     * client has, 99 cards. Of 60 tries the one missing the fewest client cards wins; its missing cards become basic lands.
+     * A Brawl deck for the AI: Forge's Commander deck builder around a random legendary commander the client has, 99 cards. Of 60 tries the one
+     * missing the fewest cards wins; its missing cards become basic lands. {@code onClient}: the cards the deck may hold (the client has them and,
+     * for a queue, the format allows them).
      */
-    public static Choice brawl(Predicate<String> onClient) {
+    public static Choice brawl(Predicate<String> onClient) { return commander(onClient, "Brawl"); }
+
+    /** The same for a format named {@code label} (Brawl, Commander): only the deck's name differs. */
+    public static Choice commander(Predicate<String> onClient, String label) {
         Choice best = null;
         int bestMissing = Integer.MAX_VALUE;
         for (int i = 0; i < 60 && bestMissing > 6; i++) {
@@ -54,11 +58,11 @@ public final class AiDecks {
             for (Map.Entry<String, Integer> e : cards.entrySet()) if (!onClient.test(e.getKey())) missing += e.getValue();
             if (missing < bestMissing) {
                 bestMissing = missing;
-                best = new Choice(commanders.get(0).getName() + " (Brawl)", cards, null, List.of(commanders.get(0).getName()));
+                best = new Choice(commanders.get(0).getName() + " (" + label + ")", cards, null, List.of(commanders.get(0).getName()));
             }
         }
-        if (best == null) throw new IllegalStateException("no Brawl deck the client can show");
-        if (bestMissing > 0) System.out.println("[mtga] AI Brawl deck " + best.name() + ": " + bestMissing + " cards not on the client -> basic lands");
+        if (best == null) throw new IllegalStateException("no " + label + " deck the client can show");
+        if (bestMissing > 0) System.out.println("[mtga] AI " + label + " deck " + best.name() + ": " + bestMissing + " cards not on the client -> basic lands");
         return new Choice(best.name(), replaceMissing(best.cards(), onClient), null, best.commanders());
     }
 

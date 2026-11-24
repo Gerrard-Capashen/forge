@@ -40,24 +40,26 @@ final class PlayQueues {
     static final List<String> FORMATS = List.of("Standard", "Pioneer", "Modern", "Legacy", "Vintage", "Pauper", "Premodern");
 
     /**
-     * Brawl: Bot Play and Casual Play only (no Brawl ladder), best of one (the sideboard screen has no command zone). Its queues sit under the
-     * play blade's own Brawl tab ({@code QueueType} "Brawl"), which the client keeps locked while that list is empty.
+     * Brawl and Commander: Bot Play and Casual Play only (no ladder), best of one (the sideboard screen has no command zone). Their queues sit
+     * under the play blade's own Brawl tab ({@code QueueType} "Brawl", shown as "EDH"), which the client keeps locked while that list is empty.
      */
     static final String BRAWL = ForgeFormats.BRAWL;
+    static final String COMMANDER = ForgeFormats.COMMANDER;
 
-    /** The formats a mode offers: the constructed ones, plus Brawl for the unranked modes. */
+    /** The formats a mode offers: the constructed ones, plus Brawl and Commander for the unranked modes. */
     static List<String> formats(Mode m) {
         if (m == Mode.MOMIR) return List.of(ForgeFormats.MOMIR);
         if (m == Mode.RANKED) return FORMATS;
         List<String> all = new java.util.ArrayList<>(FORMATS);
         all.add(BRAWL);
+        all.add(COMMANDER);
         return all;
     }
 
-    private static String queueType(Mode m, String format) { return BRAWL.equals(format) ? "Brawl" : m.queueType; }
+    private static String queueType(Mode m, String format) { return ForgeFormats.isCommanderFormat(format) ? "Brawl" : m.queueType; }
 
-    /** Bot Play and Ranked offer a best-of-three event next to the best-of-one one (not Brawl, not Casual Play or Momir yet). */
-    private static boolean hasBo3(Mode m, String format) { return (m == Mode.BOT || m == Mode.RANKED) && !BRAWL.equals(format); }
+    /** Bot Play and Ranked offer a best-of-three event next to the best-of-one one (not Brawl or Commander, not Casual Play or Momir yet). */
+    private static boolean hasBo3(Mode m, String format) { return (m == Mode.BOT || m == Mode.RANKED) && !ForgeFormats.isCommanderFormat(format); }
 
     /** Play-blade queue id of a mode and format, e.g. "bot-standard". */
     static String queueId(Mode mode, String format) { return mode.idPrefix + format.toLowerCase(); }

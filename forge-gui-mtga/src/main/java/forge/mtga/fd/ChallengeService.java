@@ -48,10 +48,13 @@ final class ChallengeService {
             "ChallengeInvite", "ChallengeSendMessage", "ChallengeReconnectAll");
 
     /** Challenge slot (client match type) -> format whose rules the decks are checked against. */
-    static final Map<String, String> FORMAT_OF = Map.of("DirectGame", "Standard", "DirectGameBrawl", "Pioneer", "DirectGameAlchemy", "Modern",
-            "DirectGameLimited", "Legacy", "DirectGameTournamentMode", "Vintage", "DirectGameTournamentLimited", "Pauper",
-            "DirectGameTournamentHistoric", "Premodern", "DirectGameTournamentExplorer", "Brawl", "DirectGameTournamentTimeless", "Historic",
-            "DirectGameTournamentAlchemy", "Timeless");
+    static final Map<String, String> FORMAT_OF = Map.ofEntries(Map.entry("DirectGame", "Standard"), Map.entry("DirectGameBrawl", "Pioneer"),
+            Map.entry("DirectGameAlchemy", "Modern"), Map.entry("DirectGameLimited", "Legacy"), Map.entry("DirectGameTournamentMode", "Vintage"),
+            Map.entry("DirectGameTournamentLimited", "Pauper"), Map.entry("DirectGameTournamentHistoric", "Premodern"),
+            Map.entry("DirectGameTournamentExplorer", "Brawl"), Map.entry("DirectGameTournamentTimeless", "Historic"),
+            Map.entry("DirectGameTournamentAlchemy", "Timeless"),
+            // the eleventh slot (bridge ChallengeSlots): a match type beyond the client's enum, named by its number; any 40+ cards (issue #14)
+            Map.entry("10", ForgeFormats.DRAFT_DECK));
 
     /** The event id every challenge match is created with (the client treats it as its private game). */
     static final String EVENT = "DirectGame";
@@ -176,7 +179,7 @@ final class ChallengeService {
         int gamesToWin = winCondition(s(challenge, "winCondition"));        // 2 = best of three
         pending.put(req.getChallengeId(), new Pending(cards.human(), cards.printing(), gamesToWin > 1 ? cards.sideboard() : Map.of(), gamesToWin, firstSeat(s(challenge, "playFirst")),
                 fd.profile().forDeck(stored.getAsJsonObject("Summary")), cards.companion(),
-                ForgeFormats.BRAWL.equals(FORMAT_OF.get(name)) ? cards.commanders() : java.util.List.of()));
+                ForgeFormats.isCommanderFormat(FORMAT_OF.get(name)) ? cards.commanders() : java.util.List.of()));
         try {
             return post(req.getChallengeId(), "issue", new JsonObject());
         } catch (IOException e) {

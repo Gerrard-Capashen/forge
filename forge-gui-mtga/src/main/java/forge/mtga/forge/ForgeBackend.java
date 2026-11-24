@@ -25,6 +25,8 @@ import forge.game.card.CardCollectionView;
 import forge.game.event.GameEvent;
 import forge.game.phase.PhaseType;
 import forge.game.player.Player;
+import forge.game.player.PlayerCollection;
+import forge.game.ability.AbilityUtils;
 import forge.game.spellability.AbilitySub;
 import forge.game.spellability.SpellAbility;
 import forge.game.zone.ZoneType;
@@ -109,6 +111,7 @@ public final class ForgeBackend implements GameBackend {
                 new ForgeMatch.Seat(System.getProperty("mtga.name", "Forge Player"), setup.humanDeck(), setup.grpOverrides(), setup.humanSideboard(), setup.humanCompanion(), setup.humanCommanders()));
         room.setGamesToWin(setup.gamesToWin());
         room.setMomir(setup.momir());
+        room.setCommanderGame(setup.commander());
         room.addAi(1, new ForgeMatch.Seat("Opponent", setup.aiDeck(), Map.of(), Map.of(), setup.aiCompanion(), setup.aiCommanders(), setup.aiSchemes(), setup.aiLife()), setup.aiName() == null ? "Forge AI" : setup.aiName());
         this.onResult = setup.onResult();
     }
@@ -1216,6 +1219,59 @@ public final class ForgeBackend implements GameBackend {
             rigAdd(p, "Gollum, Riddle Master", ZoneType.Hand, 0);
             return;
         }
+        if ("xantcha".equals(rig)) {      // Xantcha, Sleeper Agent under the AI's control ("{3}: Xantcha's controller loses 2 life and you draw a card. Any player may
+                                          // activate this ability."), 4 Swamps + 4 Mountains, a second Xantcha in hand: the ability must be offered on the AI's Xantcha, on
+                                          // my turn and on the AI's; casting mine gives it to the AI (one opponent: no question)
+            for (int i = 0; i < 4; i++) { rigAdd(p, "Swamp", ZoneType.Battlefield, 0); rigAdd(p, "Mountain", ZoneType.Battlefield, 0); }
+            rigAdd(p, "Xantcha, Sleeper Agent", ZoneType.Hand, 0);
+            rigAdd(p, "Xantcha, Sleeper Agent", ZoneType.Battlefield, 0);      // mine, entering under the AI's control (its replacement)
+            for (Card c : game.getCardsIn(ZoneType.Battlefield)) {
+                if (!c.getName().startsWith("Xantcha")) continue;
+                if (c.getController() != opponent) {      // a hand-placed card may skip the replacement
+                    c.setController(opponent, game.getNextTimestamp());
+                    game.getAction().controllerChangeZoneCorrection(c);
+                }
+                System.out.println("[mtga] rig: Xantcha controlled by " + c.getController() + ", owned by " + c.getOwner());
+            }
+            return;
+        }
+        if ("minusx".equals(rig)) {      // Chandra, Chill of Compliance (loyalty 3, [-X]: tap target artifact or creature, X stun counters) + 3 Islands; the AI has
+                                         // Ornithopter and Wall of Stone: the -X must ask for X, 0 up to her loyalty (the AI's cost payment picked it before)
+            for (int i = 0; i < 3; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
+            rigAdd(p, "Chandra, Chill of Compliance", ZoneType.Battlefield, 3);
+            for (String name : List.of("Ornithopter", "Wall of Stone")) rigAdd(opponent, name, ZoneType.Battlefield, 0);      // targets that can't hurt her
+            return;
+        }
+        if ("pandemonium".equals(rig)) {      // Pandemonium in play, 4 Mountains + 2 Goblin Piker in hand; the AI has 3 Mountains + 3 Goblin Piker in hand. When the AI's
+                                              // creature enters, the AI (that creature's controller) picks the target, not Pandemonium's controller; mine ask me
+            for (int i = 0; i < 4; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            rigAdd(p, "Pandemonium", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 2; i++) rigAdd(p, "Goblin Piker", ZoneType.Hand, 0);
+            for (int i = 0; i < 3; i++) rigAdd(opponent, "Mountain", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 3; i++) rigAdd(opponent, "Goblin Piker", ZoneType.Hand, 0);
+            return;
+        }
+        if ("chimes".equals(rig)) {      // Victory Chimes ("{T}: A player of your choice adds {C}") + 3 Mountains in play, Hill Giant in hand: tapping the Chimes must ask
+                                         // which player (the avatars light up); it untaps in the AI's untap step, so it can feed the AI too
+            for (int i = 0; i < 3; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            rigAdd(p, "Victory Chimes", ZoneType.Battlefield, 0);
+            rigAdd(p, "Hill Giant", ZoneType.Hand, 0);
+            return;
+        }
+        if ("exert".equals(rig)) {      // Ahn-Crop Crasher and Glorybringer ("You may exert ... as it attacks") + Grizzly Bears in play; the AI has Grizzly Bears and Hill Giant:
+                                        // clicking an exerter to attack must offer Attack / Exert; exerting fires the "when you do" trigger and the creature stays tapped next untap
+            for (int i = 0; i < 5; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            for (String name : List.of("Ahn-Crop Crasher", "Glorybringer", "Grizzly Bears")) rigAdd(p, name, ZoneType.Battlefield, 0);
+            for (String name : List.of("Grizzly Bears", "Hill Giant")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
+            return;
+        }
+        if ("charm".equals(rig)) {      // 3 Islands + 3 Swamps, 2 Vision Charm + 2 Funeral Charm in hand (cards our generated database holds, without client modal
+                                        // abilities); the AI has Ornithopter (an artifact to phase out) and Grizzly Bears: each charm must ask its mode
+            for (int i = 0; i < 3; i++) { rigAdd(p, "Island", ZoneType.Battlefield, 0); rigAdd(p, "Swamp", ZoneType.Battlefield, 0); }
+            for (String name : List.of("Vision Charm", "Vision Charm", "Funeral Charm", "Funeral Charm")) rigAdd(p, name, ZoneType.Hand, 0);
+            for (String name : List.of("Ornithopter", "Grizzly Bears")) rigAdd(opponent, name, ZoneType.Battlefield, 0);
+            return;
+        }
         if ("cam".equals(rig)) {      // Sewer-veillance Cam + 4 Islands in hand/play, my tapped Grizzly Bears and an untapped Hill Giant; the AI has an untapped Craw Wurm and a tapped Grizzly Bears:
                                       // the enters trigger must ask tap or untap for any of them (it only ever tapped the opponent's / untapped mine), and so must the sacrifice-free leave trigger
             for (int i = 0; i < 5; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
@@ -1684,7 +1740,7 @@ public final class ForgeBackend implements GameBackend {
             if (modalAbility == 0) modalAbility = a.id();
             for (String id : a.modalChildIds().split(",")) childIds.add(Integer.parseInt(id.trim()));
         }
-        if (childIds.isEmpty()) return null;
+        if (childIds.isEmpty()) return askModesByText(sa, possible, min, num);
         Map<Integer, AbilitySub> byGrp = new LinkedHashMap<>();
         for (AbilitySub sub : possible) {
             int best = 0;
@@ -1697,7 +1753,7 @@ public final class ForgeBackend implements GameBackend {
             }
             if (best != 0) byGrp.put(best, sub);
         }
-        if (byGrp.size() != possible.size()) return null;
+        if (byGrp.size() != possible.size()) return askModesByText(sa, possible, min, num);
         if (num > 1) {
             // "Choose two" (Kozilek's Command, ...): only the Modal casting-time option opens the client's multi-select
             // browser (ModalWorkflow: toggle modes, Done). A SelectNReq of ability ids opens SelectNWorkflow_Ability,
@@ -1744,6 +1800,78 @@ public final class ForgeBackend implements GameBackend {
             if (sub != null) out.add(sub);
         }
         return out;
+    }
+
+    /**
+     * Modes the client cannot show as its modal browser: a card from our generated card database (Vision Charm, Funeral Charm: no
+     * ModalChildIds), or modes whose text did not match the client's. Each mode is a choice button with Forge's text, one pick at a time
+     * ("choose two" asks again among the rest; past the minimum a Done button ends it). Forge's AI picked the mode here before.
+     */
+    List<AbilitySub> askModesByText(SpellAbility sa, List<AbilitySub> possible, int min, int num) {
+        Card host = sa.getHostCard();
+        List<AbilitySub> left = new ArrayList<>(possible), out = new ArrayList<>();
+        while (out.size() < num && !left.isEmpty()) {
+            List<String> labels = new ArrayList<>();
+            for (AbilitySub sub : left) labels.add(modeText(sub, host));
+            boolean optional = out.size() >= min;
+            if (optional) labels.add("Done");
+            String heading = num == 1 ? "Choose one" : "Choose " + (out.isEmpty() ? "a mode" : "another mode") + " (" + out.size() + " of " + num + ")";
+            System.out.println("[mtga] asking modes by text " + labels + " for " + host);
+            int pick = askTextChoice(host, labels, heading + " — " + host.getName());
+            if (pick < 0 || pick >= left.size()) break;      // cancelled or Done
+            out.add(left.remove(pick));
+        }
+        return out;
+    }
+
+    private static String modeText(AbilitySub sub, Card host) {
+        String d = sub.getDescription();
+        if (d == null || d.isBlank()) d = sub.toString();
+        d = d.replace("CARDNAME", host.getName()).replace("NICKNAME", host.getName()).trim();
+        int paren = d.indexOf(" (");      // reminder text: too long for a button
+        if (paren > 0 && d.endsWith(")")) d = d.substring(0, paren).trim();
+        if (d.endsWith(".")) d = d.substring(0, d.length() - 1);
+        return shortLabel(d, MODE_LABEL_MAX);
+    }
+
+    /** A choice button holds two lines of about 20 characters; longer text spills over its neighbours. The full text is on the card. */
+    static final int MODE_LABEL_MAX = 36;
+
+    static String shortLabel(String s, int max) {
+        if (s.length() <= max) return s;
+        int cut = s.lastIndexOf(' ', max - 1);
+        if (cut < max / 2) cut = max - 1;
+        return s.substring(0, cut).replaceAll("[\\s,;:.—-]+$", "") + "…";
+    }
+
+    /**
+     * "Choose a player" (Victory Chimes: a player of your choice adds {C}; ChoosePlayer effects). A SelectNReq over the players' seat ids
+     * (a player's instance id on the client) has no zone, so the client opens its in-world selection: the avatars are highlighted and
+     * clicked like targets. Null if cancelled.
+     */
+    Player askSelectPlayer(List<Player> players, boolean optional, String title, Card source) {
+        Map<Integer, Player> byId = new LinkedHashMap<>();
+        for (Player p : players) byId.put(StateSync.seat(p, human), p);
+        batching = false;
+        sync.setDecisionPlayer(human);
+        sendDiff(false);
+        GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_SelectNReq);
+        com.wizards.mtga.gre.SelectNReq.Builder sn = req.getSelectNReqBuilder().setMinSel(optional ? 0 : 1).setMaxSel(1)
+                .setContext(com.wizards.mtga.gre.SelectionContext.SelectionContext_Resolution)
+                .setListType(com.wizards.mtga.gre.SelectionListType.SelectionListType_Static)
+                .setIdType(com.wizards.mtga.gre.IdType.IdType_InstanceId).addAllIds(byId.keySet());
+        if (source != null) sn.setSourceId(iid(source));
+        String text = title == null || title.isBlank() ? "Choose a player" : title;
+        for (com.wizards.mtga.gre.Prompt.Builder pb : List.of(sn.getPromptBuilder(), req.getPromptBuilder())) {
+            pb.setPromptId(PROMPT_FORGE_TEXT).addParameters(textParam("Text", text));
+        }
+        System.out.println("[mtga] asking player " + byId.keySet() + " (" + text + ")");
+        sendRequest(req);
+        ClientToGREMessage r = await(m -> is(m, ClientMessageType.ClientMessageType_SelectNResp, ClientMessageType.ClientMessageType_CancelActionReq));
+        System.out.println("[mtga] client player reply " + r.toString().replace("\n", " "));
+        if (r.getType() != ClientMessageType.ClientMessageType_SelectNResp) return null;
+        for (int id : r.getSelectNResp().getIdsList()) if (byId.containsKey(id)) return byId.get(id);
+        return null;
     }
 
     /**
@@ -2181,6 +2309,15 @@ public final class ForgeBackend implements GameBackend {
         return lib.isEmpty() ? null : lib.get(0);
     }
 
+    private static boolean anyPlayerMayActivate(Card c) {
+        for (SpellAbility sa : c.getSpellAbilities()) {
+            if (!sa.isActivatedAbility()) continue;
+            String who = sa.getRestrictions() == null ? null : sa.getRestrictions().getActivator();
+            if (who != null && !"You".equals(who)) return true;
+        }
+        return false;
+    }
+
     /** Priority for the human: returns the chosen ability, or null to pass. */
     List<SpellAbility> askPriority(Player me) {
         batching = false;
@@ -2199,6 +2336,12 @@ public final class ForgeBackend implements GameBackend {
         for (Card c : me.getCardsIn(ZoneType.Sideboard)) if (!c.mayPlay(me).isEmpty()) candidates.add(c);      // Wish: a card from outside the game
         for (Player other : game.getPlayers()) {      // Ragavan / Gonti: the card is in the opponent's exile but we may cast it
             if (other != me) candidates.addAll(other.getCardsIn(ZoneType.Exile));
+        }
+        // "Any player may activate this ability" (Activator$ Player: Xantcha, Sleeper Agent; Lethal Vapors...) on a permanent we don't
+        // control; Forge's restriction check leaves only those abilities
+        for (Player other : game.getPlayers()) {
+            if (other == me) continue;
+            for (Card c : other.getCardsIn(ZoneType.Battlefield)) if (anyPlayerMayActivate(c)) candidates.add(c);
         }
         for (Player p : game.getPlayers()) {      // the top card of a library we may play (Xanathar: the opponent's; Future Sight, Courser of Kruphix: our own)
             Card top = topOfLibrary(p);
@@ -2384,7 +2527,13 @@ public final class ForgeBackend implements GameBackend {
         if (legal.isEmpty()) return;
         List<Card> candidates = new ArrayList<>(legal.keySet());
         Map<Card, GameEntity> chosen = new java.util.LinkedHashMap<>();      // attacker -> the defender the player picked
-        System.out.println("[mtga] turn " + game.getPhaseHandler().getTurn() + " asking attackers among " + candidates.size());
+        // "You may exert this creature as it attacks": the client shows Attack / Exert for an attacker listed twice, the second time
+        // with alternativeGrpId 162 (AbilityType_Exert); Forge asks exertAttackers right after the declaration
+        exertable.clear();
+        exerting.clear();
+        exertable.addAll(forge.game.combat.CombatUtil.getOptionalAttackCostCreatures(new CardCollection(candidates), forge.game.cost.CostExert.class));
+        System.out.println("[mtga] turn " + game.getPhaseHandler().getTurn() + " asking attackers among " + candidates.size()
+                + (exertable.isEmpty() ? "" : " (may exert " + exertable + ")"));
         sendRequest(attackersReq(legal, chosen));
 
         while (true) {
@@ -2394,15 +2543,23 @@ public final class ForgeBackend implements GameBackend {
                 // each response only lists the attackers the player just toggled (DeclareAttackerRequest.UpdateAttacker)
                 if (r.getDeclareAttackersResp().getAutoDeclare()) {
                     chosen.clear();
+                    exerting.clear();
                     for (Card c : candidates) chosen.put(c, preferredDefender(legal.get(c)));
                 }
-                for (com.wizards.mtga.gre.Attacker a : r.getDeclareAttackersResp().getSelectedAttackersList()) {
+                // switching Attack <-> Exert sends the old variant undeclared and the new one declared: undeclares first
+                List<com.wizards.mtga.gre.Attacker> toggled = new ArrayList<>(r.getDeclareAttackersResp().getSelectedAttackersList());
+                toggled.sort(java.util.Comparator.comparing(com.wizards.mtga.gre.Attacker::hasSelectedDamageRecipient));
+                for (com.wizards.mtga.gre.Attacker a : toggled) {
                     Card c = sync.card(a.getAttackerInstanceId());
                     if (c == null || !legal.containsKey(c)) continue;
                     if (a.hasSelectedDamageRecipient()) {
                         GameEntity d = defenderOf(a.getSelectedDamageRecipient(), legal.get(c));
                         chosen.put(c, d != null ? d : preferredDefender(legal.get(c)));
-                    } else chosen.remove(c);
+                        if (a.getAlternativeGrpId() == ALT_ATTACK_EXERT && exertable.contains(c)) exerting.add(c); else exerting.remove(c);
+                    } else if (exerting.contains(c) == (a.getAlternativeGrpId() == ALT_ATTACK_EXERT)) {
+                        chosen.remove(c);      // the variant it was declared with was undeclared
+                        exerting.remove(c);
+                    }
                 }
                 sendRequest(attackersReq(legal, chosen));      // echo (also after "All Attack": it only selects); the client then submits
                 continue;
@@ -2410,6 +2567,8 @@ public final class ForgeBackend implements GameBackend {
             break;
         }
         for (Map.Entry<Card, GameEntity> e : chosen.entrySet()) combat.addAttacker(e.getKey(), e.getValue());
+        exerting.retainAll(chosen.keySet());
+        if (!exerting.isEmpty()) System.out.println("[mtga] exerting " + exerting);
         session.sendGre(req(GREMessageType.GREMessageType_SubmitAttackersResp));
     }
 
@@ -2427,15 +2586,30 @@ public final class ForgeBackend implements GameBackend {
         return null;
     }
 
+    /** Attacker.alternativeGrpId of the exerting variant of an attack (AbilityType_Exert): the client labels that option "Exert". */
+    static final int ALT_ATTACK_EXERT = 162;
+
+    /** Targets another player picked for this player's ability (TargetingPlayer$, Pandemonium); read by SelfPlay's pandemonium rig. */
+    public static final java.util.concurrent.atomic.AtomicInteger TARGETS_BY_OTHER = new java.util.concurrent.atomic.AtomicInteger();
+    /** This declaration's attackers that may be exerted, and those the player declared exerting (read by exertAttackers). */
+    private final java.util.Set<Card> exertable = new java.util.HashSet<>(), exerting = new java.util.HashSet<>();
+
     private GREToClientMessage.Builder attackersReq(Map<Card, List<GameEntity>> legal, Map<Card, GameEntity> chosen) {
         GREToClientMessage.Builder req = req(GREMessageType.GREMessageType_DeclareAttackersReq);
         for (Map.Entry<Card, List<GameEntity>> e : legal.entrySet()) {
             Card c = e.getKey();
             com.wizards.mtga.gre.Attacker plain = attackerOf(c, e.getValue());
-            com.wizards.mtga.gre.Attacker.Builder a = plain.toBuilder();
             GameEntity pick = chosen.get(c);
-            if (pick != null) a.setSelectedDamageRecipient(recipientOf(pick));
+            boolean exert = exerting.contains(c);
+            com.wizards.mtga.gre.Attacker.Builder a = plain.toBuilder();
+            if (pick != null && !exert) a.setSelectedDamageRecipient(recipientOf(pick));
             req.getDeclareAttackersReqBuilder().addAttackers(a).addQualifiedAttackers(plain);
+            if (exertable.contains(c)) {
+                com.wizards.mtga.gre.Attacker plainExert = plain.toBuilder().setAlternativeGrpId(ALT_ATTACK_EXERT).build();
+                com.wizards.mtga.gre.Attacker.Builder x = plainExert.toBuilder();
+                if (pick != null && exert) x.setSelectedDamageRecipient(recipientOf(pick));
+                req.getDeclareAttackersReqBuilder().addAttackers(x).addQualifiedAttackers(plainExert);
+            }
         }
         req.getDeclareAttackersReqBuilder().setCanSubmitAttackers(true);
         return req;
@@ -4061,6 +4235,16 @@ public final class ForgeBackend implements GameBackend {
                 int max = Math.max(0, forge.ai.ComputerUtilMana.determineLeftoverMana(sa, player, false));
                 sa.setXManaCostPaid(askNumber(sa.getHostCard(), 0, max));
             }
+            // X in a cost that is not mana (a planeswalker's -X: Chandra, Chill of Compliance; Discard<X>, PayLife<X>, Sac<X/...>): Forge's
+            // human path announces it (PlaySpellAbility), the AI payment we play through does not and picked X itself. At most what the
+            // cost allows (the loyalty, the life, the cards); with {X} in the mana cost too, also what the mana can pay.
+            if (live() && sa.getXManaCostPaid() == null && hasNonManaX(sa)) {
+                Integer max = sa.getPayCosts().getMaxForNonManaX(sa, player, false);
+                int top = max == null ? 0 : Math.max(0, max);
+                if (sa.costHasManaX()) top = Math.min(top, Math.max(0, forge.ai.ComputerUtilMana.determineLeftoverMana(sa, player, false)));
+                System.out.println("[mtga] asking X (0.." + top + ") for the cost of " + sa.getHostCard());
+                sa.setXManaCostPaid(askNumber(sa.getHostCard(), 0, top));
+            }
             // tap what the client previewed (MTGA pays with the shown solution); the mana floats and Forge's payment uses it first
             if (taps != null && !settings.manualMana()) {
                 for (SpellAbility ma : taps) tapPreviewSource(ma, tapColors.get(ma));
@@ -4075,7 +4259,7 @@ public final class ForgeBackend implements GameBackend {
                 for (SpellAbility cur = root; cur != null; cur = cur.getSubAbility()) {
                     if (cur.usesTargeting()) {
                         cur.clearTargets();
-                        askTargets(cur);
+                        chooseTargetsAs(cur);
                     }
                 }
             });
@@ -4115,7 +4299,7 @@ public final class ForgeBackend implements GameBackend {
                 for (SpellAbility cur = sa; cur != null; cur = cur.getSubAbility()) {
                     if (!cur.usesTargeting()) continue;
                     cur.clearTargets();
-                    ok &= askTargets(cur);
+                    ok &= chooseTargetsAs(cur);
                 }
                 if (ok && sa.isTargetNumberValid()) forge.ai.ComputerUtil.playStack(sa, player, game);
                 else if (sa.getApi() != forge.game.ability.ApiType.Charm) super.orderAndPlaySimultaneousSa(List.of(sa));      // a modal trigger whose targeting failed is dropped (it must not ask for its modes again)
@@ -4127,12 +4311,45 @@ public final class ForgeBackend implements GameBackend {
             return askTargets(currentAbility);
         }
 
+        /** Does the cost have an X that is not mana (SubCounter<X/LOYALTY>, Discard<X/...>, PayLife<X>...)? */
+        private boolean hasNonManaX(SpellAbility sa) {
+            if (sa.getPayCosts() == null) return false;
+            for (forge.game.cost.CostPart p : sa.getPayCosts().getCostParts()) {
+                if (!(p instanceof forge.game.cost.CostPartMana) && "X".equals(p.getAmount())) return true;
+            }
+            return false;
+        }
+
+        /**
+         * "Any target of their choice" (Pandemonium: TargetingPlayer$ TriggeredCardController): the targets belong to another player, who picks
+         * them (the AI, or the other seat in PvP). Forge's own setupTargets does this; our trigger and cast paths ask the player directly.
+         */
+        boolean chooseTargetsAs(SpellAbility cur) {
+            if (!cur.hasParam("TargetingPlayer")) return askTargets(cur);
+            PlayerCollection who = AbilityUtils.getDefinedPlayers(cur.getHostCard(), cur.getParam("TargetingPlayer"), cur);
+            Player targeting = who.isEmpty() ? null : who.size() == 1 ? who.get(0) : chooseSingleEntityForEffect(who, cur, "Choose the targeting player", null);
+            if (targeting == null) return false;
+            cur.setTargetingPlayer(targeting);
+            if (targeting == player) return askTargets(cur);
+            System.out.println("[mtga] " + targeting + " chooses the targets of " + cur.getHostCard());
+            TARGETS_BY_OTHER.incrementAndGet();
+            return targeting.getController().chooseTargetsFor(cur);
+        }
+
         @Override
         public List<SpellAbility> chooseSpellAbilityToPlay() {
             return askPriority(player);
         }
 
         @Override public void declareAttackers(Player attacker, forge.game.combat.Combat combat) { askAttackers(attacker, combat); }
+
+        @Override
+        public List<Card> exertAttackers(List<Card> attackers) {
+            if (!live()) return super.exertAttackers(attackers);
+            List<Card> out = new ArrayList<>();
+            for (Card c : attackers) if (exerting.contains(c)) out.add(c);      // picked with the attack (the Exert variant)
+            return out;
+        }
 
         @Override public void declareBlockers(Player defender, forge.game.combat.Combat combat) { askBlockers(defender, combat); }
 
@@ -4268,9 +4485,10 @@ public final class ForgeBackend implements GameBackend {
 
         @Override
         public String chooseSomeType(String kindOfType, SpellAbility sa, java.util.Collection<String> validTypes, boolean isOptional) {
-            boolean basic = "Basic Land".equalsIgnoreCase(kindOfType);
-            if (!live() || !(basic || "Creature".equalsIgnoreCase(kindOfType)) || validTypes.size() < 2) return super.chooseSomeType(kindOfType, sa, validTypes, isOptional);
-            String type = askSubType(sa == null ? null : sa.getHostCard(), validTypes, isOptional, basic ? "basic land" : "creature");
+            // Land: "choose a land type" (Vision Charm's first choice, Convincing Mirage-style effects), any land subtype the client knows.
+            boolean basic = "Basic Land".equalsIgnoreCase(kindOfType), land = "Land".equalsIgnoreCase(kindOfType);
+            if (!live() || !(basic || land || "Creature".equalsIgnoreCase(kindOfType)) || validTypes.size() < 2) return super.chooseSomeType(kindOfType, sa, validTypes, isOptional);
+            String type = askSubType(sa == null ? null : sa.getHostCard(), validTypes, isOptional, basic ? "basic land" : land ? "land" : "creature");
             return type == null ? super.chooseSomeType(kindOfType, sa, validTypes, isOptional) : type;
         }
 
@@ -4455,6 +4673,16 @@ public final class ForgeBackend implements GameBackend {
             if (!live() || optionList.isEmpty()) return super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);
             // a forced choice of one (Equip resolving onto its only target) is not a question on Arena
             if (!isOptional && delayedReveal == null && optionList.size() == 1) return optionList.get(0);
+            boolean allPlayers = true;
+            for (T t : optionList) allPlayers &= t instanceof Player;
+            if (allPlayers) {
+                List<Player> players = new ArrayList<>();
+                for (T t : optionList) players.add((Player) t);
+                Player p = askSelectPlayer(players, isOptional, title, sa == null ? null : sa.getHostCard());
+                if (p == null && !isOptional) return super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);
+                @SuppressWarnings("unchecked") T t = (T) p;
+                return t;
+            }
             List<Card> cards = new ArrayList<>();
             for (T t : optionList) {
                 if (!(t instanceof Card c)) return super.chooseSingleEntityForEffect(optionList, delayedReveal, sa, title, isOptional, relatedPlayer, params);
