@@ -306,7 +306,7 @@ public final class FrontDoor {
         on("CarouselGetCarouselItems", (s, r) -> {
             JsonArray items = new JsonArray();
             items.add(carouselItem("ForgeWelcome", "2026_61_30_HOB_Previews", 100, 4, PlayQueues.eventName(PlayQueues.Mode.BOT, "Standard")));
-            items.add(carouselItem("ForgeDiscord", "SocialMedia_Discord", 90, 3, "https://discord.gg/xQSgHsEnQ"));
+            items.add(carouselItem("ForgeDiscord", "SocialMedia_Discord", 90, 3, "https://discord.gg/ZFtxAkBmpG"));
             return items.toString();
         });
         // No store offline (MercGetStoreStatusV2 says StoreEnabled=false, which keeps the Store tab locked), but the client also builds
