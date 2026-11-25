@@ -201,6 +201,11 @@ public final class SelfPlay {
                 System.out.println("  xantcha rig: AI's Xantcha ability offered on my turn " + XANTCHA_MY_TURN.get() + ", on the AI's turn " + XANTCHA_AI_TURN.get() + (ok ? "" : "  (WRONG)"));
                 if (!ok) failed++;
             }
+            if (rig.equals("xtargets")) {      // X for Indomitable Creativity capped at the legal targets
+                boolean ok = XTARGETS_MAX.get() >= 0 && XTARGETS_MAX.get() <= 1;
+                System.out.println("  xtargets rig: highest X offered for Indomitable Creativity " + XTARGETS_MAX.get() + (ok ? "" : "  (WRONG)"));
+                if (!ok) failed++;
+            }
             if (rig.equals("minusx")) {      // Chandra's -X asked for X, at most her loyalty
                 boolean ok = CHANDRA_X.get() > 0 && CHANDRA_X_MAX.get() >= 1 && CHANDRA_X_MAX.get() <= 7;
                 System.out.println("  minusx rig: X asked for Chandra " + CHANDRA_X.get() + ", highest max " + CHANDRA_X_MAX.get() + (ok ? "" : "  (WRONG)"));
@@ -661,8 +666,12 @@ public final class SelfPlay {
      * A player's mastery after an online match: the verdict carries the XP (250 for playing, +150 for a win, inside the daily cap), the
      * progress follows it, and profile.json owns exactly the track's first 2 x `level` cosmetics (owned.all off).
      */
+    /** Mastery XP a finished quest paid a player (checkQuests); it shows in the mastery total with the next verdict, so the next check expects it. */
+    private static final Map<String, Integer> QUEST_XP = new java.util.concurrent.ConcurrentHashMap<>();
+
     private static boolean checkMastery(String match, forge.mtga.social.MasteryService mastery, forge.mtga.profile.FileProfileStore store, String outcome, String who) {
         int before = mastery.xp();
+        int questXp = QUEST_XP.getOrDefault(who, 0);
         com.google.gson.JsonObject v = mastery.awaitVerdict(match, 6_000);
         int paid = v != null && v.has("mastery") ? v.getAsJsonObject("mastery").get("xp").getAsInt() : -1;
         int expected = outcome.equals("win") ? 400 : 250;
@@ -674,8 +683,9 @@ public final class SelfPlay {
         boolean grantsOk = owned.size() == grantedItems;
         for (int i = 0; i < grantedItems; i++) grantsOk &= owned.contains(track.get(i)[1]);
         System.out.println("  mastery " + who + ": " + outcome + " +" + paid + " XP, total " + mastery.xp() + ", level " + mastery.level() + ", owned " + owned.size());
-        boolean ok = paid == expected && mastery.xp() == before + paid && !p.owned.all && grantsOk && track.size() > 2000;
-        if (!ok) System.out.println("  PROBLEM: " + who + "'s mastery: paid " + paid + " (expected " + expected + "), xp " + before + " -> " + mastery.xp() + ", owned.all " + p.owned.all + ", grants " + grantsOk);
+        boolean ok = paid == expected && (mastery.xp() == before + paid || mastery.xp() == before + paid + questXp) && !p.owned.all && grantsOk && track.size() > 2000;
+        if (!ok) System.out.println("  PROBLEM: " + who + "'s mastery: paid " + paid + " (expected " + expected + "), quests " + questXp + ", xp " + before + " -> " + mastery.xp() + ", owned.all " + p.owned.all + ", grants " + grantsOk);
+        if (mastery.xp() == before + paid + questXp) QUEST_XP.remove(who);
         return ok;
     }
 
@@ -703,6 +713,10 @@ public final class SelfPlay {
             if (!q.get("done").getAsBoolean() && metric != null && metrics.has(metric)) expected++;
         }
         System.out.println("  quests " + who + ": " + moved.size() + " moved (expected " + expected + ") " + moved);
+        for (com.google.gson.JsonElement e : moved) {
+            com.google.gson.JsonObject m = e.getAsJsonObject();
+            if (m.has("xp")) QUEST_XP.merge(who, m.get("xp").getAsInt(), Integer::sum);      // a finished quest's XP: in the next mastery total
+        }
         ok &= moved.size() == expected;
         if (!ok) System.out.println("  PROBLEM: " + who + "'s quest counters or progress are wrong");
         return ok;
@@ -733,7 +747,8 @@ public final class SelfPlay {
     static final java.util.concurrent.atomic.AtomicInteger XANTCHA_MY_TURN = new java.util.concurrent.atomic.AtomicInteger(), XANTCHA_AI_TURN = new java.util.concurrent.atomic.AtomicInteger(),
             PLAYER_CHOICES = new java.util.concurrent.atomic.AtomicInteger(), EXERT_OFFERED = new java.util.concurrent.atomic.AtomicInteger(),
             MODE_TEXT_CHOICES = new java.util.concurrent.atomic.AtomicInteger(), SUBTYPE_CHOICES = new java.util.concurrent.atomic.AtomicInteger(),
-            CHANDRA_X = new java.util.concurrent.atomic.AtomicInteger(), CHANDRA_X_MAX = new java.util.concurrent.atomic.AtomicInteger();
+            CHANDRA_X = new java.util.concurrent.atomic.AtomicInteger(), CHANDRA_X_MAX = new java.util.concurrent.atomic.AtomicInteger(),
+            XTARGETS_MAX = new java.util.concurrent.atomic.AtomicInteger(-1);
     /** Undo presses by request type (-Dselfplay.undo) and payment prompts that offered the auto-pay button. */
     static final Map<String, Integer> UNDOS = new java.util.concurrent.ConcurrentHashMap<>();
     static final java.util.concurrent.atomic.AtomicInteger AUTO_PAYS_OFFERED = new java.util.concurrent.atomic.AtomicInteger();
@@ -871,6 +886,12 @@ public final class SelfPlay {
                 }
                 if (best != null) return best;
             }
+            if ("theend".equals(System.getProperty("mtga.rig"))) {      // rig theend: cast The End
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith("The End")) return a;
+            }
+            if ("xtargets".equals(System.getProperty("mtga.rig"))) {      // rig xtargets: cast Indomitable Creativity (X: asked)
+                for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Cast && String.valueOf(debugName(a.getInstanceId())).startsWith("Indomitable")) return a;
+            }
             if ("chimes".equals(System.getProperty("mtga.rig"))) {      // rig chimes: tap Victory Chimes (which player: asked)
                 for (Action a : acts) if (a.getActionType() == ActionType.ActionType_Activate && String.valueOf(debugName(a.getInstanceId())).startsWith("Victory")) return a;
             }
@@ -994,7 +1015,7 @@ public final class SelfPlay {
                 case GREMessageType_MulliganReq -> {
                     requests++;
                     boolean mull = mulligans < 2 && rnd.nextInt(3) == 0 && !"sami".equals(System.getProperty("mtga.rig")) && !"mill".equals(System.getProperty("mtga.rig")) && !"room".equals(System.getProperty("mtga.rig")) && !"arrow".equals(System.getProperty("mtga.rig")) && !"phasing".equals(System.getProperty("mtga.rig")) && !"addcost".equals(System.getProperty("mtga.rig")) && !"sprawl".equals(System.getProperty("mtga.rig")) && !"reduce".equals(System.getProperty("mtga.rig")) && !"station".equals(System.getProperty("mtga.rig")) && !"reflect".equals(System.getProperty("mtga.rig"))
-                            && !java.util.Set.of("flail", "butcher", "gemstone", "wish", "xanathar", "coverup", "mdfc", "bo3pips", "xantcha", "chimes", "exert", "charm", "pandemonium", "minusx").contains(String.valueOf(System.getProperty("mtga.rig")));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
+                            && !java.util.Set.of("flail", "butcher", "gemstone", "wish", "xanathar", "coverup", "mdfc", "bo3pips", "xantcha", "chimes", "exert", "charm", "pandemonium", "minusx", "conjure", "xtargets", "theend").contains(String.valueOf(System.getProperty("mtga.rig")));      // a rig keeps its hand: a mulligan would shuffle the rigged cards away
                     if (mull) mulligans++;
                     // rigs (-Dmtga.rig) replace the opening hand on purpose
                     if (zone(32).getObjectInstanceIdsCount() != 7 && System.getProperty("mtga.rig") == null) problem("mulligan offered with hand of " + zone(32).getObjectInstanceIdsCount());
@@ -1227,6 +1248,7 @@ public final class SelfPlay {
                         break;
                     }
                     if (sn.getIdType() == IdType.IdType_InstanceId) offered.addAll(sn.getIdsList());
+                    offered.addAll(sn.getUnfilteredIdsList());      // the rest of a looked-at set, shown in the browser (a library search shows the whole library)
                     if (sn.getIdType() == IdType.IdType_PromptParameterIndex) {      // a choice among Forge's words (Butcher's keyword, Bloodthorn Flail's cost)
                         TEXT_CHOICES.incrementAndGet();
                         if (sn.getPrompt().getParametersCount() < sn.getIdsCount()) problem("text choice with fewer option parameters than ids");
@@ -1289,6 +1311,9 @@ public final class SelfPlay {
                 case GREMessageType_NumericInputReq -> {
                     requests++;
                     NumericInputReq ni = g.getNumericInputReq();
+                    if ("xtargets".equals(System.getProperty("mtga.rig")) && String.valueOf(debugName(ni.getSourceId())).startsWith("Indomitable")) {
+                        XTARGETS_MAX.accumulateAndGet((int) ni.getMaxValue(), Math::max);
+                    }
                     if ("minusx".equals(System.getProperty("mtga.rig")) && String.valueOf(debugName(ni.getSourceId())).startsWith("Chandra")) {
                         CHANDRA_X.incrementAndGet();
                         CHANDRA_X_MAX.accumulateAndGet((int) ni.getMaxValue(), Math::max);

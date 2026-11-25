@@ -931,11 +931,31 @@ public final class StateSync {
      */
     private boolean appearsFromNowhere(Card c, int zid) {
         return gsId > 0 && ((c.isToken() || c.isCopiedSpell()) && (zid == Z_BF || zid == Z_STACK || zid == Z_EXILE)
-                || (c.getType().isDungeon() || c.getType().isScheme() || c.isEmblem()) && zid == Z_COMMAND);
+                || (c.getType().isDungeon() || c.getType().isScheme() || c.isEmblem()) && zid == Z_COMMAND
+                || madeThisGame(c));
+    }
+
+    /** The highest Forge card id when this game's first state was built (this StateSync is per game): -1 until then. */
+    private int startMaxId = -1;
+
+    /**
+     * A card an effect made during the game, not a token: conjured into a library or hand (Toralf's Disciple's four Lightning Bolts),
+     * drafted from a spellbook. Forge gives it a new id above every card the game started with; it has no zone to come from, so it is
+     * announced like a token (the client's CardCreatedEvent) rather than appearing without a word.
+     */
+    private boolean madeThisGame(Card c) {
+        return startMaxId >= 0 && !c.isToken() && !c.isCopiedSpell() && c.getId() > startMaxId && !c.isEmblem() && !c.getType().isDungeon();
     }
 
     /** Instance id for c now in zone zid; a zone change allocates a new id (recorded as an IdChange). */
     private int track(Snapshot s, Card c, int zid) {
+        if (startMaxId < 0) {      // the game's first state: every card it starts with exists now
+            startMaxId = 0;
+            for (Card x : game.getCardsInGame()) startMaxId = Math.max(startMaxId, x.getId());
+            for (forge.game.player.Player p : game.getPlayers()) {      // the sideboards too (Wish shows those cards; they are not made)
+                for (Card x : p.getCardsIn(ZoneType.Sideboard)) startMaxId = Math.max(startMaxId, x.getId());
+            }
+        }
         String key = "c" + c.getId();
         s.forgeIds.add(c.getId());
         if (c.isToken()) s.tokens.add(c.getId());

@@ -1235,6 +1235,28 @@ public final class ForgeBackend implements GameBackend {
             }
             return;
         }
+        if ("theend".equals(rig)) {      // The End (exile target creature; search its controller's graveyard, hand and library for cards with that name) +
+                                         // 2 Swamps; the AI has Grizzly Bears in play, two in its library and one in hand: the searched library must not stay visible
+            for (int i = 0; i < 2; i++) rigAdd(p, "Swamp", ZoneType.Battlefield, 0);
+            rigAdd(p, "The End", ZoneType.Hand, 0);
+            rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
+            for (int i = 0; i < 2; i++) rigAdd(opponent, "Grizzly Bears", ZoneType.Library, 0);
+            rigAdd(opponent, "Grizzly Bears", ZoneType.Hand, 0);
+            return;
+        }
+        if ("conjure".equals(rig)) {      // Toralf's Disciple (haste; attacking conjures four Lightning Bolts into my library) + 2 Mountains: the made cards
+                                          // must be announced (CardCreated), not appear in the library without a word
+            for (int i = 0; i < 2; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            rigAdd(p, "Toralf's Disciple", ZoneType.Battlefield, 0);
+            return;
+        }
+        if ("xtargets".equals(rig)) {      // Indomitable Creativity ({X}{R}{R}: destroy X target artifacts and/or creatures) + 6 Mountains; the AI has one
+                                           // Grizzly Bears: X goes up to the legal targets (1), not the mana (4); more would leave the targets unanswerable
+            for (int i = 0; i < 6; i++) rigAdd(p, "Mountain", ZoneType.Battlefield, 0);
+            rigAdd(p, "Indomitable Creativity", ZoneType.Hand, 0);
+            rigAdd(opponent, "Grizzly Bears", ZoneType.Battlefield, 0);
+            return;
+        }
         if ("minusx".equals(rig)) {      // Chandra, Chill of Compliance (loyalty 3, [-X]: tap target artifact or creature, X stun counters) + 3 Islands; the AI has
                                          // Ornithopter and Wall of Stone: the -X must ask for X, 0 up to her loyalty (the AI's cost payment picked it before)
             for (int i = 0; i < 3; i++) rigAdd(p, "Island", ZoneType.Battlefield, 0);
@@ -2740,6 +2762,12 @@ public final class ForgeBackend implements GameBackend {
             int id = sync.stackIid(si);
             if (id != 0) byId.put(id, si.getSpellAbility());
         }
+        // more targets needed than there are (Indomitable Creativity with X above the legal targets): the client could never submit, and
+        // the fake client looped on it; give up and let the cast be undone
+        if (min > byId.size()) {
+            System.out.println("[mtga] " + sa + " needs " + min + " targets but only " + byId.size() + " are legal");
+            return false;
+        }
         // a trigger whose targets are forced (Soul-Guide Lantern entering with only the sacrificed Urza's Saga in a
         // graveyard) is not a question: take them, as Arena does
         if (sa.getRootAbility().isTrigger() && min >= 1 && byId.size() == min) {
@@ -4232,7 +4260,7 @@ public final class ForgeBackend implements GameBackend {
             // X comes before any mana is spent (Kozilek's Command asked for it after the {C}{C} was already tapped);
             // the limit is what the sources can still pay, so it must be worked out before the preview taps
             if (sa.isSpell() && live() && sa.costHasManaX() && sa.getXManaCostPaid() == null) {
-                int max = Math.max(0, forge.ai.ComputerUtilMana.determineLeftoverMana(sa, player, false));
+                int max = Math.min(xTargetCap(sa), Math.max(0, forge.ai.ComputerUtilMana.determineLeftoverMana(sa, player, false)));
                 sa.setXManaCostPaid(askNumber(sa.getHostCard(), 0, max));
             }
             // X in a cost that is not mana (a planeswalker's -X: Chandra, Chill of Compliance; Discard<X>, PayLife<X>, Sac<X/...>): Forge's
@@ -4240,7 +4268,7 @@ public final class ForgeBackend implements GameBackend {
             // cost allows (the loyalty, the life, the cards); with {X} in the mana cost too, also what the mana can pay.
             if (live() && sa.getXManaCostPaid() == null && hasNonManaX(sa)) {
                 Integer max = sa.getPayCosts().getMaxForNonManaX(sa, player, false);
-                int top = max == null ? 0 : Math.max(0, max);
+                int top = Math.min(xTargetCap(sa), max == null ? 0 : Math.max(0, max));
                 if (sa.costHasManaX()) top = Math.min(top, Math.max(0, forge.ai.ComputerUtilMana.determineLeftoverMana(sa, player, false)));
                 System.out.println("[mtga] asking X (0.." + top + ") for the cost of " + sa.getHostCard());
                 sa.setXManaCostPaid(askNumber(sa.getHostCard(), 0, top));
@@ -4253,7 +4281,7 @@ public final class ForgeBackend implements GameBackend {
             ZoneType castFrom = sa.isSpell() && castHost.getZone() != null ? castHost.getZone().getZoneType() : null;
             boolean played = forge.ai.ComputerUtil.handlePlayingSpellAbility(player, sa, root -> {
                 if (root.costHasManaX() && root.getXManaCostPaid() == null) {
-                    int max = Math.max(0, forge.ai.ComputerUtilMana.determineLeftoverMana(root, player, false));
+                    int max = Math.min(xTargetCap(root), Math.max(0, forge.ai.ComputerUtilMana.determineLeftoverMana(root, player, false)));
                     root.setXManaCostPaid(askNumber(root.getHostCard(), 0, max));
                 }
                 for (SpellAbility cur = root; cur != null; cur = cur.getSubAbility()) {
@@ -4309,6 +4337,19 @@ public final class ForgeBackend implements GameBackend {
         @Override
         public boolean chooseTargetsFor(SpellAbility currentAbility) {
             return askTargets(currentAbility);
+        }
+
+        /**
+         * The highest X the targets allow when X is the minimum number of targets ("Destroy X target artifacts and/or creatures":
+         * Indomitable Creativity): no more than there are legal targets. Integer.MAX_VALUE when no target count depends on X.
+         */
+        private int xTargetCap(SpellAbility root) {
+            int cap = Integer.MAX_VALUE;
+            for (SpellAbility cur = root; cur != null; cur = cur.getSubAbility()) {
+                if (!cur.usesTargeting() || !"X".equals(cur.getParam("TargetMin"))) continue;
+                cap = Math.min(cap, cur.getTargetRestrictions().getAllCandidates(cur, false).size());
+            }
+            return cap;
         }
 
         /** Does the cost have an X that is not mana (SubCounter<X/LOYALTY>, Discard<X/...>, PayLife<X>...)? */
